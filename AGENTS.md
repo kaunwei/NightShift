@@ -23,7 +23,7 @@ This repository operates on a **Physical Dual-Terminal Architecture** separating
 │  • User mounts and runs ./worker.sh in a separate terminal / tmux.     │
 │  • [Track 2 Offload] Unattended 24h batch execution & test suites.     │
 │  • Pure zero-argument execution (auto-sources .worker.env).            │
-│  • Stateless CLI process (agy --model gemini-3.7-flash-low).           │
+│  • Stateless CLI process (agy --model gemini-3.8-flash-low).           │
 │  • Follows .skills/universal-build-verify.md.                          │
 │  • Runs builds, unit tests, GUI smoke tests.                           │
 │  • Max 3 repair attempts -> auto rollback on block.                    │

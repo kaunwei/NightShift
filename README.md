@@ -56,7 +56,7 @@ Start the unattended worker:
 
 To run with a specific model or timeout:
 ```bash
-AI_MODEL=gemini-3.7-flash-medium TASK_TIMEOUT=900 ./worker.sh
+AI_MODEL=gemini-3.8-flash-low TASK_TIMEOUT=900 ./worker.sh
 ```
 
 ### Emergency Pause:

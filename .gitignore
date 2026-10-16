@@ -16,3 +16,4 @@ __pycache__/
 htmlcov/
 *.log
 !progress.log
+.DS_Store

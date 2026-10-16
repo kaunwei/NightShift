@@ -23,7 +23,7 @@ PID_FILE="${PID_FILE:-.worker.pid}"
 PAUSE_FILE="${PAUSE_FILE:-PAUSE}"
 
 AI_CLI="${AI_CLI:-agy}"
-AI_MODEL="${AI_MODEL:-gemini-3.7-flash-low}"
+AI_MODEL="${AI_MODEL:-gemini-3.8-flash-low}"
 AI_EFFORT="${AI_EFFORT:-low}"
 TASK_TIMEOUT="${TASK_TIMEOUT:-1800}"
 POLL_INTERVAL="${POLL_INTERVAL:-5}"
@@ -36,28 +36,6 @@ export PAGER=cat
 export NO_COLOR=1
 export DEBIAN_FRONTEND=noninteractive
 export TERM=dumb
-
-# ------------------------------------------------------------------------------
-# Process Lock & Signal Handlers
-# ------------------------------------------------------------------------------
-cleanup() {
-  echo ""
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Shutting down worker daemon..."
-  rm -f "$PID_FILE"
-  update_status "STOPPED" "" "0" "0" "0" "0" "0%" "[------------------------------] 0%"
-  exit 0
-}
-
-trap cleanup SIGINT SIGTERM EXIT
-
-if [ -f "$PID_FILE" ]; then
-  OLD_PID=$(cat "$PID_FILE" 2>/dev/null || echo "")
-  if [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" 2>/dev/null; then
-    echo "ERROR: Worker daemon already running with PID $OLD_PID."
-    exit 1
-  fi
-fi
-echo "$$" > "$PID_FILE"
 
 # ------------------------------------------------------------------------------
 # Helper Functions
@@ -116,6 +94,28 @@ update_status() {
 EOF
 }
 
+# ------------------------------------------------------------------------------
+# Process Lock & Signal Handlers
+# ------------------------------------------------------------------------------
+if [ -f "$PID_FILE" ]; then
+  OLD_PID=$(cat "$PID_FILE" 2>/dev/null || echo "")
+  if [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" 2>/dev/null; then
+    echo "ERROR: Worker daemon already running with PID $OLD_PID."
+    exit 1
+  fi
+fi
+echo "$$" > "$PID_FILE"
+
+cleanup() {
+  echo ""
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Shutting down worker daemon..."
+  rm -f "$PID_FILE"
+  update_status "STOPPED" "" "0" "0" "0" "0" "0%" "[------------------------------] 0%"
+  exit 0
+}
+
+trap cleanup SIGINT SIGTERM EXIT
+
 prepend_progress_log() {
   local entry="$1"
   local temp_file
@@ -154,7 +154,7 @@ echo "==========================================================================
 update_status "IDLE" "" "0" "0" "0" "0" "0%" "[------------------------------] 0%"
 
 WAS_BUSY=0
-IDLE_HEARTBEAT_COUNT=0
+IDLE_STATUS_SHOWN=0
 
 # ------------------------------------------------------------------------------
 # Main Polling Loop
@@ -171,8 +171,10 @@ while true; do
   # Peek at the first non-empty, non-comment line in tasks.txt
   RAW_TASK=$(grep -v '^[[:space:]]*#' "$TASKS_FILE" 2>/dev/null | grep -v '^[[:space:]]*$' | head -n 1 || true)
 
-  DONE_COUNT=$(grep -v '^[[:space:]]*#' "$TASKS_DONE_FILE" 2>/dev/null | grep -v '^[[:space:]]*$' | wc -l)
-  REMAINING_COUNT=$(grep -v '^[[:space:]]*#' "$TASKS_FILE" 2>/dev/null | grep -v '^[[:space:]]*$' | wc -l)
+  DONE_COUNT=$(grep -v '^[[:space:]]*#' "$TASKS_DONE_FILE" 2>/dev/null | grep -v '^[[:space:]]*$' | wc -l | tr -dc '0-9')
+  [ -z "$DONE_COUNT" ] && DONE_COUNT=0
+  REMAINING_COUNT=$(grep -v '^[[:space:]]*#' "$TASKS_FILE" 2>/dev/null | grep -v '^[[:space:]]*$' | wc -l | tr -dc '0-9')
+  [ -z "$REMAINING_COUNT" ] && REMAINING_COUNT=0
   TOTAL_COUNT=$(( DONE_COUNT + REMAINING_COUNT ))
 
   if [ -z "$RAW_TASK" ]; then
@@ -184,16 +186,12 @@ while true; do
       echo "=============================================================================="
       echo "[$(date '+%Y-%m-%d %H:%M:%S')] 🎉 [ALL TASKS COMPLETED] $BAR"
       echo "[IDLE] Queue is empty (Total completed: $DONE_COUNT tasks)."
-      echo "[IDLE] Waiting for new tasks in $TASKS_FILE... (Polling every ${POLL_INTERVAL}s)"
       echo "=============================================================================="
       WAS_BUSY=0
-      IDLE_HEARTBEAT_COUNT=0
-    else
-      IDLE_HEARTBEAT_COUNT=$(( IDLE_HEARTBEAT_COUNT + 1 ))
-      # Print a heartbeat line every 60 seconds (12 intervals of 5s)
-      if [ $(( IDLE_HEARTBEAT_COUNT % 12 )) -eq 0 ]; then
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] [IDLE] Waiting for tasks in $TASKS_FILE... (Done: $DONE_COUNT | Heartbeat OK)"
-      fi
+      IDLE_STATUS_SHOWN=1
+    elif [ $IDLE_STATUS_SHOWN -eq 0 ]; then
+      echo "[$(date '+%Y-%m-%d %H:%M:%S')] [IDLE] Queue is empty (Total completed: $DONE_COUNT tasks). Waiting for tasks in $TASKS_FILE..."
+      IDLE_STATUS_SHOWN=1
     fi
 
     sleep "$POLL_INTERVAL"
@@ -201,7 +199,7 @@ while true; do
   fi
 
   WAS_BUSY=1
-  IDLE_HEARTBEAT_COUNT=0
+  IDLE_STATUS_SHOWN=0
 
   CURRENT_IDX=$(( DONE_COUNT + 1 ))
   PERCENT_START=$(( (DONE_COUNT * 100) / TOTAL_COUNT ))
@@ -266,11 +264,21 @@ PROMPT_EOF
       done
     fi
 
+    # Pass --effort only if AI_MODEL does not already include an effort suffix
+    if [ -n "$AI_EFFORT" ]; then
+      case "$AI_MODEL" in
+        *-low|*-medium|*-high|*-xhigh|*-max)
+          ;;
+        *)
+          EXTRA_CLI_ARGS+=("--effort" "$AI_EFFORT")
+          ;;
+      esac
+    fi
+
     echo "[WORKER] Launching $AI_CLI (Model: $AI_MODEL)..."
     timeout "$TASK_TIMEOUT" agy -p "$PROMPT_PAYLOAD" \
       --dangerously-skip-permissions \
       --model "$AI_MODEL" \
-      --effort "$AI_EFFORT" \
       "${EXTRA_CLI_ARGS[@]}" 2>&1 | tee "$CMD_OUTPUT_TMP"
     EXIT_CODE="${PIPESTATUS[0]}"
   else
