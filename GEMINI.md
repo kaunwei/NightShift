@@ -147,7 +147,33 @@ git branch -d feature/<batch-name>
 
 ---
 
-## 8. Mandatory Command Execution & Git Guardrails
+## 8. Unified Git Commit Standard (Planner & Worker)
+
+To ensure consistent git history and enable instantaneous acceptance by the Planner without opening code diffs, all commits made by both **Planner (Terminal A)** and **Worker (Terminal B)** MUST adhere to the **Unified Conventional Commit Standard**:
+
+```bash
+git commit -m "<type>(<scope>): <concise action description in English <= 60 chars> (<task_id>)" -m "<1-3 summary bullet points of changes>
+
+Task: <task_id> (<granularity_level>)
+Scope: <target_files>
+Verification: <test command> (<measurable result, e.g. 6/6 passed, 100% OK>)
+Attempts: <attempts_count> | Confidence: <confidence_score>"
+```
+
+### Commit Format Rules:
+1. **Title Line (Header)**:
+   - Max 70 characters.
+   - Types: `feat`, `fix`, `refactor`, `test`, `perf`, `docs`.
+   - Scope: Module or component name in parentheses (e.g. `calc`, `auth`, `worker`).
+   - `(<task_id>)` appended at the end of the title line (e.g. `(TASK-002)`).
+   - **Strictly Prohibited**: NEVER dump raw task schema strings (`| LEVEL: ... | TARGET: ... | ACTION: ...`) into the commit title!
+2. **Commit Body (Rapid Acceptance Block)**:
+   - Summary of concrete functional changes (1-3 bullets).
+   - Explicit `Task`, `Scope`, `Verification`, and `Attempts` lines so Planner can verify everything via `git log -n 1` in under 5 seconds.
+
+---
+
+## 9. Mandatory Command Execution & Git Guardrails
 
 Whenever executing commands in this workspace, the agent MUST obey the following safety rules:
 - **No Destructive Git Operations**: Under NO circumstances should the agent run:
@@ -160,7 +186,7 @@ Whenever executing commands in this workspace, the agent MUST obey the following
 
 ---
 
-## 9. Engineering & Domain Treaties
+## 10. Engineering & Domain Treaties
 
 - **Test-Driven Development (TDD)**: Follow Red-Green-Refactor cycle. Unit tests must pass 100%.
 - **Deep Modules**: Design deep modules with simple, narrow interfaces.
@@ -169,6 +195,6 @@ Whenever executing commands in this workspace, the agent MUST obey the following
 
 ---
 
-## 10. Framework Portability & Adoption
+## 11. Framework Portability & Adoption
 
 If you are an AI migrating this framework to another project, read the autonomous porting manual at [docs/PORTING_GUIDE.md](file:///Volumes/Vault500G/workspace/auto_script/docs/PORTING_GUIDE.md) and execute [.agents/skills/engineering/setup-unattended-workflow/SKILL.md](file:///Volumes/Vault500G/workspace/auto_script/.agents/skills/engineering/setup-unattended-workflow/SKILL.md).

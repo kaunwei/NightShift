@@ -363,6 +363,9 @@ while true; do
 
   TASK_TITLE="$RAW_TASK"
   TASK_ID=$(echo "$RAW_TASK" | awk -F'|' '{print $1}' | tr -d ' ' || echo "TASK-UNKNOWN")
+  TASK_LEVEL=$(echo "$RAW_TASK" | grep -o 'LEVEL:[[:space:]]*[0-9]' | awk '{print $2}' || echo "1")
+  TASK_TARGET=$(echo "$RAW_TASK" | sed -n 's/.*TARGET:[[:space:]]*\([^|]*\).*/\1/p' | xargs || echo "")
+  TASK_VERIFY=$(echo "$RAW_TASK" | sed -n 's/.*VERIFY:[[:space:]]*\([^|]*\).*/\1/p' | xargs || echo "")
   START_TIME=$(date +%s)
   
   echo ""
@@ -384,11 +387,23 @@ $TASK_TITLE
 
 MANDATORY EXECUTION RULES:
 1. REAL-TIME STEP LOGGING: Before running any command or editing any file, print an explicit line (e.g. "[EXEC] Modifying <file>...", "[EXEC] Running command: <command>", "[EXEC] Running test: <command>") so the operator can see what you are doing in real time.
-2. TARGET ONLY: Modify only the necessary files specified in the task.
+2. TARGET ONLY: Modify only the necessary files specified in the task (${TASK_TARGET:-target files}).
 3. NO SUDO: Under NO circumstances run sudo, apt, or global system commands.
-4. BUILD & VERIFY: Run the appropriate build and test commands (C/C++ cmake/ninja, Python pytest, GUI timeout 2s smoke tests).
+4. BUILD & VERIFY: Run the appropriate build and test commands (e.g. ${TASK_VERIFY:-build and test}).
 5. RETRY LIMIT: Max 3 repair attempts. If unable to pass after 3 fixes, stop immediately and record [BLOCKED].
-6. ATOMIC COMMIT: On 100% verification pass, run git commit -m "feat/fix: $TASK_TITLE".
+6. UNIFIED CONVENTIONAL COMMIT (STRICT STYLE):
+   On 100% verification pass, stage modified files and commit using this clean two-part Conventional Commit format:
+
+   git commit -m "<type>(<scope>): <concise action description in English <= 60 chars> ($TASK_ID)" -m "<1-3 summary bullet points of concrete changes>
+
+Task: $TASK_ID (Level ${TASK_LEVEL:-1})
+Scope: ${TASK_TARGET:-<modified files>}
+Verification: ${TASK_VERIFY:-<test command>} (100% PASS)
+Attempts: <attempts_count> | Confidence: <1.0 or confidence score>"
+
+   * Allowed <type>: feat, fix, refactor, test, docs, perf.
+   * <scope>: module or component name (e.g. calc, auth, api, ui).
+   * STRICT PROHIBITION: Do NOT put raw task strings (e.g. "TASK-XXX | LEVEL: ... | TARGET: ...") into the commit title! The title line must be clean and elegant for 'git log --oneline'.
 7. TOP PREPEND PROGRESS: Write a structured <=10 lines report at the VERY TOP of $PROGRESS_FILE.
 PROMPT_EOF
 )

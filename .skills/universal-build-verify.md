@@ -106,11 +106,19 @@ For minor ambiguities that do not threaten core integrity:
    - Planner retains the sovereign right to inspect underlying source files, run targeted commands, or check git stats whenever summary information is deemed insufficient.
 
 Upon 100% verification success:
-1. **Auto Git Commit**:
+1. **Auto Git Commit (Unified Conventional Commits Standard)**:
+   Stage the modified target files and commit using standard Conventional Commit format (concise title <= 70 chars, plus structured acceptance body):
    ```bash
-   git add <modified-target-files>
-   git commit -m "feat/fix: <task title> [TASK-ID]"
+   git commit -m "<type>(<scope>): <concise action description in English <= 60 chars> (<task_id>)" -m "<1-3 summary bullet points of changes>
+
+Task: <task_id> (<granularity_level>)
+Scope: <target_files>
+Verification: <test command> (<measurable result, e.g. 6/6 passed, 100% OK>)
+Attempts: <attempts_count> | Confidence: <confidence_score>"
    ```
+   - **Allowed types**: `feat`, `fix`, `refactor`, `test`, `perf`, `docs`.
+   - **Scope**: Target module or subsystem name (e.g. `calc`, `auth`, `api`, `ui`).
+   - **Strict Rule**: NEVER dump raw task schema strings (`| LEVEL: ... | TARGET: ...`) into the commit title line. The title line must remain clean and readable for `git log --oneline`.
 2. **Prepend Structured Summary & Attempt Trace to `progress.log` (Strictly <= 15 lines)**:
 ```text
 ================================================================================
