@@ -20,3 +20,8 @@ class Calculator:
         if b == 0:
             raise ValueError("Cannot modulo by zero")
         return a % b
+
+    def percentage(self, value: float, total: float) -> float:
+        if total == 0:
+            raise ValueError("Cannot calculate percentage with zero total")
+        return (value / total) * 100.0

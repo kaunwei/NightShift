@@ -46,5 +46,13 @@ class TestCalculator(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.calc.modulo(10, 0)
 
+    def test_percentage(self):
+        self.assertEqual(self.calc.percentage(25, 100), 25.0)
+        self.assertEqual(self.calc.percentage(1, 2), 50.0)
+        self.assertEqual(self.calc.percentage(0, 50), 0.0)
+        self.assertEqual(self.calc.percentage(150, 100), 150.0)
+        with self.assertRaises(ValueError):
+            self.calc.percentage(10, 0)
+
 if __name__ == '__main__':
     unittest.main()
