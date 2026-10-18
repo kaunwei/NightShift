@@ -1,9 +1,11 @@
 # 24h Unattended Worker Runtime Artifacts
-worker.status
-.worker.log
-.worker.pid
+.worker.env
+worker*.status
+.worker*.log
+.worker*.pid
 PAUSE
 .scratch/
+tasks.txt.lock/
 
 # Build & Environment Artifacts
 build/

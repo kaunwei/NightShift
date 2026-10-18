@@ -7,20 +7,107 @@
 set -uo pipefail
 
 # ------------------------------------------------------------------------------
-# Configuration (Auto-sources .worker.env if present, otherwise uses defaults)
+# 1. Mandatory Environment Configuration (.worker.env)
 # ------------------------------------------------------------------------------
-if [ -f ".worker.env" ]; then
-  # shellcheck source=/dev/null
-  source ".worker.env"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ENV_FILE="$SCRIPT_DIR/.worker.env"
+
+if [ ! -f "$ENV_FILE" ]; then
+  echo "=============================================================================="
+  echo "[FATAL ERROR] Missing required configuration file: $ENV_FILE"
+  echo ""
+  echo "The .worker.env configuration is mandatory and MUST reside in the same"
+  echo "directory as worker.sh."
+  echo ""
+  echo "Please initialize your configuration by copying the example template:"
+  echo "  cp \"$SCRIPT_DIR/.worker.env.example\" \"$ENV_FILE\""
+  echo "=============================================================================="
+  exit 1
 fi
 
-TASKS_FILE="${TASKS_FILE:-tasks.txt}"
-TASKS_DONE_FILE="${TASKS_DONE_FILE:-tasks.done}"
-PROGRESS_FILE="${PROGRESS_FILE:-progress.log}"
-STATUS_FILE="${STATUS_FILE:-worker.status}"
-LOG_FILE="${LOG_FILE:-.worker.log}"
-PID_FILE="${PID_FILE:-.worker.pid}"
-PAUSE_FILE="${PAUSE_FILE:-PAUSE}"
+# shellcheck source=/dev/null
+source "$ENV_FILE"
+
+# ------------------------------------------------------------------------------
+# 2. Operating System Detection & Switching (macOS / Ubuntu / Linux)
+# ------------------------------------------------------------------------------
+TARGET_OS="${OS_TYPE:-auto}"
+DETECTED_OS="unknown"
+case "$(uname -s)" in
+  Darwin*) DETECTED_OS="mac" ;;
+  Linux*)
+    if [ -f /etc/os-release ] && grep -qi ubuntu /etc/os-release; then
+      DETECTED_OS="ubuntu"
+    else
+      DETECTED_OS="linux"
+    fi
+    ;;
+  *) DETECTED_OS="unknown" ;;
+esac
+
+if [ "$TARGET_OS" = "auto" ] || [ -z "$TARGET_OS" ]; then
+  ACTIVE_OS="$DETECTED_OS"
+else
+  ACTIVE_OS="$TARGET_OS"
+fi
+
+case "$ACTIVE_OS" in
+  mac|darwin)
+    NUM_CPUS=$(sysctl -n hw.ncpu 2>/dev/null || echo 4)
+    PLATFORM_NAME="macOS (Darwin)"
+    TIMEOUT_BIN=""
+    if command -v gtimeout >/dev/null 2>&1; then
+      TIMEOUT_BIN="gtimeout"
+    elif command -v timeout >/dev/null 2>&1; then
+      TIMEOUT_BIN="timeout"
+    fi
+    ;;
+  ubuntu)
+    NUM_CPUS=$(nproc 2>/dev/null || echo 4)
+    PLATFORM_NAME="Linux (Ubuntu)"
+    TIMEOUT_BIN=""
+    if command -v timeout >/dev/null 2>&1; then
+      TIMEOUT_BIN="timeout"
+    fi
+    ;;
+  *)
+    NUM_CPUS=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
+    PLATFORM_NAME="Linux ($ACTIVE_OS)"
+    TIMEOUT_BIN=""
+    if command -v timeout >/dev/null 2>&1; then
+      TIMEOUT_BIN="timeout"
+    fi
+    ;;
+esac
+
+# ------------------------------------------------------------------------------
+# 3. Parameters, Paths & Multi-Worker Identity
+# ------------------------------------------------------------------------------
+WORKER_ID="${WORKER_ID:-default}"
+
+resolve_path() {
+  local p="$1"
+  if [[ "$p" = /* ]]; then
+    echo "$p"
+  else
+    echo "$SCRIPT_DIR/$p"
+  fi
+}
+
+TASKS_FILE="$(resolve_path "${TASKS_FILE:-tasks.txt}")"
+TASKS_DONE_FILE="$(resolve_path "${TASKS_DONE_FILE:-tasks.done}")"
+PROGRESS_FILE="$(resolve_path "${PROGRESS_FILE:-progress.log}")"
+PAUSE_FILE="$(resolve_path "${PAUSE_FILE:-PAUSE}")"
+
+if [ "$WORKER_ID" = "default" ]; then
+  STATUS_FILE="$(resolve_path "${STATUS_FILE:-worker.status}")"
+  LOG_FILE="$(resolve_path "${LOG_FILE:-.worker.log}")"
+  PID_FILE="$(resolve_path "${PID_FILE:-.worker.pid}")"
+else
+  STATUS_FILE="$(resolve_path "worker.${WORKER_ID}.status")"
+  LOG_FILE="$(resolve_path ".worker.${WORKER_ID}.log")"
+  PID_FILE="$(resolve_path ".worker.${WORKER_ID}.pid")"
+fi
 
 AI_CLI="${AI_CLI:-agy}"
 AI_MODEL="${AI_MODEL:-gemini-3.8-flash-low}"
@@ -62,12 +149,14 @@ render_progress_bar() {
 run_with_timeout() {
   local timeout_sec="$1"
   shift
-  if command -v timeout >/dev/null 2>&1; then
+  if [ -n "$TIMEOUT_BIN" ] && command -v "$TIMEOUT_BIN" >/dev/null 2>&1; then
+    "$TIMEOUT_BIN" "$timeout_sec" "$@"
+  elif command -v timeout >/dev/null 2>&1; then
     timeout "$timeout_sec" "$@"
   elif command -v gtimeout >/dev/null 2>&1; then
     gtimeout "$timeout_sec" "$@"
   else
-    # Fallback for systems without timeout/gtimeout (e.g. macOS default)
+    # Fallback for systems without timeout/gtimeout
     "$@" &
     local child_pid=$!
     (
@@ -109,6 +198,9 @@ update_status() {
 
   cat <<EOF > "$STATUS_FILE"
 {
+  "worker_id": "$WORKER_ID",
+  "os": "$ACTIVE_OS",
+  "platform": "$PLATFORM_NAME",
   "state": "$state",
   "current_task": $(if [ -n "$current_task" ]; then echo "\"$current_task\""; else echo "null"; fi),
   "elapsed_seconds": $elapsed,
@@ -181,8 +273,10 @@ isolate_and_rollback_dirty_tree() {
 touch "$TASKS_FILE" "$TASKS_DONE_FILE" "$PROGRESS_FILE"
 echo "=============================================================================="
 echo " 24-Hour Unattended AI Worker Daemon Started"
-echo " PID: $$ | CLI: $AI_CLI | Model: $AI_MODEL | Timeout: ${TASK_TIMEOUT}s"
-echo " Tasks File: $TASKS_FILE | Progress: $PROGRESS_FILE"
+echo " Worker ID: $WORKER_ID | OS: $PLATFORM_NAME (CPUs: $NUM_CPUS)"
+echo " PID: $$ | CLI: $AI_CLI | Model: $AI_MODEL | Mode: $AGY_MODE"
+echo " Tasks: $TASKS_FILE | Status: $STATUS_FILE"
+echo " Progress: $PROGRESS_FILE | Log: $LOG_FILE"
 echo "=============================================================================="
 
 update_status "IDLE" "" "0" "0" "0" "0" "0%" "[------------------------------] 0%"
@@ -247,13 +341,25 @@ while true; do
   PERCENT_START=$(( (DONE_COUNT * 100) / TOTAL_COUNT ))
   BAR_START=$(render_progress_bar "$DONE_COUNT" "$TOTAL_COUNT" 30)
 
-  # Pop the task line atomically from tasks.txt
+  # Pop the task line atomically from tasks.txt with directory-lock protection
+  LOCK_DIR="${TASKS_FILE}.lock"
+  LOCK_MAX_RETRIES=50
+  LOCK_RETRY=0
+  while ! mkdir "$LOCK_DIR" 2>/dev/null; do
+    sleep 0.1
+    LOCK_RETRY=$(( LOCK_RETRY + 1 ))
+    if [ $LOCK_RETRY -ge $LOCK_MAX_RETRIES ]; then
+      rmdir "$LOCK_DIR" 2>/dev/null || true
+    fi
+  done
+
   TEMP_TASKS=$(mktemp)
   awk -v task="$RAW_TASK" '
     !found && $0 == task { found=1; next }
     { print }
   ' "$TASKS_FILE" > "$TEMP_TASKS"
   mv "$TEMP_TASKS" "$TASKS_FILE"
+  rmdir "$LOCK_DIR" 2>/dev/null || true
 
   TASK_TITLE="$RAW_TASK"
   TASK_ID=$(echo "$RAW_TASK" | awk -F'|' '{print $1}' | tr -d ' ' || echo "TASK-UNKNOWN")
