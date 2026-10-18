@@ -74,7 +74,44 @@ Before queueing complex tasks, Terminal A offloads exploratory file-reading to a
 
 ---
 
-## 4. Skills Ecosystem Matrix
+## 4. Live Human-in-the-Loop Feedback & Dynamic Queue Rescheduling
+
+### 4.1 The Live Feedback Scenario
+Consider a batch of 10 tasks queued in `tasks.txt`:
+1. **Incremental Cumulative Landing**:
+   - As Worker finishes Task 1, 2, and 3, each commit is committed to the local working branch with full verification (`100% test pass`).
+   - The codebase in the working tree is live, working, and up to date.
+2. **Concurrent Human Testing in Terminal A**:
+   - While Worker continues executing Task 4 in Terminal B, the Human or Planner in Terminal A can execute unit tests, launch the dev server, or smoke test the live functionality produced by Tasks 1–3.
+3. **Mid-Flight Feedback & Triage**:
+   - Suppose Human discovers an edge-case bug in Task 2 (e.g. division by zero in percentage calculation).
+   - Human immediately provides feedback to Terminal A: *"Found a zero-division edge case in percentage"*.
+4. **Planner Queue Scanning & Deduplication**:
+   - Planner inspects the remaining unpopped queue (`tasks.txt`, containing Tasks 5–10).
+   - Planner checks if any of Tasks 5–10 overlap, conflict, or duplicate with this bug fix. If Task 8 was originally planning to touch the same function, Planner modifies or merges it.
+5. **Hot Preemption & Atomic Insertion**:
+   - Planner formats an urgent tracer-bullet task:
+     ```text
+     TASK-003B | LEVEL: 1 | TARGET: src/calc.py, tests/test_calc.py | ACTION: Fix zero-divisor edge case in percentage | VERIFY: python3 -m unittest discover tests | CONSTRAINTS: 100% test pass
+     ```
+   - Planner invokes `scripts/reorder_queue.sh` (which acquires `tasks.txt.lock`) and injects `TASK-003B` at the very top of `tasks.txt` ahead of Task 5.
+6. **Seamless Zero-Conflict Pick-up**:
+   - When Task 4 finishes its turn, Worker opens `tasks.txt` and immediately claims `TASK-003B`.
+   - The bug is fixed and committed before Task 5 even begins!
+
+### 4.2 Why This Completely Obsoletes Worktree Duplication
+- **In Multi-Worktree Parallelism**:
+  - Tasks 1, 2, 3, 4, 5... are split across 5 different worktrees on divergent branches.
+  - Human cannot test the cumulative result of 1+2+3 because they haven't been integrated yet.
+  - A bug discovered in Task 2 means Tasks 4 and 5 were built on faulty assumptions, creating a nightmare of three-way merge conflicts and re-work across all worktrees.
+- **In Single-Working-Tree Dynamic Rescheduling**:
+  - The working directory maintains a single, pristine linear history on the integration branch.
+  - Zero disk duplication, zero cold compiler restarts, zero test port collisions.
+  - Human feedback is immediate, and the queue is completely malleable in real time.
+
+---
+
+## 5. Skills Ecosystem Matrix
 
 | Skill | Role in Framework | Operating Terminal | Interaction Pattern |
 | :--- | :--- | :--- | :--- |

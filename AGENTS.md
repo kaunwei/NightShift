@@ -44,6 +44,10 @@ This repository operates on a **Physical Dual-Terminal Architecture** separating
    - On enterprise-scale codebases, running tracer-bullet tasks sequentially on a single warm working tree with a fresh AI context per task (`agy -p`) is the gold standard. It completely avoids the severe disk duplication (Nx node_modules, target, build dirs), cold compiler restarts, and test port/database collisions inherent in multi-worktree execution.
 4. **Integration Branch Sandboxing (整合分支隔離實作)**:
    - Batch features are executed on an integration branch (`feature/<batch-name>`). Intermediate tracer-bullet commits accumulate on the integration branch without dirtying `main`. Upon batch completion, a two-axis `/code-review` is conducted before fast-forward merging into `main`.
+5. **Live Human-in-the-Loop Feedback & Dynamic Rescheduling (熱反饋與動態隊列重排)**:
+   - **Cumulative Hot State**: Because Worker commits atomically after each verified task, the working tree reflects the cumulative, functional state of all completed tasks (e.g. after tasks 1–3). Human can run and evaluate the latest software in Terminal A *while Terminal B continues executing remaining tasks*.
+   - **Hot Preemption & Deduplication**: If Human discovers a bug or adjusts priorities during testing, Planner can inspect the remaining queue, deduplicate or merge overlapping tasks, and inject high-priority bug fixes (`[HOTFIX/ISSUE]`) at the top of `tasks.txt` via `scripts/reorder_queue.sh`.
+   - **Why This Obsoletes Worktree Duplication**: Instead of creating dozens of isolated worktrees with cold build caches and merge conflicts, single-tree execution provides continuous cumulative progress, instant human feedback, and live queue malleability with zero disk overhead.
 
 ---
 
