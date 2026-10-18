@@ -95,7 +95,7 @@ TASK-XXX | LEVEL: 1 | TARGET: <file_paths> | ACTION: <precise logic details> | V
 
 ## 5. Dual-Skill Ecosystem
 
-- **Global**: Matt Pocock foundations (`/tdd`, `/codebase-design`, `/domain-modeling`, `/diagnosing-bugs`, `/git-guardrails`).
+- **Global**: Matt Pocock foundations (`/tdd`, `/codebase-design`, `/domain-modeling`, `/diagnosing-bugs`, `/git-guardrails`, `/chief-of-staff`).
 - **Architect Skills** (`.agents/skills/architect/`): `/calibrate-task-granularity`, `/score-worker-performance`, `/handle-worker-guidance`, `/watch-worker-queue`.
 - **Worker Skills** (`.agents/skills/worker/`): `/universal-build-verify`, `/record-attempt-trace`, `/manage-worker-notes`.
 
@@ -123,7 +123,7 @@ To maximize token efficiency and prevent context exhaustion across the 24h cycle
 
 ---
 
-## 5. Branch Strategy: Linear Git Rebase & Auto-Cleanup
+## 7. Branch Strategy: Linear Git Rebase & Auto-Cleanup
 
 All batch feature development should happen on integration branches and integrate linearly into `main`:
 
@@ -142,7 +142,7 @@ git branch -d feature/<batch-name>
 
 ---
 
-## 6. Mandatory Command Execution & Git Guardrails
+## 8. Mandatory Command Execution & Git Guardrails
 
 Whenever executing commands in this workspace, the agent MUST obey the following safety rules:
 - **No Destructive Git Operations**: Under NO circumstances should the agent run:
@@ -155,15 +155,15 @@ Whenever executing commands in this workspace, the agent MUST obey the following
 
 ---
 
-## 7. Engineering & Domain Treaties
+## 9. Engineering & Domain Treaties
 
 - **Test-Driven Development (TDD)**: Follow Red-Green-Refactor cycle. Unit tests must pass 100%.
 - **Deep Modules**: Design deep modules with simple, narrow interfaces.
-- **Glossary Adherence**: Strictly adhere to terms in [GLOSSARY.md](file:///home/kw/workspace/auto_script/GLOSSARY.md).
-- **ADR Review**: Respect architectural records in [docs/adr/](file:///home/kw/workspace/auto_script/docs/adr).
+- **Glossary Adherence**: Strictly adhere to terms in [GLOSSARY.md](file:///Volumes/Vault500G/workspace/auto_script/GLOSSARY.md).
+- **ADR Review**: Respect architectural records in [docs/adr/](file:///Volumes/Vault500G/workspace/auto_script/docs/adr).
 
 ---
 
-## 8. Framework Portability & Adoption
+## 10. Framework Portability & Adoption
 
-If you are an AI migrating this framework to another project, read the autonomous porting manual at [docs/PORTING_GUIDE.md](file:///home/kw/workspace/auto_script/docs/PORTING_GUIDE.md) and execute [.agents/skills/engineering/setup-unattended-workflow/SKILL.md](file:///home/kw/workspace/auto_script/.agents/skills/engineering/setup-unattended-workflow/SKILL.md).
+If you are an AI migrating this framework to another project, read the autonomous porting manual at [docs/PORTING_GUIDE.md](file:///Volumes/Vault500G/workspace/auto_script/docs/PORTING_GUIDE.md) and execute [.agents/skills/engineering/setup-unattended-workflow/SKILL.md](file:///Volumes/Vault500G/workspace/auto_script/.agents/skills/engineering/setup-unattended-workflow/SKILL.md).

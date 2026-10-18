@@ -25,9 +25,11 @@ PAUSE_FILE="${PAUSE_FILE:-PAUSE}"
 AI_CLI="${AI_CLI:-agy}"
 AI_MODEL="${AI_MODEL:-gemini-3.8-flash-low}"
 AI_EFFORT="${AI_EFFORT:-low}"
+AGY_MODE="${AGY_MODE:-accept-edits}"
 TASK_TIMEOUT="${TASK_TIMEOUT:-1800}"
 POLL_INTERVAL="${POLL_INTERVAL:-5}"
 USE_SANDBOX="${USE_SANDBOX:-0}"
+RUN_ONCE="${RUN_ONCE:-0}"
 ADDITIONAL_DIRS="${ADDITIONAL_DIRS:-}"
 
 # Force non-interactive, unpaged batch environment
@@ -55,6 +57,38 @@ render_progress_bar() {
   for ((i=0; i<filled; i++)); do bar+="#"; done
   for ((i=0; i<empty; i++)); do bar+="-"; done
   echo "[$bar] ${pct}% (${cur}/${total})"
+}
+
+run_with_timeout() {
+  local timeout_sec="$1"
+  shift
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$timeout_sec" "$@"
+  elif command -v gtimeout >/dev/null 2>&1; then
+    gtimeout "$timeout_sec" "$@"
+  else
+    # Fallback for systems without timeout/gtimeout (e.g. macOS default)
+    "$@" &
+    local child_pid=$!
+    (
+      sleep "$timeout_sec"
+      if kill -0 "$child_pid" 2>/dev/null; then
+        kill -TERM "$child_pid" 2>/dev/null || true
+        sleep 2
+        kill -KILL "$child_pid" 2>/dev/null || true
+      fi
+    ) </dev/null >/dev/null 2>&1 &
+    local watchdog_pid=$!
+    wait "$child_pid"
+    local exit_code=$?
+    pkill -P "$watchdog_pid" 2>/dev/null || true
+    kill -9 "$watchdog_pid" 2>/dev/null || true
+    wait "$watchdog_pid" 2>/dev/null || true
+    if [ $exit_code -eq 137 ] || [ $exit_code -eq 143 ]; then
+      return 124
+    fi
+    return "$exit_code"
+  fi
 }
 
 update_status() {
@@ -189,9 +223,17 @@ while true; do
       echo "=============================================================================="
       WAS_BUSY=0
       IDLE_STATUS_SHOWN=1
+      if [ "$RUN_ONCE" = "1" ] || [ "$RUN_ONCE" = "true" ]; then
+        echo "[WORKER] Exiting because RUN_ONCE is enabled."
+        exit 0
+      fi
     elif [ $IDLE_STATUS_SHOWN -eq 0 ]; then
       echo "[$(date '+%Y-%m-%d %H:%M:%S')] [IDLE] Queue is empty (Total completed: $DONE_COUNT tasks). Waiting for tasks in $TASKS_FILE..."
       IDLE_STATUS_SHOWN=1
+      if [ "$RUN_ONCE" = "1" ] || [ "$RUN_ONCE" = "true" ]; then
+        echo "[WORKER] Queue is empty and RUN_ONCE is enabled. Exiting."
+        exit 0
+      fi
     fi
 
     sleep "$POLL_INTERVAL"
@@ -254,6 +296,10 @@ PROMPT_EOF
     if [ "$USE_SANDBOX" = "1" ] || [ "$USE_SANDBOX" = "true" ]; then
       EXTRA_CLI_ARGS+=("--sandbox")
     fi
+    if [ -n "$AGY_MODE" ]; then
+      EXTRA_CLI_ARGS+=("--mode" "$AGY_MODE")
+    fi
+    EXTRA_CLI_ARGS+=("--print-timeout" "${TASK_TIMEOUT}s")
     if [ -n "$ADDITIONAL_DIRS" ]; then
       IFS=',' read -ra DIRS <<< "$ADDITIONAL_DIRS"
       for d in "${DIRS[@]}"; do
@@ -275,16 +321,21 @@ PROMPT_EOF
       esac
     fi
 
-    echo "[WORKER] Launching $AI_CLI (Model: $AI_MODEL)..."
-    timeout "$TASK_TIMEOUT" agy -p "$PROMPT_PAYLOAD" \
+    echo "[WORKER] Launching $AI_CLI (Model: $AI_MODEL, Mode: ${AGY_MODE:-default})..."
+    run_with_timeout "$TASK_TIMEOUT" agy -p "$PROMPT_PAYLOAD" \
       --dangerously-skip-permissions \
       --model "$AI_MODEL" \
       "${EXTRA_CLI_ARGS[@]}" 2>&1 | tee "$CMD_OUTPUT_TMP"
     EXIT_CODE="${PIPESTATUS[0]}"
   else
     echo "[WORKER] Launching $AI_CLI..."
-    timeout "$TASK_TIMEOUT" "$AI_CLI" "$PROMPT_PAYLOAD" 2>&1 | tee "$CMD_OUTPUT_TMP"
+    run_with_timeout "$TASK_TIMEOUT" "$AI_CLI" "$PROMPT_PAYLOAD" 2>&1 | tee "$CMD_OUTPUT_TMP"
     EXIT_CODE="${PIPESTATUS[0]}"
+  fi
+
+  # Detect native print-timeout message in CLI output
+  if [ $EXIT_CODE -eq 0 ] && grep -q "print timeout after" "$CMD_OUTPUT_TMP" 2>/dev/null; then
+    EXIT_CODE=124
   fi
 
   END_TIME=$(date +%s)
