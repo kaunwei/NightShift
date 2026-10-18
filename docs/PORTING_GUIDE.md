@@ -1,24 +1,71 @@
 # Autonomous AI Porting Guide
 ## How an AI Agent Migrates the 24h Unattended Dual-Terminal Framework to Another Project
 
-If you are an AI assistant tasked with adopting or migrating this 24-Hour Unattended Framework into a target repository, follow this deterministic, step-by-step procedure.
+If you are an AI assistant tasked with adopting, migrating, or deploying this 24-Hour Unattended Framework into a target repository, follow this deterministic, zero-breakage procedure.
 
 ---
 
-## 1. Architectural Overview & Matt Pocock Skills Synergy
-This framework provides:
-- **Terminal A (Interactive Architect)**: Human + AI plan architectures, groom specs (`to-spec`, `to-tickets`), write atomic tracer-bullet tasks to `tasks.txt`, and verify progress via `progress.log` (<=15 lines, zero context pollution).
-- **Terminal B (Background Worker)**: `worker.sh` polls `tasks.txt`, runs `agy` with low-cost Flash models (`--mode accept-edits --print-timeout 1800s`), enforces `.skills/universal-build-verify.md`, builds, tests, and auto-commits.
-- **Sequential Frontier on Warm Build Cache**: For enterprise codebases, runs tasks sequentially on a single warm working tree to avoid the massive disk, compile-cache, and port collisions of multi-worktree approaches.
-- **Integration Branch Sandboxing**: Work on `feature/<batch-name>`, rebase onto `main`, fast-forward merge (`--ff-only`), and delete the feature branch.
-- **Cross-Platform Compatibility**: Automatically detects and adapts to macOS (Darwin) and Linux (Ubuntu).
+## 1. Core Philosophy: Non-Destructive Invariance (零侵入原則)
+
+When porting this framework into an existing project:
+1. **NEVER modify or overwrite existing application code or entrypoints**:
+   - Do NOT rewrite or inject code into their existing `main.py`, `index.ts`, `app.js`, `Dockerfile`, `Makefile`, etc.
+   - Do NOT replace or alter their package management files (`package.json`, `Cargo.toml`, `requirements.txt`).
+2. **NEVER overwrite existing project instructions or rules**:
+   - If the project already has `AGENTS.md`, `CLAUDE.md`, or `README.md`, **DO NOT overwrite**. Use **append-only** integration.
+3. **Preserve Native Developer Ergonomics**:
+   - The framework lives alongside the project as a decoupled harness (`worker.sh`, `.skills/`, `.worker.env`, `tasks.txt`).
+   - Human developers and CI/CD pipelines continue using their native commands (`npm start`, `cargo test`, `pytest`, `docker compose up`) without any disruption.
 
 ---
 
-## 2. Porting Algorithm (Step-by-Step for Migration AI)
+## 2. Fast Update & Rapid Deployment for Collaborators (團隊快速同步與部署機制)
 
-### Step 2.1: Inspect Target Project Stack
-Analyze the target workspace:
+A common bottleneck in software teams is that every time code is updated, collaborators or deployment servers suffer from 10–20 minute rebuilds and broken configurations. When porting this framework, the AI must ensure the target project follows these three acceleration treaties:
+
+### 2.1 Smart Delta Sync (差異跳過法則)
+- **Problem**: Collaborators habitually re-run full package installations (`npm install`, `pip install`, `cargo build`) on every `git pull`, even though 90% of commits only modify application logic.
+- **Guidance for Porting AI**: Document in the target project's `README.md` or contributor section that collaborators can check if manifests changed before installing:
+  ```bash
+  # Check if package manifests changed in the latest pull
+  git diff HEAD@{1} -- package-lock.json pnpm-lock.yaml requirements.txt poetry.lock Cargo.lock go.sum
+  # If output is empty -> Skip installation entirely! 0 seconds lost.
+  ```
+
+### 2.2 Config Drift Doctor (設定檔漂移防護)
+- Maintain `.worker.env.example` (and the project's native `.env.example`).
+- If any new configuration keys are added during feature development, they MUST be documented with defaults in the `.example` templates.
+- Collaborators can compare their local `.worker.env` against `.worker.env.example` in seconds without encountering silent runtime crashes.
+
+### 2.3 Warm Build Cache Deployment (熱工作目錄快取)
+- For CI/CD or staging deployments, avoid cold `rm -rf` cloning from scratch.
+- Use persistent working directories with `git fetch && git checkout -f <tag>` to preserve warm compiler caches (`target/`, `.next/cache/`, `node_modules/`, `.venv/`).
+
+---
+
+## 3. Migration Asset Checklist
+
+The following framework files must be copied into the target repository root:
+
+| Asset Path | Permissions | Purpose |
+| :--- | :---: | :--- |
+| `worker.sh` | `chmod +x` | Background daemon (stateless CLI per task, zero-arg execution). |
+| `.worker.env.example` | Read-only template | Environment config template with OS detection and model flags. |
+| `.worker.env` | Config file | Active config initialized from `.worker.env.example` in the **same directory as `worker.sh`**. |
+| `scripts/watch_worker.sh` | `chmod +x` | Sentinel subagent waiter script for non-blocking Terminal A wakeup. |
+| `scripts/reorder_queue.sh` | `chmod +x` | Atomic POSIX-locked task queue reordering & hot preemption tool. |
+| `.skills/universal-build-verify.md` | Instruction | Worker build & test verification skill. |
+| `.worker.notes.md` | Dynamic memory | Worker lessons learned, build quirks, and compiler flags. |
+| `tasks.txt` | FIFO Queue | Task queue initialized with schema header. |
+| `tasks.done` | Completed list | List of successfully executed tasks. |
+| `progress.log` | Progress journal | Append-only execution log (strictly <= 15 lines per task). |
+
+---
+
+## 4. Deterministic Porting Algorithm (Step-by-Step for Migration AI)
+
+### Step 4.1: Inspect Target Project Stack
+Analyze the target workspace without modifying anything:
 1. **Language & Build System**:
    - C / C++: Check `CMakeLists.txt` -> Build: `cmake -B build -S . -G Ninja && cmake --build build`, Test: `ctest --test-dir build`
    - Python: Check `pyproject.toml` / `requirements.txt` -> Test: `pytest` or `python -m unittest`
@@ -27,23 +74,23 @@ Analyze the target workspace:
    - Go: Check `go.mod` -> Test: `go test ./...`
 2. **Existing Rules**: Check for existing `AGENTS.md`, `GEMINI.md`, or `CLAUDE.md`.
 
-### Step 2.2: Copy Core Assets
-Ensure the following files are copied into the target project root:
-- `worker.sh` (ensure `chmod +x worker.sh`)
-- `.worker.env.example` (template with OS detection and model parameters)
-- `.worker.env` (initialized by copying `.worker.env.example` in the same directory as `worker.sh`)
-- `scripts/watch_worker.sh` (ensure `chmod +x scripts/watch_worker.sh`)
-- `.skills/universal-build-verify.md` (placed at `.skills/universal-build-verify.md`)
-- `.worker.notes.md` (initialized with repository build quirks)
-- `tasks.txt` (empty or initialized with schema comment)
-- `tasks.done` (empty file)
-- `progress.log` (empty file with header)
+### Step 4.2: Copy Assets & Initialize Config
+1. Copy all assets from the Migration Asset Checklist (Section 3).
+2. Set execute permissions:
+   ```bash
+   chmod +x worker.sh scripts/watch_worker.sh scripts/reorder_queue.sh
+   ```
+3. Initialize `.worker.env` from `.worker.env.example`:
+   ```bash
+   cp .worker.env.example .worker.env
+   ```
 
-### Step 2.3: Adapt `.skills/universal-build-verify.md`
-In `.skills/universal-build-verify.md`, adjust `Step 2.2` and `Step 2.3` to match the target project's build and test commands discovered in Step 2.1.
+### Step 4.3: Adapt `.skills/universal-build-verify.md`
+Inspect `.skills/universal-build-verify.md`. Update **ONLY** Step 2.2 (Build) and Step 2.3 (Test) with the exact build and test commands discovered in Step 4.1.
 
-### Step 2.4: Non-Destructive Merge into `AGENTS.md`
-If target project has `AGENTS.md` (or `GEMINI.md` / `CLAUDE.md`), **DO NOT overwrite**. Append the standard block:
+### Step 4.4: Non-Destructive Merge into Agent Rules
+If the target repository already has `AGENTS.md`, `GEMINI.md`, or `CLAUDE.md`, **DO NOT overwrite**.
+Append the following section to the end of their file:
 
 ```markdown
 ## 24h Unattended Dual-Terminal Workflow
@@ -51,7 +98,7 @@ If target project has `AGENTS.md` (or `GEMINI.md` / `CLAUDE.md`), **DO NOT overw
 This repository supports the 24-Hour Unattended Dual-Terminal AI Development Framework.
 
 ### 1. Dual-Terminal Architecture & Dual-Track Offload
-- **Terminal A (Interactive Architect)**: Discuss with human in Chinese/English, groom requirements into tracer-bullet tasks, write atomic tasks to `tasks.txt`, and inspect `progress.log` for rapid acceptance.
+- **Terminal A (Interactive Architect)**: Discuss requirements with human, groom specs into atomic tracer-bullet tasks, write to `tasks.txt`, and inspect `progress.log` for rapid acceptance.
 - **Terminal B (Background Worker)**: Runs `./worker.sh`. Stateless process per task, executes build, test, and auto-commits.
 - **Track 1 Offload**: Exploratory code-reading is delegated to in-session Subagents (`invoke_subagent`).
 - **Track 2 Offload**: Batch unattended execution is delegated to Terminal B.
@@ -60,7 +107,7 @@ This repository supports the 24-Hour Unattended Dual-Terminal AI Development Fra
 - All tasks in `tasks.txt`, summaries in `progress.log`, status in `worker.status`, and git commits MUST be in **strictly English**.
 
 ### 3. Atomic Task Format (tasks.txt)
-Single-line format:
+Single-line tracer-bullet format:
 `TASK-XXX | LEVEL: 1 | TARGET: <files> | ACTION: <concrete logic> | VERIFY: <test command> | CONSTRAINTS: <bounds>`
 
 ### 4. Safe Git Log Rules for Acceptance AI
@@ -78,8 +125,8 @@ git branch -d feature/<batch-name>
 ```
 ```
 
-### Step 2.5: Safe `.gitignore` Append
-Append the following runtime artifacts to target `.gitignore` if not present:
+### Step 4.5: Safe `.gitignore` Append
+Append the following runtime artifacts to the target `.gitignore` without disturbing existing entries:
 ```gitignore
 # 24h Unattended Worker Artifacts
 .worker.env
@@ -91,7 +138,19 @@ PAUSE
 tasks.txt.lock/
 ```
 
-### Step 2.6: Verification
-1. Run `bash -n worker.sh` syntax check.
-2. Run `RUN_ONCE=1 ./worker.sh` to verify mandatory `.worker.env` loading and empty-queue graceful exit.
-3. Report completion to the user.
+### Step 4.6: Verification & Handover
+1. Run syntax check:
+   ```bash
+   bash -n worker.sh
+   bash -n scripts/watch_worker.sh
+   bash -n scripts/reorder_queue.sh
+   ```
+2. Test dry-run:
+   ```bash
+   RUN_ONCE=1 ./worker.sh
+   ```
+   Confirm that `.worker.env` is sourced, OS is auto-detected, and the script exits gracefully on empty queue.
+3. Hand over cleanly to the user:
+   - Provide zero-argument launch instruction: `./worker.sh` in Terminal B.
+   - Inform them how to check progress via `cat worker.status` or `head -n 15 progress.log`.
+   - Point out that native project commands (`npm test`, `pytest`, etc.) remain 100% untouched.
