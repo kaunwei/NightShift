@@ -40,6 +40,10 @@ This repository operates on a **Physical Dual-Terminal Architecture** separating
    - **Sentinel Subagent Wakeup**: If proactive completion notification is desired without freezing Terminal A, Planner launches a lightweight **Queue Sentinel Subagent** (`invoke_subagent` with `bash scripts/watch_worker.sh 3600`).
    - Planner immediately yields control to Human. Terminal A remains 100% interactive.
    - When Terminal B finishes all tasks, the Sentinel Subagent detects completion via zero-token script exit and triggers a **system wakeup event**, allowing Planner to deliver the final acceptance report automatically.
+3. **Sequential Frontier on Warm Build Cache (循序前線與熱編譯快取)**:
+   - On enterprise-scale codebases, running tracer-bullet tasks sequentially on a single warm working tree with a fresh AI context per task (`agy -p`) is the gold standard. It completely avoids the severe disk duplication (Nx node_modules, target, build dirs), cold compiler restarts, and test port/database collisions inherent in multi-worktree execution.
+4. **Integration Branch Sandboxing (整合分支隔離實作)**:
+   - Batch features are executed on an integration branch (`feature/<batch-name>`). Intermediate tracer-bullet commits accumulate on the integration branch without dirtying `main`. Upon batch completion, a two-axis `/code-review` is conducted before fast-forward merging into `main`.
 
 ---
 
@@ -66,10 +70,11 @@ Terminal A dynamically sizes tasks into `tasks.txt` based on `docs/agents/granul
 | **Level 2** | **Medium (Component Slice)** | Break down into discrete module units (e.g. data model vs processor). |
 | **Level 3** | **Micro (Step / Function)** | Precise function-level instructions. Used only when worker requested guidance or previous attempt struggled. |
 
-### Task Format:
+### Task Format (Tracer-Bullet Schema):
 ```text
-TASK-XXX | LEVEL: 1 | TARGET: <file_paths> | ACTION: <precise logic details> | VERIFY: <test command> | CONSTRAINTS: <scope limits>
+TASK-XXX | LEVEL: 1 | AFTER: <task_id> | TARGET: <file_paths> | ACTION: <precise logic details> | VERIFY: <test command> | CONSTRAINTS: <scope limits>
 ```
+*(Note: `AFTER: <task_id>` is optional for expressing Task Graph DAG dependencies).*
 
 ---
 

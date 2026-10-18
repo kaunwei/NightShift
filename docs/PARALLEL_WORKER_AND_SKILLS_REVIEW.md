@@ -1,97 +1,88 @@
-# Parallel Worker Architecture & Skills Review
+# Architecture Review: Dual-Terminal Workflow vs. Matt Pocock Skills & Large-Project Scalability
 
 ## Executive Summary
-This document reviews the integration between our current 24-Hour Unattended AI Development Workflow and the skills ecosystem (Matt Pocock skills + Architect/Worker custom skills). It analyzes architectural bottlenecks in the current single-worker FIFO setup, identifies friction points across skills, and defines the blueprint for **Parallel Worktree Worker Swarms**.
+This document reviews the architectural alignment between our **24-Hour Unattended Dual-Terminal Framework** and **Matt Pocock's Skills Ecosystem** (`ask-matt`, `implement-spec`, `chief-of-staff`, `to-tickets`, `tdd`, `retro`). It analyzes the real-world overhead of Git Worktrees on large codebases, evaluates the trade-offs of parallelization, and establishes the definitive operating protocol for porting this workflow to any enterprise repository.
 
 ---
 
-## 1. Current Workflow Bottlenecks & Friction Points
+## 1. Large-Project Reality Check: Worktree Overhead vs. Sequential Frontier
 
-### 1.1 Single Working Tree Collision (Fatal in Multi-Process)
-- **Problem**: In the current single-worker setup, `worker.sh` runs directly in the root repository. If a worker fails, its cleanup function invokes:
-  ```bash
-  git restore .
-  git clean -df
-  ```
-  If multiple workers run concurrently in the same working tree, Worker A's failure rollback will wipe out uncommitted changes currently being written by Worker B.
-- **Git Lock Contention**: Running parallel `git add` and `git commit` inside a single working directory triggers `.git/index.lock` collisions.
-- **Solution**: **Git Worktree Isolation**. Each parallel worker must operate in its own physical worktree (e.g. `.worktrees/worker-1`, `.worktrees/worker-2`) linked to independent feature branches (`feature/worker-1`, `feature/worker-2`).
+When scaling background AI workers, parallelization via Git Worktrees (`git worktree add`) is often the first intuitive idea. However, on large-scale enterprise projects (100k+ lines, large dependency trees, compiled artifacts), **blind worktree parallelization creates severe overhead**:
 
-### 1.2 Head-of-Line Blocking in Single FIFO Queue (`tasks.txt`)
-- **Problem**: When a long-running, multi-attempt task (Level 2 or 3) is at the front of `tasks.txt`, subsequent small, independent tasks are blocked even when computing resources and AI rate limits are available.
-- **Race Condition on Task Popping**: Multiple workers reading `tasks.txt` concurrently without atomic locking would claim the identical task.
-- **Solution**:
-  1. **Atomic Directory Lock**: Implemented in `worker.sh` using POSIX atomic `mkdir "$TASKS_FILE.lock"`.
-  2. **Seam-Tagged Tasks**: Tasks specify their target architectural seam (`SEAM: <subsystem>`), allowing workers to safely parallelize across orthogonal subsystems.
+| Dimension | Git Worktree Parallel Swarm | Single-Directory Sequential Frontier (Recommended) |
+| :--- | :--- | :--- |
+| **Disk Overhead** | **Severe (Nx duplication)**. 4 workers = 4 full checkout trees + 4 duplicated dependency directories (`node_modules`, `.venv`, `target/`). | **Zero**. Operates on the existing working directory. |
+| **Build & Cache Cold Starts** | **Severe**. Each worktree lacks warm compilation caches (`ccache`, CMake build dirs, Cargo caches), triggering repeated full builds. | **Near Instant (Warm Incremental Builds)**. Shares compilation artifacts across sequential tasks. |
+| **Shared Resource Contention** | **High Collision Risk**. Test suites contending for fixed ports (e.g., 3000, 8080), Docker containers, or local database ports (Postgres 5432). | **Zero Contention**. Only one test suite runs at any given moment. |
+| **Git Merge & Conflict Burden** | **High**. Reconciling concurrent branch merges into the integration branch often requires manual human conflict resolution. | **Zero Merge Conflict**. Changes build linearly and atomically on the integration branch. |
+| **AI Context Hygiene** | Requires coordinating multiple disparate AI processes. | **Pristine**. Single worker resets context per task (`agy -p` per task), strictly avoiding context pollution. |
 
-### 1.3 Progress Log Contention (`progress.log`)
-- **Problem**: The protocol dictates prepending `<= 15 lines` at the very top of `progress.log`. Concurrent writes cause partial writes or interleaved corrupted records.
-- **Solution**: Workers append to individual log shards (e.g. `.worker.worker-1.log`) and acquire the queue lock when prepending to the shared `progress.log`, or Sentinel aggregates completed tasks.
+### Architectural Conclusion:
+> [!IMPORTANT]
+> For **95% of large and medium codebases**, the **Single-Directory Sequential Frontier** is vastly superior in speed, resource consumption, and reliability compared to multi-worktree execution. Git Worktrees should remain an **optional, advanced mode** reserved only for microservices or repositories with completely decoupled directories.
 
 ---
 
-## 2. Skills Conflict & Alignment Review
+## 2. Deep Philosophical Alignment: Dual-Terminal Framework & Matt Pocock Skills
 
-| Skill | Current State | Friction / Conflict | Recommended Enhancement |
+Is our 24-hour Dual-Terminal Framework aligned with Matt Pocock's core design philosophy? **Yes, they share identical core values:**
+
+### 2.1 Context Hygiene & Smart Zone Preservation
+- **Matt Pocock's Rule**: Keep planning in one unbroken window until `/to-tickets`, then `/clear` context between ticket implementations. The model must always operate within its **Smart Zone** (~150k tokens) where reasoning is sharp.
+- **Dual-Terminal Realization**:
+  - **Terminal A (Interactive Architect)**: Maintains strategic focus with the human, decomposing goals into atomic single-line English tasks without cluttering its context with build logs or file contents.
+  - **Terminal B (Worker Daemon)**: Headless, stateless process (`worker.sh`) executing `agy -p` per task. Each task starts with fresh, clean context and terminates upon completion, achieving 100% context hygiene automatically.
+
+### 2.2 Context Pointers over Text Duplication
+- **Matt Pocock's Rule**: *"Communication to and from subagents should be sparse. Communicate primarily through context pointers: research notes, previous commits, and specs. Don't duplicate information already available via pointers."*
+- **Dual-Terminal Realization**:
+  - `tasks.txt` uses compact, pointer-rich single lines (`TARGET: src/calc.py | ACTION: ... | VERIFY: ...`).
+  - `progress.log` is capped at `<= 15 lines` of verified facts and commit hashes, preventing context explosions.
+
+### 2.3 Single-Seam Autonomy & Test-Driven Development (TDD)
+- **Matt Pocock's Rule**: Implementations are driven by `/tdd` (Red-Green-Refactor) locked down by regression tests.
+- **Dual-Terminal Realization**: Worker executes `.skills/universal-build-verify.md` with 100% test pass enforcement, atomic commit, and max 3-attempt automated self-healing.
+
+### 2.4 Continuous Environment Improvement (`/retro`)
+- **Matt Pocock's Rule**: After a build, `/retro` modifies the **environment**, not the code: checks, linters, steering files, and coding standards so the next build starts in a better environment ("Pit of Success").
+- **Dual-Terminal Realization**: Worker maintains `.worker.notes.md` (recording build quirks and flags) and updates `granularity-profile.json`.
+
+---
+
+## 3. Key Concepts Adopted from Matt Pocock into Our Framework
+
+To further sharpen our workflow, the following high-value concepts from Matt Pocock's skills are officially integrated into our treaties:
+
+### 3.1 Tracer-Bullet Slicing (`to-tickets`)
+Tasks written by Terminal A into `tasks.txt` MUST be **vertical tracer bullets** (piercing end-to-end functionality from interface to implementation and test), rather than broad horizontal technical layers (e.g., never "write all schemas", then "write all APIs").
+
+### 3.2 Task Graph & Frontier (`implement-spec`)
+While `tasks.txt` is read sequentially, tasks can declare dependencies:
+```text
+TASK-004 | AFTER: TASK-003 | TARGET: src/calc.py | ACTION: ... | VERIFY: ...
+```
+This ensures downstream tasks are never executed out of order, and allows the Architect to express a true **Task Graph DAG**.
+
+### 3.3 Integration Branch Sandboxing (`implement-spec`)
+- Batch feature tasks are NEVER committed directly to `main`.
+- Terminal A creates an integration branch (`git checkout -b feature/<batch-name>`).
+- Terminal B commits atomic tracer-bullet commits onto this feature branch.
+- Upon batch completion, Terminal A runs `/code-review` across the feature branch diff, and linearly fast-forward merges (`git merge --ff-only`) into `main`.
+
+### 3.4 Pre-flight Exploration Subagent (Track 1 Offload)
+Before queueing complex tasks, Terminal A offloads exploratory file-reading to an in-session Subagent (`invoke_subagent`). The subagent writes scratch notes, allowing Terminal B's worker to focus purely on implementation with zero exploration overhead.
+
+---
+
+## 4. Skills Ecosystem Matrix
+
+| Skill | Role in Framework | Operating Terminal | Interaction Pattern |
 | :--- | :--- | :--- | :--- |
-| **`calibrate-task-granularity`** | Sizes tasks into Level 1 (Coarse), 2 (Medium), 3 (Micro) based on history. | Evaluates tasks in isolation; does not evaluate cross-task file or seam overlap. | Add **Seam Independence Check**: Only assign parallel execution to tasks touching disjoint file trees. Overlapping seams must remain serialized. |
-| **`chief-of-staff`** *(Newly Added)* | Single-session DRI coordinating subagents and schedules. | Designed originally for interactive subagents, not headless background daemons. | Reposition Chief-of-Staff as the **Parallel Swarm Orchestrator**: Planner uses it to decompose batch roadmaps into independent worktree tasks. |
-| **`codebase-design`** | Defines deep modules and narrow interfaces. | None. Highly synergistic. | Deep module seams provide the exact boundary required for conflict-free parallel workers. |
-| **`tdd`** | Red-green-refactor cycle on single seams. | Test suite execution might contend on fixed resources (ports, test DBs). | Worker test runners should use ephemeral resources (e.g. dynamic ports, in-memory SQLite, isolated temp dirs). |
-| **`diagnosing-bugs`** | Diagnosis loop requiring tight feedback commands. | Unattended workers may retry unguided on environmental flakes. | Retain strict 3-retry limit with immediate `[NEED_GUIDANCE]` escalation. |
-| **`watch-worker-queue`** | Sentinel monitors single `worker.status`. | Blind to multi-worker states (`worker.worker-1.status`, etc.). | Upgrade Sentinel to aggregate status across all active `worker.*.status` files. |
-| **`configure-unattended-worker`** | Writes single `.worker.env`. | Did not distinguish macOS vs Linux differences or multi-worker IDs. | **Resolved**: Updated with mandatory `.worker.env` check, `OS_TYPE` detection/override, and `WORKER_ID`. |
-
----
-
-## 3. Parallel Worker Architecture Blueprint (Git Worktree Swarm)
-
-```
-┌────────────────────────────────────────────────────────────────────────┐
-│                   Terminal A: Interactive Architect                    │
-│   • Uses /chief-of-staff & /calibrate-task-granularity                 │
-│   • Slices goals into Orthogonal Seams (Seam A, Seam B, Seam C)        │
-│   • Writes atomic tasks to tasks.txt                                   │
-└───────────────────────────────────┬────────────────────────────────────┘
-                                    │ (Atomic Locking FIFO Queue)
-             ┌──────────────────────┴──────────────────────┐
-             ▼                                             ▼
-┌───────────────────────────────┐             ┌───────────────────────────────┐
-│     Worker 1 (WORKER_ID=w1)   │             │     Worker 2 (WORKER_ID=w2)   │
-│ • Directory: .worktrees/w1/   │             │ • Directory: .worktrees/w2/   │
-│ • Branch: feature/worker-1    │             │ • Branch: feature/worker-2    │
-│ • Status: worker.w1.status    │             │ • Status: worker.w2.status    │
-│ • CLI: agy accept-edits       │             │ • CLI: agy accept-edits       │
-│ • Scope: Seam A (e.g. auth)   │             │ • Scope: Seam B (e.g. billing)│
-└──────────────┬────────────────┘             └───────────────┬───────────────┘
-               │                                              │
-               ▼                                              ▼
-┌────────────────────────────────────────────────────────────────────────┐
-│                  Linear Integration & Sentinel Verifier                │
-│   • Fast-forward / Rebase merges into main once verify passes.         │
-│   • Watcher Sentinel monitors all worker.*.status states.              │
-└────────────────────────────────────────────────────────────────────────┘
-```
-
-### 3.1 Key Implementation Invariants
-1. **Zero Working Tree Contamination**: Workers NEVER share a physical directory.
-2. **Atomic Pop via Directory Lock**: `mkdir tasks.txt.lock` guarantees only one worker claims a line at a time.
-3. **Cross-Platform Compatibility**: Uses standard POSIX primitives tested across macOS (Darwin) and Linux (Ubuntu).
-4. **Mandatory Configuration Isolation**: Each worker uses its own `.worker.env` or passes `WORKER_ID` to derive isolated status and log files.
-
----
-
-## 4. Completed Foundation Upgrades
-1. **Mandatory `.worker.env` Enforcement**:
-   - `worker.sh` verifies `.worker.env` exists in the script's directory and aborts with clear template copy instructions if missing.
-2. **OS Switching (macOS & Ubuntu)**:
-   - Auto-detection via `uname -s` and `/etc/os-release`.
-   - Explicit override supported via `OS_TYPE="mac"`, `OS_TYPE="ubuntu"`, or `OS_TYPE="auto"`.
-   - Dynamic CPU detection (`sysctl -n hw.ncpu` vs `nproc`).
-   - Dynamic timeout binary selection (`gtimeout` vs `timeout` vs background watchdog).
-3. **Multi-Worker Identity (`WORKER_ID`)**:
-   - Status files dynamically route to `worker.status` (default) or `worker.<WORKER_ID>.status`.
-   - Log files route to `.worker.log` (default) or `.worker.<WORKER_ID>.log`.
-   - PIDs route to `.worker.pid` (default) or `.worker.<WORKER_ID>.pid`.
-4. **Atomic Task Popping**:
-   - Directory-lock (`tasks.txt.lock`) prevents task claim collisions in concurrent runs.
+| **`chief-of-staff`** | Strategic DRI & Long-Running Orchestrator | Terminal A (Architect) | Coordinates roadmaps, sets schedules, aligns pit-of-success environment. |
+| **`wayfinder`** | High-level foggy idea mapping | Terminal A (Architect) | Charts decision tickets on complex initiatives. |
+| **`grill-with-docs`** | Requirements sharpening | Terminal A (Architect) | Interviews human, updates `GLOSSARY.md` and ADRs. |
+| **`to-spec` / `to-tickets`** | Decomposition into tracer bullets | Terminal A (Architect) | Emits structured single-line tasks into `tasks.txt`. |
+| **`universal-build-verify`** | Automated TDD & Smoke Testing | Terminal B (Worker) | Enforces 100% test pass before git commit. |
+| **`code-review`** | Two-axis review (Standards + Spec) | Terminal A (Architect) | Final acceptance check on integration branch before merge. |
+| **`retro`** | Environment & steering evolution | Terminal A & B | Updates `.worker.notes.md`, linter configs, coding standards. |
+| **`watch-worker-queue`** | Zero-token completion sentinel | In-Session Subagent | Wakes Terminal A when queue is empty or guidance is needed. |
