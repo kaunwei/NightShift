@@ -25,3 +25,16 @@ class Calculator:
         if total == 0:
             raise ValueError("Cannot calculate percentage with zero total")
         return (value / total) * 100.0
+
+
+if __name__ == "__main__":
+    calc = Calculator()
+    print("=== Calculator Live Demo (Cumulative Verified Features) ===")
+    print(f"  2 + 3    = {calc.add(2, 3)}")
+    print(f"  10 - 4   = {calc.subtract(10, 4)}")
+    print(f"  3 * 7    = {calc.multiply(3, 7)}")
+    print(f"  15 / 3   = {calc.divide(15, 3)}")
+    print(f"  2 ^ 8    = {calc.power(2, 8)}")
+    print(f"  10 % 3   = {calc.modulo(10, 3)}")
+    print(f"  25 / 200 = {calc.percentage(25, 200)}%")
+
