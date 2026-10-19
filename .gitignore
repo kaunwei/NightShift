@@ -6,6 +6,8 @@ worker*.status
 PAUSE
 .scratch/
 tasks.txt.lock/
+.worker-tree/
+.preview/
 
 # Build & Environment Artifacts
 build/

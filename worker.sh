@@ -118,6 +118,17 @@ POLL_INTERVAL="${POLL_INTERVAL:-5}"
 USE_SANDBOX="${USE_SANDBOX:-0}"
 RUN_ONCE="${RUN_ONCE:-0}"
 ADDITIONAL_DIRS="${ADDITIONAL_DIRS:-}"
+WORKER_ISOLATION="${WORKER_ISOLATION:-1}"
+WORKER_PORT="${WORKER_PORT:-3001}"
+PREVIEW_DIR="$SCRIPT_DIR/.preview"
+
+if [ "$WORKER_ISOLATION" = "1" ] || [ "$WORKER_ISOLATION" = "true" ]; then
+  WORK_DIR="$SCRIPT_DIR/.worker-tree"
+  ISOLATION_FLAG="true"
+else
+  WORK_DIR="$SCRIPT_DIR"
+  ISOLATION_FLAG="false"
+fi
 
 # Force non-interactive, unpaged batch environment
 export CI=1
@@ -125,6 +136,71 @@ export PAGER=cat
 export NO_COLOR=1
 export DEBIAN_FRONTEND=noninteractive
 export TERM=dumb
+
+# ------------------------------------------------------------------------------
+# Workspace Isolation & Preview Staging Helpers
+# ------------------------------------------------------------------------------
+ensure_worker_tree() {
+  if [ "$WORKER_ISOLATION" != "1" ] && [ "$WORKER_ISOLATION" != "true" ]; then
+    return 0
+  fi
+
+  local target_dir="$SCRIPT_DIR/.worker-tree"
+  local branch_name="feature/worker-frontier"
+
+  if [ ! -d "$target_dir" ] || [ ! -f "$target_dir/.git" ]; then
+    echo "[WORKER] Initializing persistent worker worktree at $target_dir (Branch: $branch_name)..."
+    if ! git show-ref --verify --quiet "refs/heads/$branch_name"; then
+      git branch "$branch_name" HEAD 2>/dev/null || true
+    fi
+    git worktree add -B "$branch_name" "$target_dir" "$branch_name" 2>/dev/null || true
+  fi
+
+  # Fast-forward worker-frontier if main is ahead and worker tree is clean
+  if git merge-base --is-ancestor "$branch_name" HEAD 2>/dev/null; then
+    git -C "$target_dir" merge --ff-only HEAD 2>/dev/null || true
+  fi
+
+  # Mirror untracked environment configs
+  [ -f "$SCRIPT_DIR/.env" ] && cp "$SCRIPT_DIR/.env" "$target_dir/.env" 2>/dev/null || true
+  [ -f "$SCRIPT_DIR/.worker.env" ] && cp "$SCRIPT_DIR/.worker.env" "$target_dir/.worker.env" 2>/dev/null || true
+
+  # Mirror heavy dependency caches
+  [ -d "$SCRIPT_DIR/node_modules" ] && [ ! -e "$target_dir/node_modules" ] && ln -sf "$SCRIPT_DIR/node_modules" "$target_dir/node_modules" 2>/dev/null || true
+  [ -d "$SCRIPT_DIR/.venv" ] && [ ! -e "$target_dir/.venv" ] && ln -sf "$SCRIPT_DIR/.venv" "$target_dir/.venv" 2>/dev/null || true
+}
+
+publish_preview_artifact() {
+  local task_id="$1"
+  local task_title="$2"
+  mkdir -p "$PREVIEW_DIR"
+
+  # Clean git archive of feature/worker-frontier into .preview/
+  if command -v tar >/dev/null 2>&1; then
+    ( cd "$SCRIPT_DIR" && git archive feature/worker-frontier 2>/dev/null | tar -x -C "$PREVIEW_DIR" 2>/dev/null || true )
+  fi
+
+  # Copy compiled binary directories if present
+  for bin_dir in build/bin target/debug bin dist; do
+    if [ -d "$WORK_DIR/$bin_dir" ]; then
+      mkdir -p "$PREVIEW_DIR/$bin_dir"
+      cp -R "$WORK_DIR/$bin_dir/"* "$PREVIEW_DIR/$bin_dir/" 2>/dev/null || true
+    fi
+  done
+
+  # Record version metadata
+  local commit_hash
+  commit_hash=$(git -C "$WORK_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+  cat <<JSON > "$PREVIEW_DIR/version.json"
+{
+  "task_id": "$task_id",
+  "commit": "$commit_hash",
+  "summary": "$task_title",
+  "updated_at": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+}
+JSON
+  echo "[WORKER] Staged immutable preview drop-box at .preview/ (Commit: $commit_hash)"
+}
 
 # ------------------------------------------------------------------------------
 # Helper Functions
@@ -201,6 +277,8 @@ update_status() {
   "worker_id": "$WORKER_ID",
   "os": "$ACTIVE_OS",
   "platform": "$PLATFORM_NAME",
+  "isolation": $ISOLATION_FLAG,
+  "work_dir": "$WORK_DIR",
   "state": "$state",
   "current_task": $(if [ -n "$current_task" ]; then echo "\"$current_task\""; else echo "null"; fi),
   "elapsed_seconds": $elapsed,
@@ -255,26 +333,29 @@ prepend_progress_log() {
 
 isolate_and_rollback_dirty_tree() {
   local task_id="$1"
-  local backup_dir=".scratch/failed_tasks/${task_id}_$(date +%Y%m%d_%H%M%S)"
+  local backup_dir="$SCRIPT_DIR/.scratch/failed_tasks/${task_id}_$(date +%Y%m%d_%H%M%S)"
   mkdir -p "$backup_dir"
   
   echo "[WORKER] Isolating failed changes to $backup_dir and resetting clean git tree..."
-  git diff > "$backup_dir/changes.diff" 2>/dev/null || true
-  git status --porcelain > "$backup_dir/status.txt" 2>/dev/null || true
+  git -C "$WORK_DIR" diff > "$backup_dir/changes.diff" 2>/dev/null || true
+  git -C "$WORK_DIR" status --porcelain > "$backup_dir/status.txt" 2>/dev/null || true
   
   # Safe reset to head
-  git restore . 2>/dev/null || true
-  git clean -df -e "$TASKS_FILE" -e "$TASKS_DONE_FILE" -e "$PROGRESS_FILE" -e "$STATUS_FILE" -e "$LOG_FILE" -e "$PID_FILE" -e ".scratch" 2>/dev/null || true
+  git -C "$WORK_DIR" restore . 2>/dev/null || true
+  git -C "$WORK_DIR" clean -df 2>/dev/null || true
 }
 
 # ------------------------------------------------------------------------------
 # Startup Initialization
 # ------------------------------------------------------------------------------
 touch "$TASKS_FILE" "$TASKS_DONE_FILE" "$PROGRESS_FILE"
+ensure_worker_tree
+
 echo "=============================================================================="
 echo " 24-Hour Unattended AI Worker Daemon Started"
 echo " Worker ID: $WORKER_ID | OS: $PLATFORM_NAME (CPUs: $NUM_CPUS)"
 echo " PID: $$ | CLI: $AI_CLI | Model: $AI_MODEL | Mode: $AGY_MODE"
+echo " WorkDir: $WORK_DIR | Isolation: $ISOLATION_FLAG"
 echo " Tasks: $TASKS_FILE | Status: $STATUS_FILE"
 echo " Progress: $PROGRESS_FILE | Log: $LOG_FILE"
 echo "=============================================================================="
@@ -442,15 +523,25 @@ PROMPT_EOF
       esac
     fi
 
-    echo "[WORKER] Launching $AI_CLI (Model: $AI_MODEL, Mode: ${AGY_MODE:-default})..."
-    run_with_timeout "$TASK_TIMEOUT" agy -p "$PROMPT_PAYLOAD" \
-      --dangerously-skip-permissions \
-      --model "$AI_MODEL" \
-      "${EXTRA_CLI_ARGS[@]}" 2>&1 | tee "$CMD_OUTPUT_TMP"
+    echo "[WORKER] Launching $AI_CLI (Model: $AI_MODEL, Mode: ${AGY_MODE:-default}, WorkDir: $WORK_DIR)..."
+    (
+      cd "$WORK_DIR" && \
+      export PORT="$WORKER_PORT" && \
+      export TEST_PORT="$WORKER_PORT" && \
+      run_with_timeout "$TASK_TIMEOUT" agy -p "$PROMPT_PAYLOAD" \
+        --dangerously-skip-permissions \
+        --model "$AI_MODEL" \
+        "${EXTRA_CLI_ARGS[@]}"
+    ) 2>&1 | tee "$CMD_OUTPUT_TMP"
     EXIT_CODE="${PIPESTATUS[0]}"
   else
-    echo "[WORKER] Launching $AI_CLI..."
-    run_with_timeout "$TASK_TIMEOUT" "$AI_CLI" "$PROMPT_PAYLOAD" 2>&1 | tee "$CMD_OUTPUT_TMP"
+    echo "[WORKER] Launching $AI_CLI (WorkDir: $WORK_DIR)..."
+    (
+      cd "$WORK_DIR" && \
+      export PORT="$WORKER_PORT" && \
+      export TEST_PORT="$WORKER_PORT" && \
+      run_with_timeout "$TASK_TIMEOUT" "$AI_CLI" "$PROMPT_PAYLOAD"
+    ) 2>&1 | tee "$CMD_OUTPUT_TMP"
     EXIT_CODE="${PIPESTATUS[0]}"
   fi
 
@@ -512,6 +603,9 @@ BLOCK_EOF
 
   else
     # Success
+    if [ "$WORKER_ISOLATION" = "1" ] || [ "$WORKER_ISOLATION" = "true" ]; then
+      publish_preview_artifact "$TASK_ID" "$TASK_TITLE"
+    fi
     NEW_DONE_COUNT=$(( DONE_COUNT + 1 ))
     FINAL_BAR=$(render_progress_bar "$NEW_DONE_COUNT" "$TOTAL_COUNT" 30)
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] [SUCCESS] Task completed in ${DURATION}s | $FINAL_BAR"
