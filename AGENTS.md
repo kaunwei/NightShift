@@ -40,14 +40,24 @@ This repository operates on a **Physical Dual-Terminal Architecture** separating
    - **Sentinel Subagent Wakeup**: If proactive completion notification is desired without freezing Terminal A, Planner launches a lightweight **Queue Sentinel Subagent** (`invoke_subagent` with `bash scripts/watch_worker.sh 3600`).
    - Planner immediately yields control to Human. Terminal A remains 100% interactive.
    - When Terminal B finishes all tasks, the Sentinel Subagent detects completion via zero-token script exit and triggers a **system wakeup event**, allowing Planner to deliver the final acceptance report automatically.
-3. **Sequential Frontier on Warm Build Cache (循序前線與熱編譯快取)**:
-   - On enterprise-scale codebases, running tracer-bullet tasks sequentially on a single warm working tree with a fresh AI context per task (`agy -p`) is the gold standard. It completely avoids the severe disk duplication (Nx node_modules, target, build dirs), cold compiler restarts, and test port/database collisions inherent in multi-worktree execution.
-4. **Integration Branch Sandboxing (整合分支隔離實作)**:
-   - Batch features are executed on an integration branch (`feature/<batch-name>`). Intermediate tracer-bullet commits accumulate on the integration branch without dirtying `main`. Upon batch completion, a two-axis `/code-review` is conducted before fast-forward merging into `main`.
+3. **Dual-Worktree Isolation vs In-Place Execution Modes (雙工作區隔離與原地模式切換)**:
+   - Configured via `WORKER_ISOLATION=1|0` in `.worker.env` (minimal maintenance overhead):
+   - **Mode 1: Dual-Worktree Isolation (`WORKER_ISOLATION=1`, Default)**:
+     - Maintains exactly **TWO persistent worktrees** (`main` and `.worker-tree`).
+     - Worker executes tasks in `.worker-tree` on branch `feature/worker-frontier`.
+     - **Immutable Drop-box (`.preview/`)**: On each task PASS, Worker stages a verified snapshot/binary with `version.json`.
+     - **Zero Human Disruption**: Human workspace remains 100% stable; IDE files never flicker; no compiler/linker locks (`ETXTBSY`).
+     - **Planner-Guided Early Access**: Human can preview intermediate milestones (e.g. 3 of 10 tasks) without compiling or merging. Planner provides the exact native preview command.
+     - **Auto-Merge on Completion**: When all tasks complete, Sentinel wakes Planner, who conducts acceptance and automatically runs `git merge --ff-only feature/worker-frontier` into `main` with zero manual human git intervention.
+   - **Mode 2: Single-Tree In-Place (`WORKER_ISOLATION=0`)**:
+     - Used for projects locked to fixed ports (e.g., port 22) or singleton hardware resources where two instances cannot coexist. Worker runs directly in the repository root.
+4. **Untracked File & Conflict Isolation**:
+   - In isolation mode, `.worker-tree` automatically mirrors untracked configs (`.env`, `.worker.env`) and symlinks heavy dependencies (`node_modules`, `.venv`) to preserve warm build caches with zero disk duplication.
+   - Port offsets (`PORT=3001`) and isolated test DBs prevent collision between human preview and background worker runs.
 5. **Live Human-in-the-Loop Feedback & Dynamic Rescheduling (熱反饋與動態隊列重排)**:
-   - **Cumulative Hot State**: Because Worker commits atomically after each verified task, the working tree reflects the cumulative, functional state of all completed tasks (e.g. after tasks 1–3). Human can run and evaluate the latest software in Terminal A *while Terminal B continues executing remaining tasks*.
-   - **Hot Preemption & Deduplication**: If Human discovers a bug or adjusts priorities during testing, Planner can inspect the remaining queue, deduplicate or merge overlapping tasks, and inject high-priority bug fixes (`[HOTFIX/ISSUE]`) at the top of `tasks.txt` via `scripts/reorder_queue.sh`.
-   - **Why This Obsoletes Worktree Duplication**: Instead of creating dozens of isolated worktrees with cold build caches and merge conflicts, single-tree execution provides continuous cumulative progress, instant human feedback, and live queue malleability with zero disk overhead.
+   - **Cumulative Hot State**: Worker commits atomically after each verified task. Human can preview the latest verified functionality in `.preview/` *while Terminal B continues executing remaining tasks*.
+   - **Hot Preemption & Deduplication**: If Human spots an issue during preview, Planner inspects the remaining queue, deduplicates tasks, and injects `[HOTFIX]` tasks at the top of `tasks.txt` via `scripts/reorder_queue.sh`.
+
 
 ---
 

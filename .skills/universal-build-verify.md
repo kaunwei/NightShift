@@ -133,3 +133,19 @@ Attempt Trace:
 Granularity Feedback: <Worker observation on module granularity>
 ================================================================================
 ```
+
+---
+
+## 7. Dual-Worktree Isolation & Preview Drop-Box Support
+
+The background worker supports workspace isolation modes via `WORKER_ISOLATION` in `.worker.env`:
+- **Dual-Worktree Isolation (`WORKER_ISOLATION=1`, Default)**:
+  - Worker operates exclusively in `.worker-tree` on branch `feature/worker-frontier`.
+  - Commits land cleanly on `feature/worker-frontier`.
+  - Upon task verification success, `worker.sh` publishes an immutable snapshot to `.preview/` with `version.json`.
+  - Human and Planner can preview verified builds at any time without colliding with worker compilation, tests, or mid-edit files.
+- **Single-Tree In-Place Mode (`WORKER_ISOLATION=0`)**:
+  - Worker operates directly in the project root.
+  - Commits land directly on the active branch (e.g., `main`).
+  - Recommended for hardware-locked environments or fixed ports (e.g. port 22).
+

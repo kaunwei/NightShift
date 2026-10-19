@@ -53,3 +53,24 @@ Use this pattern whenever:
   ]
 }
 ```
+
+---
+
+## 4. Early-Access Preview Guidance (During In-Flight Tasks)
+When `WORKER_ISOLATION=1` is active, Worker publishes immutable snapshots of passed tasks to `.preview/`:
+- If the human wants to try out an intermediate milestone (e.g., Task 3 of 10), Planner should **never add custom runner scripts**.
+- Instead, Planner directly prompts Human with the exact project-native preview command:
+  - Compiled: `./.preview/<binary_name>`
+  - Interpreted: `python3 .preview/src/<entrypoint>.py` or `node .preview/dist/index.js`
+
+---
+
+## 5. Post-Wakeup Acceptance & Auto-Merge Protocol
+When Sentinel Subagent wakes Planner up upon completion:
+1. **Primary Verification**: Planner inspects `head -n 15 progress.log` and verifies test suite is green.
+2. **Auto-Merge (when WORKER_ISOLATION=1)**:
+   - Planner executes: `git merge --ff-only feature/worker-frontier`
+   - **Zero Human Intervention**: Human does NOT need to run git commands manually; Planner completes the merge and reports final readiness.
+3. **In-Place Mode (when WORKER_ISOLATION=0)**:
+   - Commits are already on `main`. Planner delivers final report immediately.
+
