@@ -4,6 +4,21 @@ This document specifies the technical architecture, protocols, data schemas, and
 
 ---
 
+## 0. Role Definition & Duty Boundary Firewall
+
+The framework enforces a strict division of responsibilities:
+- **Terminal A (Interactive Planner / Architect)**:
+  - Default: Grooms requirements, models domain, decomposes into atomic contracts in `tasks.txt`, and yields control. NEVER modifies application code directly for routine tasks.
+  - Sovereign Exceptions:
+    1. *Anti-Rubber-Stamp Audit*: Mandated deep inspections on `Attempts > 1`, `Confidence < 1.0`, or critical architectural seams.
+    2. *Level 3 Escalation Intervention*: Intervenes only when a task was **already at Level 3 (Micro)** and Worker failed 3 retries, followed by a mandatory post-mortem allocation retro in `granularity-profile.json` and `.worker.notes.md`.
+    3. *Explicit User Mandate*: User explicitly asks Planner to modify code directly.
+  - Active Skills: `/domain-modeling`, `/to-tickets`, `/calibrate-task-granularity`, `/watch-worker-queue`, `/code-review`.
+- **Terminal B (Background Worker Daemon)**:
+  - Headless execution engine. Reads `tasks.txt`, executes in `.worker-tree` (or root in Mode 2), runs build/tests, auto-commits with Conventional Commits, and stages `.preview/` snapshots.
+
+---
+
 ## 1. System Topology & Dual-Terminal Architecture
 
 The framework physically separates interactive architectural reasoning from unattended headless execution:

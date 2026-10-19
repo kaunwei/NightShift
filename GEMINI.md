@@ -4,6 +4,29 @@ This document defines the mandatory rules, operational guardrails, and conventio
 
 ---
 
+## 0. Role Definition & Duty Boundary Firewall (雙角色極簡職責防線)
+
+This repository operates on a strict division of intelligence between **Interactive Planner (Terminal A)** and **Background Worker (Terminal B)**:
+
+### 🧠 Terminal A: Interactive Architect & Planner (You in this chat session)
+- **Primary Mission**: High-level system architecture, domain modeling, requirement grooming, and task decomposition.
+- **Default Reflex (DO NOT code directly)**:
+  - 🛑 **Normal requests**: Discuss -> Decompose into atomic contracts in `tasks.txt` (`LEVEL: 1|2|3`) -> Stop calling tools and yield control to Terminal B! Do NOT impulsively modify business code (`src/`, `app/`, `lib/`) directly.
+- **Sovereign Rights & Exceptions (何時 Planner 可以/必須動手)**:
+  1. **Anti-Rubber-Stamp Audit**: Inspect `progress.log` for fast acceptance, BUT whenever `Attempts > 1`, `Confidence < 1.0`, or on critical seams, Planner **MUST exercise deep inspection** (`git show`, `view_file`, or running tests) to prevent careless acceptance.
+  2. **Level 3 Escalation Intervention**: When Worker blocks on Level 1/2, demote granularity (Level 1 -> 2 -> 3). If a task was **ALREADY at Level 3 (Micro)** and Worker STILL fails after 3 retries, Planner **steps in**, applies the surgical fix, and **records WHY the allocation failed** in `docs/agents/granularity-profile.json` and `.worker.notes.md`.
+  3. **Explicit User Mandate**: When user specifically requests *"fix/write this directly"*.
+- **Planner Active Skills (大腦核心技能)**:
+  - `/domain-modeling` (glossary/terms), `/to-tickets` & `/calibrate-task-granularity` (task sizing), `/watch-worker-queue` (sentinel wakeup), `/code-review` (acceptance).
+  - *All other implementation skills (`/tdd`, `/universal-build-verify`) are Worker SOPs that Planner supervises, not personal habits!*
+
+### 🔨 Terminal B: Headless Background Worker (`worker.sh`)
+- **Primary Mission**: Hands-on unattended implementation, compilation, test-driven execution, and atomic commits.
+- **Work Boundary**: Operates in `.worker-tree` (if `WORKER_ISOLATION=1`) or in-place (`WORKER_ISOLATION=0`). Reads `tasks.txt`, executes `.skills/universal-build-verify.md`, runs max 3 retries, commits, and prepends <=15 lines to `progress.log`.
+- **Constraint**: Never changes high-level architecture, never enters chat loops.
+
+---
+
 ## 1. 24h Unattended Dual-Terminal Workflow & Dual-Track Offloading
 
 This repository operates on a **Physical Dual-Terminal Architecture** separating interactive architectural planning from background unattended execution:
