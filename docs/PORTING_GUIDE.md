@@ -49,9 +49,10 @@ The following framework files must be copied into the target repository root:
 
 | Asset Path | Permissions | Purpose |
 | :--- | :---: | :--- |
-| `worker.sh` | `chmod +x` | Background daemon (stateless CLI per task, zero-arg execution). |
-| `.worker.env.example` | Read-only template | Environment config template with OS detection and model flags. |
+| `worker.sh` | `chmod +x` | Background daemon (supports isolation modes, zero-arg execution). |
+| `.worker.env.example` | Read-only template | Config template with OS detection, model flags, and `WORKER_ISOLATION`. |
 | `.worker.env` | Config file | Active config initialized from `.worker.env.example` in the **same directory as `worker.sh`**. |
+| `scripts/status.sh` | `chmod +x` | Real-time visual dashboard of worker state, queue, and preview status. |
 | `scripts/watch_worker.sh` | `chmod +x` | Sentinel subagent waiter script for non-blocking Terminal A wakeup. |
 | `scripts/reorder_queue.sh` | `chmod +x` | Atomic POSIX-locked task queue reordering & hot preemption tool. |
 | `.skills/universal-build-verify.md` | Instruction | Worker build & test verification skill. |
@@ -59,6 +60,8 @@ The following framework files must be copied into the target repository root:
 | `tasks.txt` | FIFO Queue | Task queue initialized with schema header. |
 | `tasks.done` | Completed list | List of successfully executed tasks. |
 | `progress.log` | Progress journal | Append-only execution log (strictly <= 15 lines per task). |
+| `.worker-tree/` | Ignored directory | Persistent worker sandbox (auto-created if `WORKER_ISOLATION=1`). |
+| `.preview/` | Ignored directory | Immutable early-access drop-box (auto-staged on task PASS). |
 
 ---
 
@@ -78,12 +81,13 @@ Analyze the target workspace without modifying anything:
 1. Copy all assets from the Migration Asset Checklist (Section 3).
 2. Set execute permissions:
    ```bash
-   chmod +x worker.sh scripts/watch_worker.sh scripts/reorder_queue.sh
+   chmod +x worker.sh scripts/status.sh scripts/watch_worker.sh scripts/reorder_queue.sh
    ```
 3. Initialize `.worker.env` from `.worker.env.example`:
    ```bash
    cp .worker.env.example .worker.env
    ```
+   *(Ensure `WORKER_ISOLATION=1` is set by default, or `0` for hardware-locked environments).*
 
 ### Step 4.3: Adapt `.skills/universal-build-verify.md`
 Inspect `.skills/universal-build-verify.md`. Update **ONLY** Step 2.2 (Build) and Step 2.3 (Test) with the exact build and test commands discovered in Step 4.1.
@@ -103,26 +107,25 @@ This repository supports the 24-Hour Unattended Dual-Terminal AI Development Fra
 - **Track 1 Offload**: Exploratory code-reading is delegated to in-session Subagents (`invoke_subagent`).
 - **Track 2 Offload**: Batch unattended execution is delegated to Terminal B.
 
-### 2. Strict Inter-AI English Protocol
+### 2. Dual-Worktree Isolation vs In-Place Execution Modes
+- **Mode 1: Dual-Worktree Isolation (`WORKER_ISOLATION=1`, Default)**:
+  - Maintains exactly TWO persistent worktrees (`main` and `.worker-tree`).
+  - Worker executes in `.worker-tree` on branch `feature/worker-frontier`.
+  - Immutable Drop-box (`.preview/`): stages verified snapshots on task PASS. Human previews early without compiling or merging.
+  - Auto-Merge on Completion: When tasks finish, Sentinel wakes Planner, who conducts acceptance and automatically runs `git merge --ff-only feature/worker-frontier` into `main` with zero manual human git intervention.
+- **Mode 2: Single-Tree In-Place (`WORKER_ISOLATION=0`)**:
+  - Used for fixed ports (e.g. port 22) or hardware-locked resources. Runs directly in project root.
+
+### 3. Strict Inter-AI English Protocol
 - All tasks in `tasks.txt`, summaries in `progress.log`, status in `worker.status`, and git commits MUST be in **strictly English**.
 
-### 3. Atomic Task Format (tasks.txt)
+### 4. Atomic Task Format (tasks.txt)
 Single-line tracer-bullet format:
 `TASK-XXX | LEVEL: 1 | TARGET: <files> | ACTION: <concrete logic> | VERIFY: <test command> | CONSTRAINTS: <bounds>`
 
-### 4. Safe Git Log Rules for Acceptance AI
+### 5. Safe Git Log Rules for Acceptance AI
 - Allowed: `git log -n 1 --stat`, `git show --stat <commit-hash>`, `git log --oneline -n 5`
 - Prohibited: Bare `git log`, `git log -p`, full `git diff` (prevents context explosion).
-
-### 5. Git Rebase & Integration Branch Strategy
-Batch features run on an integration branch and merge linearly into `main`:
-```bash
-git checkout feature/<batch-name>
-git rebase main
-git checkout main
-git merge --ff-only feature/<batch-name>
-git branch -d feature/<batch-name>
-```
 ```
 
 ### Step 4.5: Safe `.gitignore` Append
@@ -136,12 +139,15 @@ worker*.status
 PAUSE
 .scratch/
 tasks.txt.lock/
+.worker-tree/
+.preview/
 ```
 
 ### Step 4.6: Verification & Handover
-1. Run syntax check:
+1. Run syntax checks:
    ```bash
    bash -n worker.sh
+   bash -n scripts/status.sh
    bash -n scripts/watch_worker.sh
    bash -n scripts/reorder_queue.sh
    ```
@@ -152,5 +158,5 @@ tasks.txt.lock/
    Confirm that `.worker.env` is sourced, OS is auto-detected, and the script exits gracefully on empty queue.
 3. Hand over cleanly to the user:
    - Provide zero-argument launch instruction: `./worker.sh` in Terminal B.
-   - Inform them how to check progress via `cat worker.status` or `head -n 15 progress.log`.
+   - Inform them how to check progress via `./scripts/status.sh` or `head -n 15 progress.log`.
    - Point out that native project commands (`npm test`, `pytest`, etc.) remain 100% untouched.
