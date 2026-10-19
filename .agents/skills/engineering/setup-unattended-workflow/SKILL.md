@@ -36,6 +36,7 @@ Copy or initialize the following core assets into the repository root:
 - `worker.sh` -> placed at repo root (make executable with `chmod +x worker.sh`).
 - `.worker.env.example` -> placed at repo root.
 - `.worker.env` -> initialize from `.worker.env.example` in the **same directory as `worker.sh`** (mandatory).
+- `scripts/status.sh` -> placed in `scripts/` (make executable with `chmod +x scripts/status.sh`).
 - `scripts/watch_worker.sh` -> placed in `scripts/` (make executable with `chmod +x scripts/watch_worker.sh`).
 - `scripts/reorder_queue.sh` -> placed in `scripts/` (make executable with `chmod +x scripts/reorder_queue.sh`).
 - `.skills/universal-build-verify.md` -> placed in `.skills/universal-build-verify.md`.
@@ -54,11 +55,12 @@ Customize **ONLY** the build (Step 2.2) and test (Step 2.3) commands inside `.sk
 ### 4. Safe Non-Destructive Rules Merge
 Inspect `AGENTS.md` (or `GEMINI.md` / `CLAUDE.md`). **DO NOT overwrite existing project rules.**
 Append the `## 24h Unattended Dual-Terminal Workflow` section to the end of the rule file, containing:
-- Dual-terminal workflow & dual-track offloading summary.
-- Single-directory sequential frontier strategy (preserves warm build caches and avoids multi-worktree disk bloat).
+- Section 0: Role Definition & Duty Boundary Firewall (Planner vs Worker).
+- Dual-Terminal Architecture & Dual-Track Offload protocol.
+- Dual-Worktree Isolation (`WORKER_ISOLATION=1`, Default) vs Single-Tree In-Place (`WORKER_ISOLATION=0`) execution modes.
 - Strict English inter-AI protocol.
-- Atomic tracer-bullet task format schema.
-- Safe Git Log rules (`git log -n 1 --stat`, strictly no `git diff` / raw logs in discussion context).
+- Atomic tracer-bullet task format & Dynamic Granularity Ladder (Level 1, 2, 3 with escalation on failure).
+- Safe Git Log rules (`git log -n 1 --stat`, strictly no bare `git log` / `git diff` in discussion context).
 - Linear Git Rebase & Fast-Forward branch integration rules.
 
 ### 5. Update `.gitignore` (Append-Only)
@@ -72,6 +74,8 @@ worker*.status
 PAUSE
 .scratch/
 tasks.txt.lock/
+.worker-tree/
+.preview/
 ```
 
 ### 6. Team Fast Update & Rapid Deployment Advice
@@ -81,6 +85,12 @@ Inform the human of the 3-step fast update protocol for their collaborators and 
 3. **Warm Build Cache Retention**: For CI/CD or staging deployments, retain the working tree to reuse build caches instead of performing full cold clones.
 
 ### 7. Verification & Handover
-1. Run `bash -n worker.sh`, `bash -n scripts/watch_worker.sh`, `bash -n scripts/reorder_queue.sh`.
+1. Run syntax checks:
+   ```bash
+   bash -n worker.sh
+   bash -n scripts/status.sh
+   bash -n scripts/watch_worker.sh
+   bash -n scripts/reorder_queue.sh
+   ```
 2. Run `RUN_ONCE=1 ./worker.sh` to confirm `.worker.env` loading, OS detection, and graceful zero-queue exit.
 3. Report to the human that the unattended dual-terminal workflow is successfully set up and ready to run via `./worker.sh` in Terminal B without any impact on their existing project commands.

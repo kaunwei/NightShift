@@ -101,6 +101,19 @@ Append the following section to the end of their file:
 
 This repository supports the 24-Hour Unattended Dual-Terminal AI Development Framework.
 
+### 0. Role Definition & Duty Boundary Firewall (雙角色極簡職責防線)
+- **Terminal A (Interactive Architect & Planner)**:
+  - High-level system architecture, domain modeling, requirement grooming, and task decomposition.
+  - **Default Reflex**: Discuss -> Decompose into atomic contracts in `tasks.txt` (`LEVEL: 1|2|3`) -> Stop calling tools and yield control to Terminal B! Do NOT modify business code directly.
+  - **Sovereign Exceptions**:
+    1. *Anti-Rubber-Stamp Audit*: Mandated deep inspection on `Attempts > 1`, `Confidence < 1.0`, or critical seams.
+    2. *Level 3 Escalation Intervention*: Intervene only when a task was **already at Level 3 (Micro)** and Worker failed 3 retries, followed by a post-mortem allocation retro in `granularity-profile.json` and `.worker.notes.md`.
+    3. *Explicit User Mandate*: User explicitly requests Planner to write or fix code directly.
+  - **Active Skills**: `/domain-modeling`, `/to-tickets`, `/calibrate-task-granularity`, `/watch-worker-queue`, `/code-review`.
+- **Terminal B (Background Worker Daemon)**:
+  - Headless unattended implementation, compilation, test execution, and atomic commits.
+  - Operates in `.worker-tree` (if `WORKER_ISOLATION=1`) or in-place (`WORKER_ISOLATION=0`). Follows `.skills/universal-build-verify.md`, max 3 retries, commits, and prepends <=15 lines to `progress.log`. Never changes architecture, never enters chat loops.
+
 ### 1. Dual-Terminal Architecture & Dual-Track Offload
 - **Terminal A (Interactive Architect)**: Discuss requirements with human, groom specs into atomic tracer-bullet tasks, write to `tasks.txt`, and inspect `progress.log` for rapid acceptance.
 - **Terminal B (Background Worker)**: Runs `./worker.sh`. Stateless process per task, executes build, test, and auto-commits.
@@ -119,9 +132,13 @@ This repository supports the 24-Hour Unattended Dual-Terminal AI Development Fra
 ### 3. Strict Inter-AI English Protocol
 - All tasks in `tasks.txt`, summaries in `progress.log`, status in `worker.status`, and git commits MUST be in **strictly English**.
 
-### 4. Atomic Task Format (tasks.txt)
+### 4. Dynamic Granularity Ladder (tasks.txt)
 Single-line tracer-bullet format:
 `TASK-XXX | LEVEL: 1 | TARGET: <files> | ACTION: <concrete logic> | VERIFY: <test command> | CONSTRAINTS: <bounds>`
+- **Level 1 (Coarse)**: Public interface & test contract; worker decides internal implementation.
+- **Level 2 (Medium)**: Component/slice breakdown.
+- **Level 3 (Micro)**: Function-level surgical instructions.
+- **Escalation Ladder**: Level 1 Blocked -> Demote to Level 2 -> Demote to Level 3. If Level 3 still fails after 3 retries -> Planner sovereign intervention & retro.
 
 ### 5. Safe Git Log Rules for Acceptance AI
 - Allowed: `git log -n 1 --stat`, `git show --stat <commit-hash>`, `git log --oneline -n 5`
