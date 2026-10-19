@@ -34,6 +34,9 @@ class Calculator:
             raise ValueError("Cannot calculate square root of negative number")
         return float(math.sqrt(x))
 
+    def cube(self, x: float) -> float:
+        return float(x ** 3)
+
 
 if __name__ == "__main__":
     calc = Calculator()
@@ -46,4 +49,5 @@ if __name__ == "__main__":
     print(f"  10 % 3   = {calc.modulo(10, 3)}")
     print(f"  25 / 200 = {calc.percentage(25, 200)}%")
     print(f"  sqrt(16) = {calc.square_root(16)}")
+    print(f"  cube(3)  = {calc.cube(3)}")
 

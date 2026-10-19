@@ -64,5 +64,15 @@ class TestCalculator(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.calc.square_root(-0.0001)
 
+    def test_cube(self):
+        self.assertEqual(self.calc.cube(0), 0.0)
+        self.assertEqual(self.calc.cube(1), 1.0)
+        self.assertEqual(self.calc.cube(2), 8.0)
+        self.assertEqual(self.calc.cube(3), 27.0)
+        self.assertEqual(self.calc.cube(-2), -8.0)
+        self.assertEqual(self.calc.cube(-3), -27.0)
+        self.assertAlmostEqual(self.calc.cube(0.5), 0.125)
+
+
 if __name__ == '__main__':
     unittest.main()
