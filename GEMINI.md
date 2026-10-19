@@ -104,10 +104,17 @@ TASK-XXX | LEVEL: 1 | AFTER: <task_id> | TARGET: <file_paths> | ACTION: <precise
    - Output must clearly distinguish **Verified Facts** (exact code paths, verbatim command outputs) from **Hypotheses**.
 3. **Single-Seam Freedom (接縫自由實作)**: As long as a task operates on a single architectural module/seam, there is **NO line-of-code limit**. Worker has full autonomy on internal helpers, data structures, and tests.
 4. **Cross-Subsystem Rejection (跨子系統過載拒絕)**: If a task demands simultaneous, uncoordinated changes across multiple decoupled subsystems (which belongs to Planner's domain), Worker emits `[NEED_DECOMPOSITION]` with proposed subtasks.
-5. **3-Tier Escalation & Best-Effort with Note**:
+5. **3-Tier Escalation, Granularity Ladder & Level 3 Intervention Protocol**:
    - *Tier 1 (Local choices)*: Worker decides autonomously.
    - *Tier 2 (Recoverable errors)*: Worker self-heals within 3 retries (with `git restore` clean intermediate resets).
-   - *Tier 3 (Fatal blockers)*: Worker emits `[NEED_GUIDANCE]` or `[BLOCKED]` and pauses.
+   - *Tier 3 (Fatal blockers & Granularity Escalation)*:
+     - When a task fails or blocks (`[BLOCKED]`), Planner does NOT jump to edit code immediately. Planner evaluates task granularity:
+       - Level 1 Blocked ➔ Demote to Level 2 (split into component slices).
+       - Level 2 Blocked ➔ Demote to Level 3 (micro function-level instructions & exact tests).
+     - **Level 3 Failure Threshold (Planner Sovereign Intervention & Retro)**:
+       - When a task is **ALREADY at Level 3 (Micro)** and Worker STILL fails after 3 retries, this indicates deep architectural contradictions, environment quirks, or subtle bugs beyond the smaller model's scope.
+       - **Planner Steps In**: Planner reads `.worker.log`, inspects target code directly, applies the surgical fix, and commits.
+       - **Post-Mortem Allocation Retro**: Planner **MUST record why the allocation failed** in `docs/agents/granularity-profile.json` (module rating & notes) and `.worker.notes.md` (compiler traps / repo quirks discovered) to permanently enhance future task allocation efficiency!
    - *Minor ambiguities*: Advance with Best-Effort and leave a non-blocking `Notes:` entry in `progress.log` so 24h workflow is not unnecessarily interrupted.
 
 ---
@@ -128,12 +135,12 @@ To maximize token efficiency and prevent context exhaustion across the 24h cycle
    - Dedicated reports (`docs/reports/*.md`) MUST feature an **Executive Summary <= 30 lines** with bulleted facts, metrics, and line pointers. No discursive prose.
 2. **Primary Acceptance**:
    - Terminal A (Planner) reads only the top block of `progress.log` (`head -n 15 progress.log`) for rapid, low-token acceptance.
-3. **Planner On-Demand Inspection Right (Planner 按需深度抽查特權)**:
-   - If the concise summary is insufficient, ambiguous, or suspicious, Terminal A retains full sovereign right to perform surgical, targeted inspections:
+3. **Planner On-Demand Inspection Right (Anti-Rubber-Stamping / 防止胡亂驗收)**:
+   - Planner is NOT a rubber stamp. Whenever a task involves critical architectural seams, or whenever Worker reports `Attempts > 1` or `Confidence < 1.0`, Planner **MUST exercise its deep inspection right**:
      - `git log -n 1 --stat`
      - `git show --stat <commit-hash>`
-     - `git log --oneline -n 5`
-     - Reading targeted file ranges (e.g. `head -n 30 path/to/file` or specific line slices).
+     - Targeted file inspection (`view_file` on modified line ranges).
+     - Running verification tests directly to prevent simulated or hallucinated passes.
 4. **STRICTLY FORBIDDEN in Terminal A (Planner Guardrails)**:
    - ❌ **Busy-Loop Polling / Sleep Loops**: NEVER run `sleep` or repeatedly poll `progress.log` / `worker.status` in a tool loop waiting for Worker to finish. Once `tasks.txt` is written, Planner MUST immediately yield control and stop calling tools! Inspection is strictly event-driven (when Human asks or during next turn).
    - ❌ Bare `git log` (dumps unbounded commit history).

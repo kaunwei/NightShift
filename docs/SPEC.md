@@ -106,6 +106,19 @@ TASK-XXX | LEVEL: 1 | AFTER: <task_id> | TARGET: <file_paths> | ACTION: <concret
 - **Level 2 (Medium / Component Slice)**: Decomposes into distinct modules (e.g. data schema vs engine).
 - **Level 3 (Micro / Step)**: Precise function-level instructions used when worker requested guidance or previous attempts struggled.
 
+### 5.3 Granularity Escalation Ladder & Level 3 Sovereign Intervention
+1. **Escalation on Failure**: When a task blocks (`[BLOCKED]`):
+   - Level 1 Blocked ➔ Demote to Level 2 (split into component slices).
+   - Level 2 Blocked ➔ Demote to Level 3 (micro function-level instructions & exact tests).
+2. **Level 3 Failure Threshold (Planner Sovereign Intervention)**:
+   - When a task is **ALREADY at Level 3 (Micro)** and Worker still blocks/fails after 3 retries, this indicates deep architectural contradictions, environment quirks, or subtle bugs beyond the smaller model's scope.
+   - **Planner Steps In**: Planner reads `.worker.log`, inspects target code directly, applies the surgical fix, runs verification tests, and commits.
+3. **Post-Mortem Allocation Retro**:
+   - Planner **MUST record why the allocation failed** in:
+     - `docs/agents/granularity-profile.json` (subsystem score & notes)
+     - `.worker.notes.md` (compiler traps / repo quirks discovered)
+   - Permanently enhances future task allocation efficiency.
+
 ---
 
 ## 6. Unified Conventional Commit Standard
@@ -133,3 +146,17 @@ Attempts: <attempts_count> | Confidence: <confidence_score>"
 2. **Live Feedback Hotfix**:
    - If human spots an issue during early preview in `.preview/`, Planner inspects remaining tasks in `tasks.txt`, deduplicates redundant tasks, and injects `[HOTFIX]` tasks at line 1.
    - Worker picks up the hotfix immediately after finishing its current turn.
+
+---
+
+## 8. Two-Tier Anti-Rubber-Stamping Audit Protocol
+
+To ensure acceptance integrity without token bloat:
+1. **Tier 1 (Fast Screening)**: Read `head -n 15 progress.log` and `git log -n 1 --stat`. Low-token acceptance for routine tasks with 1 attempt and 1.0 confidence.
+2. **Tier 2 (Mandatory Deep Audit)**:
+   - Triggered whenever:
+     - The task touches a critical architectural seam.
+     - Worker reports `Attempts > 1`.
+     - Worker reports `Confidence < 1.0`.
+   - Action: Planner directly inspects git diffs, views modified line slices, or re-runs test suites locally to prevent simulated or hallucinated test passes.
+
