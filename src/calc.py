@@ -1,3 +1,6 @@
+import math
+
+
 class Calculator:
     def add(self, a: float, b: float) -> float:
         return a + b
@@ -26,6 +29,11 @@ class Calculator:
             raise ValueError("Cannot calculate percentage with zero total")
         return (value / total) * 100.0
 
+    def square_root(self, x: float) -> float:
+        if x < 0:
+            raise ValueError("Cannot calculate square root of negative number")
+        return float(math.sqrt(x))
+
 
 if __name__ == "__main__":
     calc = Calculator()
@@ -37,4 +45,5 @@ if __name__ == "__main__":
     print(f"  2 ^ 8    = {calc.power(2, 8)}")
     print(f"  10 % 3   = {calc.modulo(10, 3)}")
     print(f"  25 / 200 = {calc.percentage(25, 200)}%")
+    print(f"  sqrt(16) = {calc.square_root(16)}")
 

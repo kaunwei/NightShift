@@ -54,5 +54,15 @@ class TestCalculator(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.calc.percentage(10, 0)
 
+    def test_square_root(self):
+        self.assertEqual(self.calc.square_root(0), 0.0)
+        self.assertEqual(self.calc.square_root(4), 2.0)
+        self.assertEqual(self.calc.square_root(9), 3.0)
+        self.assertAlmostEqual(self.calc.square_root(2), 1.41421356, places=7)
+        with self.assertRaises(ValueError):
+            self.calc.square_root(-1)
+        with self.assertRaises(ValueError):
+            self.calc.square_root(-0.0001)
+
 if __name__ == '__main__':
     unittest.main()
