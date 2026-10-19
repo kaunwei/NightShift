@@ -234,11 +234,11 @@ Whenever executing commands in this workspace, the agent MUST obey the following
 
 - **Test-Driven Development (TDD)**: Follow Red-Green-Refactor cycle. Unit tests must pass 100%.
 - **Deep Modules**: Design deep modules with simple, narrow interfaces.
-- **Glossary Adherence**: Strictly adhere to terms in [GLOSSARY.md](file:///Volumes/Vault500G/workspace/auto_script/GLOSSARY.md).
-- **ADR Review**: Respect architectural records in [docs/adr/](file:///Volumes/Vault500G/workspace/auto_script/docs/adr).
+- **Glossary Adherence**: Strictly adhere to terms in [GLOSSARY.md](GLOSSARY.md).
+- **ADR Review**: Respect architectural records in [docs/adr/](docs/adr/).
 
 ---
 
 ## 11. Framework Portability & Adoption
 
-If you are an AI migrating this framework to another project, read the autonomous porting manual at [docs/PORTING_GUIDE.md](file:///Volumes/Vault500G/workspace/auto_script/docs/PORTING_GUIDE.md) and execute [.agents/skills/engineering/setup-unattended-workflow/SKILL.md](file:///Volumes/Vault500G/workspace/auto_script/.agents/skills/engineering/setup-unattended-workflow/SKILL.md).
+If you are an AI migrating this framework to another project, read the autonomous porting manual at [docs/PORTING_GUIDE.md](docs/PORTING_GUIDE.md) and execute [.agents/skills/engineering/setup-unattended-workflow/SKILL.md](.agents/skills/engineering/setup-unattended-workflow/SKILL.md).

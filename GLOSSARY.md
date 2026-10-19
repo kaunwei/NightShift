@@ -6,4 +6,4 @@ This file defines the canonical vocabulary for the project. When discussing or i
 
 | Term | Definition | Avoid |
 | :--- | :--------- | :---- |
-| **auto_script** | The core repository and automation system. | script_repo, scripts |
+| **NightShift** | The 24-hour unattended dual-terminal AI development framework. | auto_script, script_repo, scripts |

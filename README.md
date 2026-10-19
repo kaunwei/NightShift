@@ -1,4 +1,4 @@
-# 24-Hour Unattended AI Development Framework
+# NightShift: 24-Hour Unattended AI Development Framework
 
 A plug-and-play, dual-terminal decoupled AI development framework designed for 24-hour unattended autonomous code generation, verification, and linear integration.
 
@@ -118,4 +118,4 @@ rm PAUSE
 
 ## Porting to Other Projects
 
-To port this framework to another project, point your AI assistant to [docs/PORTING_GUIDE.md](file:///Volumes/Vault500G/workspace/auto_script/docs/PORTING_GUIDE.md). The AI will autonomously inspect your repository, adhere to non-destructive invariants, and set up the worker harness without breaking existing workflows.
+To port this framework to another project, point your AI assistant to [docs/PORTING_GUIDE.md](docs/PORTING_GUIDE.md). The AI will autonomously inspect your repository, adhere to non-destructive invariants, and set up the worker harness without breaking existing workflows.
