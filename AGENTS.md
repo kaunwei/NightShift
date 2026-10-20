@@ -125,6 +125,17 @@ TASK-XXX | LEVEL: 1 | AFTER: <task_id> | TARGET: <file_paths> | ACTION: <precise
 ```
 *(Note: `AFTER: <task_id>` is optional for expressing Task Graph DAG dependencies).*
 
+### Hierarchical Progressive Exploration Protocol (分層漸進式探勘決策協定):
+When addressing complex architectures or cross-cutting defects, Planner decomposes and decides **hierarchically from coarse to fine (由粗到細一階一階分配探勘)**:
+1. **Stage 1: Macro Topology Survey (`LEVEL: 1 [RESEARCH]` / `[DIAGNOSTIC]`)**:
+   - Worker explores project-wide event flow, lifecycle hooks, and pinpoints which decoupled subsystems are involved.
+2. **Stage 2: Meso Cross-Module Interface Trace (`LEVEL: 2 [DIAGNOSTIC]`)**:
+   - Worker examines the communication handoff between the interacting modules (e.g., View <-> ViewModel <-> Engine protocols, event subscriptions, state propagation).
+3. **Stage 3: Micro Function Deep-Dive (`LEVEL: 3 [DIAGNOSTIC]`)**:
+   - Worker isolates the exact internal function logic, timing drift, race condition, or math discrepancy.
+4. **Stage 4: Sound Architectural Decision & Code Allocation (`[CODE]`)**:
+   - Grounded in verified facts, Planner makes high-confidence architectural decisions and splits execution into atomic, single-seam implementation tickets.
+
 ---
 
 ## 4. Multi-Archetype Tasks & Honest Treaty (多型態任務與誠實工人公約)

@@ -142,6 +142,13 @@ TASK-XXX | LEVEL: 1 | AFTER: <task_id> | TARGET: <file_paths> | ACTION: <concret
      - `.worker.notes.md` (compiler traps / repo quirks discovered)
    - Permanently enhances future task allocation efficiency.
 
+### 5.4 Hierarchical Progressive Exploration Protocol
+For complex cross-module features and defects, Planner grooms and decides progressively from coarse to fine:
+1. **Stage 1 (Macro Survey)**: Issue `LEVEL: 1 [RESEARCH]` / `[DIAGNOSTIC]` to map affected subsystems and lifecycle pipelines.
+2. **Stage 2 (Meso Contract Trace)**: Issue `LEVEL: 2 [DIAGNOSTIC]` to examine inter-module communication protocols, event propagation, and contract breakages.
+3. **Stage 3 (Micro Deep-Dive)**: Issue `LEVEL: 3 [DIAGNOSTIC]` to isolate internal calculations, race conditions, or timing drift.
+4. **Stage 4 (Sound Architectural Decision)**: Armed with verified facts, Planner makes high-confidence decisions and allocates decoupled, single-seam `[CODE]` tickets.
+
 ---
 
 ## 6. Unified Conventional Commit Standard
