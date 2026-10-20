@@ -345,6 +345,69 @@ isolate_and_rollback_dirty_tree() {
   git -C "$WORK_DIR" clean -df 2>/dev/null || true
 }
 
+validate_post_flight() {
+  local task_id="$1"
+  local task_target="$2"
+  local task_constraints="$3"
+  local task_title="$4"
+
+  # 1. Check clean working tree (Ghost files & uncommitted tests check)
+  local dirty_files
+  dirty_files=$(git -C "$WORK_DIR" status --porcelain 2>/dev/null | grep -v "progress.log" || true)
+  if [ -n "$dirty_files" ]; then
+    echo "[WORKER_GUARD] ❌ Dirty tree detected after task! Uncommitted or untracked files left in working tree:"
+    echo "$dirty_files"
+    GUARD_ERROR="Dirty working tree after task completion (untracked or uncommitted tests/files)."
+    return 1
+  fi
+
+  # 2. Check target whitelist
+  if [ -n "$task_target" ]; then
+    # Check if multi-interface refactor or unrestricted is approved
+    if echo "$task_constraints $task_title" | grep -iqE "multi-interface|unrestricted|\[REFACTOR\]|\[DIAGNOSTIC\]|\[RESEARCH\]"; then
+      return 0
+    fi
+
+    local committed_files
+    committed_files=$(git -C "$WORK_DIR" diff-tree --no-commit-id --name-only -r HEAD 2>/dev/null || true)
+    if [ -n "$committed_files" ]; then
+      local target_tokens
+      target_tokens=$(echo "$task_target" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]')
+
+      while IFS= read -r f; do
+        [ -z "$f" ] && continue
+        case "$f" in
+          progress.log|tasks.txt|tasks.done|worker.status|.gitignore|.worker.notes.md|docs/reports/*)
+            continue
+            ;;
+        esac
+
+        local f_lower
+        f_lower=$(echo "$f" | tr '[:upper:]' '[:lower:]')
+        local matched=0
+
+        while IFS= read -r t; do
+          [ -z "$t" ] && continue
+          t_clean="${t%/}"
+          if [ "$f_lower" = "$t_clean" ] || [[ "$f_lower" == "$t_clean/"* ]]; then
+            matched=1
+            break
+          fi
+        done <<< "$target_tokens"
+
+        if [ $matched -eq 0 ]; then
+          echo "[WORKER_GUARD] ❌ Target Whitelist Violation! File '$f' is not declared in TARGET ($task_target)."
+          echo "[WORKER_GUARD] Undeclared cross-subsystem edits are forbidden. Declare target or emit [NEED_DECOMPOSITION]."
+          GUARD_ERROR="Target Whitelist Violation: Modified unannounced file '$f' outside declared scope."
+          return 2
+        fi
+      done <<< "$committed_files"
+    fi
+  fi
+
+  return 0
+}
+
 # ------------------------------------------------------------------------------
 # Startup Initialization
 # ------------------------------------------------------------------------------
@@ -447,6 +510,7 @@ while true; do
   TASK_LEVEL=$(echo "$RAW_TASK" | grep -o 'LEVEL:[[:space:]]*[0-9]' | awk '{print $2}' || echo "1")
   TASK_TARGET=$(echo "$RAW_TASK" | sed -n 's/.*TARGET:[[:space:]]*\([^|]*\).*/\1/p' | xargs || echo "")
   TASK_VERIFY=$(echo "$RAW_TASK" | sed -n 's/.*VERIFY:[[:space:]]*\([^|]*\).*/\1/p' | xargs || echo "")
+  TASK_CONSTRAINTS=$(echo "$RAW_TASK" | sed -n 's/.*CONSTRAINTS:[[:space:]]*\([^|]*\).*/\1/p' | xargs || echo "")
   START_TIME=$(date +%s)
   
   echo ""
@@ -468,7 +532,12 @@ $TASK_TITLE
 
 MANDATORY EXECUTION RULES:
 1. REAL-TIME STEP LOGGING: Before running any command or editing any file, print an explicit line (e.g. "[EXEC] Modifying <file>...", "[EXEC] Running command: <command>", "[EXEC] Running test: <command>") so the operator can see what you are doing in real time.
-2. TARGET ONLY: Modify only the necessary files specified in the task (${TASK_TARGET:-target files}).
+2. TARGET SCOPE & CONSTRAINTS:
+   - Modify ONLY declared files/directories (${TASK_TARGET:-target files}).
+   - Cohesive multi-object / multi-interface changes are allowed when declared in TARGET.
+   - Broad refactors are permitted if CONSTRAINTS mentions 'Multi-interface refactor approved' or archetype is [REFACTOR].
+   - STRICT PROHIBITION: Never modify unlisted files (e.g. dummy main.swift or configs) just to satisfy compiler errors! If unlisted dependencies are missing, STOP immediately and emit [NEED_DECOMPOSITION].
+   - All tests and modified files MUST be staged and committed cleanly. Working tree must be 100% clean after commit.
 3. NO SUDO: Under NO circumstances run sudo, apt, or global system commands.
 4. BUILD & VERIFY: Run the appropriate build and test commands (e.g. ${TASK_VERIFY:-build and test}).
 5. RETRY LIMIT: Max 3 repair attempts. If unable to pass after 3 fixes, stop immediately and record [BLOCKED].
@@ -602,15 +671,36 @@ BLOCK_EOF
     update_status "BLOCKED" "$TASK_TITLE (ERROR $EXIT_CODE)" "$DURATION" "$CURRENT_IDX" "$TOTAL_COUNT" "$((REMAINING_COUNT - 1))" "${PERCENT_START}%" "$BAR_START"
 
   else
-    # Success
-    if [ "$WORKER_ISOLATION" = "1" ] || [ "$WORKER_ISOLATION" = "true" ]; then
-      publish_preview_artifact "$TASK_ID" "$TASK_TITLE"
+    # Run Post-Flight Guard Validation
+    GUARD_ERROR=""
+    validate_post_flight "$TASK_ID" "$TASK_TARGET" "$TASK_CONSTRAINTS" "$TASK_TITLE"
+    GUARD_STATUS=$?
+    if [ $GUARD_STATUS -ne 0 ]; then
+      echo "[$(date '+%Y-%m-%d %H:%M:%S')] 🛑 [GUARD REJECTION] Post-flight validation failed: $GUARD_ERROR"
+      isolate_and_rollback_dirty_tree "$TASK_ID"
+      BLOCKED_SUMMARY=$(cat <<BLOCK_EOF
+================================================================================
+[BLOCKED] $TASK_ID: Guard Validation Failed
+Time: $(date '+%Y-%m-%d %H:%M:%S') | Status: GUARD_VIOLATION
+Failure Reason: $GUARD_ERROR
+Action Needed for Human: Declare target in TARGET, add 'CONSTRAINTS: Multi-interface refactor approved', or split task.
+================================================================================
+BLOCK_EOF
+)
+      prepend_progress_log "$BLOCKED_SUMMARY"
+      echo "[$(date '+%Y-%m-%d %H:%M:%S')] [FAILED] $TASK_TITLE [GUARD_VIOLATION]" >> "$TASKS_DONE_FILE"
+      update_status "BLOCKED" "$TASK_TITLE (GUARD VIOLATION)" "$DURATION" "$CURRENT_IDX" "$TOTAL_COUNT" "$((REMAINING_COUNT - 1))" "${PERCENT_START}%" "$BAR_START"
+    else
+      # Success
+      if [ "$WORKER_ISOLATION" = "1" ] || [ "$WORKER_ISOLATION" = "true" ]; then
+        publish_preview_artifact "$TASK_ID" "$TASK_TITLE"
+      fi
+      NEW_DONE_COUNT=$(( DONE_COUNT + 1 ))
+      FINAL_BAR=$(render_progress_bar "$NEW_DONE_COUNT" "$TOTAL_COUNT" 30)
+      echo "[$(date '+%Y-%m-%d %H:%M:%S')] [SUCCESS] Task completed in ${DURATION}s | $FINAL_BAR"
+      echo "[$(date '+%Y-%m-%d %H:%M:%S')] [DONE] $TASK_TITLE (Duration: ${DURATION}s)" >> "$TASKS_DONE_FILE"
+      update_status "IDLE" "" "0" "$NEW_DONE_COUNT" "$TOTAL_COUNT" "$((REMAINING_COUNT - 1))" "$(( (NEW_DONE_COUNT * 100) / TOTAL_COUNT ))%" "$FINAL_BAR"
     fi
-    NEW_DONE_COUNT=$(( DONE_COUNT + 1 ))
-    FINAL_BAR=$(render_progress_bar "$NEW_DONE_COUNT" "$TOTAL_COUNT" 30)
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [SUCCESS] Task completed in ${DURATION}s | $FINAL_BAR"
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [DONE] $TASK_TITLE (Duration: ${DURATION}s)" >> "$TASKS_DONE_FILE"
-    update_status "IDLE" "" "0" "$NEW_DONE_COUNT" "$TOTAL_COUNT" "$((REMAINING_COUNT - 1))" "$(( (NEW_DONE_COUNT * 100) / TOTAL_COUNT ))%" "$FINAL_BAR"
   fi
 
   rm -f "$CMD_OUTPUT_TMP"

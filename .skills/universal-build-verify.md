@@ -10,9 +10,12 @@ MANDATORY execution protocol for Background Worker (Terminal B) when processing 
 ## 1. Safety & Constraints (Zero-Tolerance)
 *   **NO Host/Global Edits**: Never run `sudo`, `apt`, `yum`, or host package managers.
 *   **Zero Warnings Gate**: Code must compile with 0 warnings (`-Wall -Wextra`) and pass linters cleanly.
-*   **Immutability**: Never alter public signatures if `CONSTRAINTS: Do not change public API` is set.
-*   **Single-Seam vs. Full-Spectrum**:
-    *   `[CODE]` tasks modify ONE architectural seam ONLY. Emit `[NEED_DECOMPOSITION]` for cross-subsystem edits.
+*   **Clean Tree Gate**: `git status --porcelain` must be 100% clean after commit. Never leave untracked tests or build residue.
+*   **Target Scope & Multi-Interface Exception**:
+    *   `[CODE]` tasks modify declared `TARGET` paths ONLY.
+    *   *Cohesive Seams*: Legitimate seams can cover multiple objects/interfaces (protocols, classes, tests) when declared in `TARGET:`.
+    *   *Deliberate Refactors*: Large-scale multi-interface refactors must be declared in `TARGET` or marked `CONSTRAINTS: Multi-interface refactor approved`.
+    *   *No Silent Compile-Fix Edits*: Never touch unlisted files (e.g. creating dummy `main.swift` or modifying configs) just to satisfy compilers. If an unlisted dependency is missing, STOP and emit `[NEED_DECOMPOSITION]`.
     *   `[DIAGNOSTIC] / [RESEARCH]` tasks have full authority to trace across all layers (UI -> OS).
 
 ## 2. Execution Archetypes

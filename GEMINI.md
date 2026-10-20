@@ -43,7 +43,12 @@ Strict operational guardrails for AI. Emphasize zero-context bloat and physical 
 ## 4. Honest Treaty & Escalation
 
 *   **Zero-Guessing**: Worker MUST provide verifiable evidence (test outputs/stack traces) for diagnostics. Vague reports are invalid.
-*   **Single-Seam vs. Full-Spectrum**: `[CODE]` modifies exactly ONE architectural seam (cross-subsystem tasks rejected with `[NEED_DECOMPOSITION]`). `[DIAGNOSTIC]` traces across all layers (UI -> OS).
+*   **Single-Seam vs. Full-Spectrum**:
+    *   *Seam Scope*: A seam is not 1 file; it covers all cohesive objects, interfaces, protocols, and tests supporting the slice.
+    *   *Multi-Interface & Refactor Exception*: Legitimate cross-interface tasks or broad refactors must be declared in `TARGET: <path1>, <path2>, <dir>/` (Declare to Authorize) or flagged in `CONSTRAINTS: Multi-interface refactor approved`. Undeclared cross-subsystem tasks are rejected with `[NEED_DECOMPOSITION]`.
+    *   *No Silent Compile-Fix Edits*: Never modify unlisted files (e.g. dummy main.swift or configs) just to satisfy compilers. Emit `[NEED_DECOMPOSITION]` instead.
+    *   *Diagnostic Scope*: `[DIAGNOSTIC]` traces across all layers (UI -> OS) without seam limits.
+*   **Clean Tree Gate**: Tasks must leave `git status --porcelain` 100% clean after commit. Ghost tests or uncommitted files trigger task failure.
 *   **Escalation Path**: Worker gets max 3 retries per task (with `git restore` cleanups). If blocked, demote granularity (L1->L2->L3).
 
 ## 5. Protocol, Context Protection & Git Guardrails
