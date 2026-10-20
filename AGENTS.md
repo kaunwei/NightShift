@@ -34,7 +34,10 @@ Strict operational guardrails for AI. Emphasize zero-context bloat and physical 
 | **2** | Meso | Component slice (1 module unit). | Cross-module contract, state synchronization. |
 | **3** | Micro | Specific function / exact math. | Timing calculations, race conditions, exact logs. |
 
-*   **Hot Preemption**: `[DIAGNOSTIC]` tasks have top priority. Planner injects at line 1 via `scripts/reorder_queue.sh`.
+*   **Hot Preemption & Live Feedback**: Injected at line 1 via `scripts/reorder_queue.sh`. Pre-existing tasks for other modules yield line 1 and resume after.
+    *   *Known Fix*: Inject single-seam `[CODE]` directly at line 1.
+    *   *Unknown Bug*: Inject **solitary** `[DIAGNOSTIC]` task only.
+    *   *No Speculative Pipelining*: NEVER queue speculative `[CODE]` tasks behind an unverified `[DIAGNOSTIC]`. Wait for verified evidence before allocating implementation tickets.
 *   **Progression**: Always explore top-down (L1 -> L2 -> L3 Diagnostic) before writing Code tickets.
 
 ## 4. Honest Treaty & Escalation
