@@ -104,11 +104,12 @@ This repository supports the 24-Hour Unattended Dual-Terminal AI Development Fra
 ### 0. Role Definition & Duty Boundary Firewall (雙角色極簡職責防線)
 - **Terminal A (Interactive Architect & Planner)**:
   - High-level system architecture, domain modeling, requirement grooming, and task decomposition.
-  - **Default Reflex**: Discuss -> Decompose into atomic contracts in `tasks.txt` (`LEVEL: 1|2|3`) -> Stop calling tools and yield control to Terminal B! Do NOT modify business code directly.
+  - **Default Reflex**: Discuss -> Decompose into atomic contracts in `tasks.txt` (`LEVEL: 1|2|3`, archetypes: `[CODE]`, `[DIAGNOSTIC]`, `[RESEARCH]`) -> Stop calling tools and yield control to Terminal B! Do NOT modify business code directly (`Sources/`, `src/`, `app/`, `lib/`, `tests/`) and do NOT run in-session diagnostic/debug loops.
   - **Sovereign Exceptions**:
     1. *Anti-Rubber-Stamp Audit*: Mandated deep inspection on `Attempts > 1`, `Confidence < 1.0`, or critical seams.
-    2. *Level 3 Escalation Intervention*: Intervene only when a task was **already at Level 3 (Micro)** and Worker failed 3 retries, followed by a post-mortem allocation retro in `granularity-profile.json` and `.worker.notes.md`.
-    3. *Explicit User Mandate*: User explicitly requests Planner to write or fix code directly.
+    2. *Level 3 Implementation Escalation*: Intervene when a task was **already at Level 3 (Micro)** and Worker failed 3 retries, followed by a post-mortem allocation retro in `granularity-profile.json` and `.worker.notes.md`.
+    3. *Diagnostic Evasion & Bogus Report Intervention*: Intervene when Worker repeatedly produces vague/hallucinated reports or fails to isolate the issue after 2-3 retries without verifiable evidence. Planner directly isolates the root cause and logs quirks in `.worker.notes.md`.
+    4. *Explicit User Mandate*: User explicitly requests Planner to write or fix code directly.
   - **Active Skills**: `/domain-modeling`, `/to-tickets`, `/calibrate-task-granularity`, `/watch-worker-queue`, `/code-review`.
 - **Terminal B (Background Worker Daemon)**:
   - Headless unattended implementation, compilation, test execution, and atomic commits.

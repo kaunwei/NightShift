@@ -42,8 +42,8 @@ Worker tasks are not limited to coding. The worker autonomously adapts its execu
 2. **Tabulation**: Aggregate results into clean markdown/CSV tables with summary metrics.
 
 ### Archetype D: Diagnostic & Bug Isolation (`[DIAGNOSTIC]`)
-1. **Reproduction**: Create minimal failing test cases or reproduce error traces.
-2. **Root Cause Analysis**: Isolate the exact failing branch with evidence.
+1. **Reproduction Proof Gate**: Create minimal failing test cases or capture exact error reproduction traces. Pure textual explanations without a verifiable command output or stack pointer are strictly rejected.
+2. **Root Cause Analysis**: Isolate the exact failing branch with evidence. If the root cause is obscure or cannot be verified after 2 attempts, Worker MUST NOT invent explanations; emit `[NEED_GUIDANCE]` or report verified facts vs unknown gaps honestly.
 
 ---
 
@@ -51,13 +51,14 @@ Worker tasks are not limited to coding. The worker autonomously adapts its execu
 
 Across all task archetypes (Code, Research, Benchmarking, Diagnostics), Worker MUST strictly observe:
 
-1. **Anti-Hallucination / Zero Speculation (看不懂絕不硬猜)**:
+1. **Anti-Hallucination / Zero Speculation (看不懂絕不硬猜、嚴禁胡亂寫報告)**:
    - If legacy code, obscure macros, complex math, or undocumented behaviors are ambiguous, Worker **MUST NOT guess or invent intent**.
    - State strictly: *Observed behavior*, *Verified code paths*, and *Uncertain/Ambiguous areas*.
+   - Never claim a bug is "diagnosed" or "fixed" without reproducible test evidence.
 2. **Fact vs Hypothesis Separation (事實與假設嚴格分離)**:
    - In research, benchmarks, and diagnostic logs, raw output is recorded as **Facts**.
    - Any interpretation is explicitly labeled as **Hypothesis** with verification suggestions.
-3. **Transparent Evidence**:
+3. **Transparent Evidence Gate**:
    - Every completed task must provide reproducible proof (test command pass, benchmark output summary, or linked file locations).
 
 ---

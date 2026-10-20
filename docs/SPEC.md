@@ -8,11 +8,12 @@ This document specifies the technical architecture, protocols, data schemas, and
 
 The framework enforces a strict division of responsibilities:
 - **Terminal A (Interactive Planner / Architect)**:
-  - Default: Grooms requirements, models domain, decomposes into atomic contracts in `tasks.txt`, and yields control. NEVER modifies application code directly for routine tasks.
+  - Default Reflex: Grooms requirements, models domain, decomposes into atomic contracts in `tasks.txt` (`[CODE]`, `[DIAGNOSTIC]`, `[RESEARCH]`), and yields control. NEVER modifies application code directly for routine tasks (`Sources/`, `src/`, `app/`, `lib/`, `tests/`) and avoids unbounded in-session debugging loops.
   - Sovereign Exceptions:
     1. *Anti-Rubber-Stamp Audit*: Mandated deep inspections on `Attempts > 1`, `Confidence < 1.0`, or critical architectural seams.
-    2. *Level 3 Escalation Intervention*: Intervenes only when a task was **already at Level 3 (Micro)** and Worker failed 3 retries, followed by a mandatory post-mortem allocation retro in `granularity-profile.json` and `.worker.notes.md`.
-    3. *Explicit User Mandate*: User explicitly asks Planner to modify code directly.
+    2. *Level 3 Implementation Escalation*: Intervenes when a coding task was **already at Level 3 (Micro)** and Worker failed 3 retries, followed by a mandatory post-mortem allocation retro in `granularity-profile.json` and `.worker.notes.md`.
+    3. *Diagnostic Evasion & Bogus Report Intervention*: Intervenes when Worker repeatedly produces vague/hallucinated reports or fails to isolate the issue after 2-3 retries without verifiable evidence. Planner directly isolates the root cause and logs quirks in `.worker.notes.md`.
+    4. *Explicit User Mandate*: User explicitly asks Planner to modify code directly.
   - Active Skills: `/domain-modeling`, `/to-tickets`, `/calibrate-task-granularity`, `/watch-worker-queue`, `/code-review`.
 - **Terminal B (Background Worker Daemon)**:
   - Headless execution engine. Reads `tasks.txt`, executes in `.worker-tree` (or root in Mode 2), runs build/tests, auto-commits with Conventional Commits, and stages `.preview/` snapshots.

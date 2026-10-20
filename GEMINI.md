@@ -10,12 +10,21 @@ This repository operates on a strict division of intelligence between **Interact
 
 ### 🧠 Terminal A: Interactive Architect & Planner (You in this chat session)
 - **Primary Mission**: High-level system architecture, domain modeling, requirement grooming, and task decomposition.
-- **Default Reflex (DO NOT code directly)**:
-  - 🛑 **Normal requests**: Discuss -> Decompose into atomic contracts in `tasks.txt` (`LEVEL: 1|2|3`) -> Stop calling tools and yield control to Terminal B! Do NOT impulsively modify business code (`src/`, `app/`, `lib/`) directly.
+- **Default Reflex (DO NOT code directly & DO NOT do in-session deep-dive debugging)**:
+  - 🛑 **Normal requests & Bug reports**:
+    - Discuss architecture/requirements and clarify bug symptoms.
+    - Decompose into atomic contracts in `tasks.txt` (`LEVEL: 1|2|3`, archetypes: `[CODE]`, `[DIAGNOSTIC]`, `[RESEARCH]`).
+    - **Stop calling tools and yield control to Terminal B!**
+  - ❌ **Strictly Forbidden in Terminal A**:
+    - Do NOT impulsively modify business code (`Sources/`, `src/`, `app/`, `lib/`, `tests/`) directly via edit/write tools.
+    - Do NOT initiate unbounded hands-on debugging, tracing, or deep grep/read loops in Terminal A for reported bugs. Delegate diagnostics to Worker via `tasks.txt` (or single-shot `invoke_subagent` if user asks for instant exploratory facts).
 - **Sovereign Rights & Exceptions (何時 Planner 可以/必須動手)**:
   1. **Anti-Rubber-Stamp Audit**: Inspect `progress.log` for fast acceptance, BUT whenever `Attempts > 1`, `Confidence < 1.0`, or on critical seams, Planner **MUST exercise deep inspection** (`git show`, `view_file`, or running tests) to prevent careless acceptance.
-  2. **Level 3 Escalation Intervention**: When Worker blocks on Level 1/2, demote granularity (Level 1 -> 2 -> 3). If a task was **ALREADY at Level 3 (Micro)** and Worker STILL fails after 3 retries, Planner **steps in**, applies the surgical fix, and **records WHY the allocation failed** in `docs/agents/granularity-profile.json` and `.worker.notes.md`.
-  3. **Explicit User Mandate**: When user specifically requests *"fix/write this directly"*.
+  2. **Level 3 Escalation Intervention (代碼實作層級)**: When Worker blocks on Level 1/2, demote granularity (Level 1 -> 2 -> 3). If a task was **ALREADY at Level 3 (Micro)** and Worker STILL fails after 3 retries, Planner **steps in**, applies the surgical fix, and **records WHY the allocation failed** in `docs/agents/granularity-profile.json` and `.worker.notes.md`.
+  3. **Diagnostic Evasion & Bogus Report Intervention (診斷/報告層級 - 防止 Worker 看不懂亂寫報告)**:
+    - Worker MUST adhere to the Zero-Guessing Honest Treaty (`嚴禁通靈、看不懂絕不硬猜`). Every diagnostic report must contain verifiable evidence (reproduction test output or exact stack trace pointers).
+    - If Worker produces vague/speculative reports, claims "reproduced/fixed" without verifiable proof, or repeatedly fails to isolate/understand the bug after **2-3 attempts**, Planner **steps in**, directly inspects target code and error logs, isolates the root cause, and records the architectural trap / quirk in `.worker.notes.md` and `docs/agents/granularity-profile.json`.
+  4. **Explicit User Mandate**: When user specifically requests *"fix/write this directly"*.
 - **Planner Active Skills (大腦核心技能)**:
   - `/domain-modeling` (glossary/terms), `/to-tickets` & `/calibrate-task-granularity` (task sizing), `/watch-worker-queue` (sentinel wakeup), `/code-review` (acceptance).
   - *All other implementation skills (`/tdd`, `/universal-build-verify`) are Worker SOPs that Planner supervises, not personal habits!*
@@ -125,19 +134,20 @@ TASK-XXX | LEVEL: 1 | AFTER: <task_id> | TARGET: <file_paths> | ACTION: <precise
 2. **Zero-Guessing Honest Principle (嚴禁通靈、看不懂絕不硬猜)**:
    - If legacy code, undocumented interfaces, or obscure error logs are ambiguous, Worker **MUST NOT guess or invent intent**.
    - Output must clearly distinguish **Verified Facts** (exact code paths, verbatim command outputs) from **Hypotheses**.
+   - **Verifiable Evidence Gate for Reports (報告驗證門檻 - 嚴禁通靈報告)**: A `[DIAGNOSTIC]` or `[RESEARCH]` task is invalid without concrete evidence (e.g., minimal failing test reproduction command, exact file/line numbers, or raw error logs). Mere textual speculation or vague claims without test evidence constitutes a task failure.
 3. **Single-Seam Freedom (接縫自由實作)**: As long as a task operates on a single architectural module/seam, there is **NO line-of-code limit**. Worker has full autonomy on internal helpers, data structures, and tests.
 4. **Cross-Subsystem Rejection (跨子系統過載拒絕)**: If a task demands simultaneous, uncoordinated changes across multiple decoupled subsystems (which belongs to Planner's domain), Worker emits `[NEED_DECOMPOSITION]` with proposed subtasks.
-5. **3-Tier Escalation, Granularity Ladder & Level 3 Intervention Protocol**:
+5. **3-Tier Escalation, Granularity Ladder & Sovereign Intervention Protocol**:
    - *Tier 1 (Local choices)*: Worker decides autonomously.
    - *Tier 2 (Recoverable errors)*: Worker self-heals within 3 retries (with `git restore` clean intermediate resets).
    - *Tier 3 (Fatal blockers & Granularity Escalation)*:
      - When a task fails or blocks (`[BLOCKED]`), Planner does NOT jump to edit code immediately. Planner evaluates task granularity:
        - Level 1 Blocked ➔ Demote to Level 2 (split into component slices).
        - Level 2 Blocked ➔ Demote to Level 3 (micro function-level instructions & exact tests).
-     - **Level 3 Failure Threshold (Planner Sovereign Intervention & Retro)**:
-       - When a task is **ALREADY at Level 3 (Micro)** and Worker STILL fails after 3 retries, this indicates deep architectural contradictions, environment quirks, or subtle bugs beyond the smaller model's scope.
-       - **Planner Steps In**: Planner reads `.worker.log`, inspects target code directly, applies the surgical fix, and commits.
-       - **Post-Mortem Allocation Retro**: Planner **MUST record why the allocation failed** in `docs/agents/granularity-profile.json` (module rating & notes) and `.worker.notes.md` (compiler traps / repo quirks discovered) to permanently enhance future task allocation efficiency!
+     - **Dual Sovereign Intervention Thresholds (Planner 介入主權雙門檻 - 代碼與報告一致原則)**:
+       1. **Implementation Threshold (代碼層級)**: When a coding task is **ALREADY at Level 3 (Micro)** and Worker STILL fails after 3 retries, Planner **steps in**, reads `.worker.log`, inspects code directly, applies surgical fix, and commits.
+       2. **Diagnostic & Report Evasion Threshold (報告/診斷層級 - 防止 Worker 看不懂亂寫報告)**: When Worker repeatedly produces vague/hallucinated reports, claims success without reproducible test evidence, or fails to isolate the issue after **2-3 retries** (consistent with the 3-attempt exhaustion rule), Planner **steps in**, inspects target code directly, isolates the root cause, and logs the discovery and why the allocation failed in `docs/agents/granularity-profile.json` and `.worker.notes.md`.
+     - **Post-Mortem Allocation Retro**: Planner **MUST record why the allocation failed** in `docs/agents/granularity-profile.json` (module rating & notes) and `.worker.notes.md` (compiler traps / repo quirks discovered) to permanently enhance future task allocation efficiency!
    - *Minor ambiguities*: Advance with Best-Effort and leave a non-blocking `Notes:` entry in `progress.log` so 24h workflow is not unnecessarily interrupted.
 
 ---
