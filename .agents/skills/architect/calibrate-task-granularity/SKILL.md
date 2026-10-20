@@ -3,38 +3,35 @@ name: calibrate-task-granularity
 description: "Calibrate and decide task granularity (Level 1 Coarse, Level 2 Medium, Level 3 Micro) dynamically based on the module's granularity profile and past worker performance."
 ---
 
-# Calibrate Task Granularity Skill (Architect AI)
+# Calibrate Task Granularity
 
-This skill teaches the Interactive Architect AI (Terminal A) how to dynamically determine the optimal task granularity when decomposing human requirements into `tasks.txt`.
+Dynamically determine task granularity when decomposing requirements into `tasks.txt`.
 
----
+## 1. Granularity Ladder
 
-## The Granularity Ladder (顆粒度階梯)
+| Level | Granularity | Scope | When to Use |
+| :---: | :--- | :--- | :--- |
+| **1** | **Coarse (Feature / Seam)** | Public interface, contract, and verification test. Worker creates internal helpers autonomously. | Default for verified modules with >= 4.5 star ratings in `granularity-profile.json`. |
+| **2** | **Medium (Component / Slice)** | Discrete module slices (e.g., model vs processor vs serializer). Specific files and signatures. | Modules with 3-4 stars, or after 1 retry on past tasks. |
+| **3** | **Micro (Function / Step)** | Surgical function logic, exact algorithms, minimal diffs. | Modules with 1-2 stars, previous blocks, or explicit user mandate. |
 
-| Level | Granularity | Scope & Description | When to Use |
-| :--- | :--- | :--- | :--- |
-| **Level 1** | **Coarse (Feature / Seam Level)** | Declares only public interface, behavior contract, and verification test. The worker autonomously creates internal structs, helper classes, and implementation files. | **Default choice for new tasks**, or when module performance score is 4-5 stars. |
-| **Level 2** | **Medium (Component / Slice Level)** | Breaks feature down into discrete component units (e.g. data model vs processor vs serializer). Specifies file targets and key class signatures. | When module performance is 3 stars, or worker had 1-2 retries on past attempts. |
-| **Level 3** | **Micro (Step / Function Level)** | Highly detailed function signatures, exact logic steps, and minimal diff scopes. | When module performance is 1-2 stars, worker failed/blocked previously, or human explicitly requests step-by-step guidance. |
+## 2. Multi-Interface & Refactor Authorization Gates
 
----
+Planner MUST NOT approve multi-interface targets or `[REFACTOR]` tasks without satisfying all 4 gates:
 
-## Dynamic Sizing Workflow
+1. **Inseparability**: Splitting would cause intermediate commit build/test failures.
+2. **Vertical Slice**: Cohesive protocol -> implementation -> test only; no horizontal sprawl across decoupled systems.
+3. **Profile Credit**: Target module has >= 4.5 stars in `docs/agents/granularity-profile.json`. Unrated or low-credit modules are restricted to Level 2/3 single units.
+4. **Topology Proof**: Broad refactors require a prior verified `[DIAGNOSTIC]` or `[RESEARCH]` topology report in `docs/reports/`.
 
-1. **Check Module Profile**: Read `docs/agents/granularity-profile.json` to check the current rating of the target subsystem.
-2. **Probing Ladder for Large / Unfamiliar Subsystems (探針式階梯)**:
-   - For unfamiliar legacy codebases, massive script collections, or exploratory tasks (`[RESEARCH]`, `[BENCHMARK]`, `[SURVEY]`):
-   - **Step 1 (Probe Task)**: Start with a **Level 2 Medium Probe** (e.g., analyze a specific entry point script or extract interfaces).
-   - **Step 2 (Evaluate)**: Inspect Worker's structured report. If fact-based and verified with 5 stars ➔ upgrade module rating in `granularity-profile.json`.
-   - **Step 3 (Scale to Coarse)**: Issue subsequent tasks at **Level 1 Coarse**, delegating batch exploration, benchmarking, or refactoring autonomously.
-3. **Determine Level**:
-   - If profile says `Level 1` or probed successfully ➔ **Generate Level 1 (Coarse)** task.
-   - If profile says `Level 2` ➔ **Generate Level 2 (Medium)** tasks.
-   - If profile says `Level 3` ➔ **Generate Level 3 (Micro)** tasks.
-4. **Format Task Line for `tasks.txt`**:
-   Always tag the level in the task line:
+## 3. Dynamic Sizing Protocol
+
+1. **Read Profile**: Inspect `docs/agents/granularity-profile.json` for current subsystem rating.
+2. **Unfamiliar Subsystem Probe**:
+   - Start with a **Level 2 Medium Probe** task.
+   - If verified in 1 attempt (5 stars), upgrade profile and scale subsequent tasks to **Level 1 Coarse**.
+3. **Format Task Line**:
    ```text
-   TASK-001 | LEVEL: 1 | TARGET: src/calc.py, tests/test_calc.py | ACTION: Implement Calculator engine with add, subtract, multiply, divide and zero division handling | VERIFY: pytest tests/test_calc.py | CONSTRAINTS: Pure Python stdlib, zero warnings
+   TASK-001 | LEVEL: 1 | TARGET: src/calc.py, tests/test_calc.py | ACTION: Implement Calculator engine with add, subtract, multiply, divide | VERIFY: pytest tests/test_calc.py | CONSTRAINTS: Pure Python stdlib, zero warnings
    ```
-5. **Post-Acceptance Adjustment**:
-   After reading the worker's audit trace in `progress.log`, invoke `/score-worker-performance` to raise or lower the level for subsequent tasks.
+4. **Post-Task Calibration**: Update `granularity-profile.json` using `/score-worker-performance` after reading `progress.log`.

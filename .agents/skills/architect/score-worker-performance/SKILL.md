@@ -3,31 +3,25 @@ name: score-worker-performance
 description: "Score worker execution performance (1 to 5 stars) from progress.log audit traces and update docs/agents/granularity-profile.json automatically."
 ---
 
-# Score Worker Performance Skill (Architect AI)
+# Score Worker Performance
 
-This skill teaches the Interactive Architect AI (Terminal A) how to read the worker's execution and retry audit trace in `progress.log`, score the performance (1 to 5 stars), and update the module's capability memory in `docs/agents/granularity-profile.json`.
+Audit worker execution trace from `progress.log` and update subsystem capability memory in `docs/agents/granularity-profile.json`.
 
----
+## Scoring Rubric
 
-## Scoring Rubric (評分標準)
-
-| Score | Rating | Criteria | Granularity Adjustment |
+| Score | Rating | Criteria | Granularity Action |
 | :---: | :--- | :--- | :--- |
-| ⭐⭐⭐⭐⭐ | **5 Stars (Mastery)** | Passed in 1 attempt (0 retries), 0 compiler/lint warnings, clean diff. | **Promote / Maintain Level 1 (Coarse)**. Worker is fully autonomous. |
-| ⭐⭐⭐⭐ | **4 Stars (Proficient)** | Passed in 2 attempts (1 retry fixed autonomously), all tests green. | **Maintain current Level (1 or 2)**. |
-| ⭐⭐⭐ | **3 Stars (Struggling)** | Passed on 3rd attempt (2 retries needed), or minor confusion. | **Demote to Level 2 (Medium)** for next tasks in this subsystem. |
-| ⭐⭐ | **2 Stars (Need Help)** | Worker raised `[NEED_GUIDANCE]` or `[NEED_DECOMPOSITION]` honestly. | **Demote to Level 2/3**, provide clarification via `/handle-worker-guidance`. |
-| ⭐ | **1 Star (Blocked/Timeout)** | Exceeded 3 retries, timed out, or crashed. | **Demote to Level 3 (Micro)**, re-architect and split task with user. |
-
----
+| ⭐⭐⭐⭐⭐ | **5 Stars** | Passed in 1 attempt (0 retries), clean diff, 0 warnings. | Maintain / Promote to Level 1. Worker is autonomous. |
+| ⭐⭐⭐⭐ | **4 Stars** | Passed in 2 attempts (1 self-healed retry), green tests. | Maintain current Level (1 or 2). |
+| ⭐⭐⭐ | **3 Stars** | Passed on 3rd attempt (2 retries needed). | Demote subsequent tasks in this module to Level 2. |
+| ⭐⭐ | **2 Stars** | Raised `[NEED_GUIDANCE]` or `[NEED_DECOMPOSITION]`. | Demote to Level 2/3, provide guidance. |
+| ⭐ | **1 Star** | Blocked after 3 retries, timed out, or crashed. | Demote to Level 3. Re-architect with user. |
 
 ## Process
 
-1. **Read `progress.log` Top Entry**:
-   Inspect `Attempts`, `Attempt Trace`, `Duration`, and `Confidence`.
-2. **Assign Score**: Match against the rubric above.
+1. **Read Top Entry in `progress.log`**: Inspect `Attempts`, `Attempt Trace`, `Duration`, and `Confidence`.
+2. **Match Score**: Apply rubric.
 3. **Update `docs/agents/granularity-profile.json`**:
-   Update the subsystem entry:
    ```json
    {
      "modules": {
@@ -36,9 +30,9 @@ This skill teaches the Interactive Architect AI (Terminal A) how to read the wor
          "last_score": 5,
          "success_rate": "100%",
          "total_tasks": 1,
-         "notes": "Handles arithmetic and error boundary tests cleanly in 1 attempt"
+         "notes": "Handles arithmetic and boundary tests cleanly in 1 attempt"
        }
      }
    }
    ```
-4. **Brief the User**: Report score and adjustment to the human in 1-2 lines.
+4. **Brief Human**: Report score and adjustment in 1 concise line.

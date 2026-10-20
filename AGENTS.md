@@ -46,6 +46,11 @@ Strict operational guardrails for AI. Emphasize zero-context bloat and physical 
 *   **Single-Seam vs. Full-Spectrum**:
     *   *Seam Scope*: A seam is not 1 file; it covers all cohesive objects, interfaces, protocols, and tests supporting the slice.
     *   *Multi-Interface & Refactor Exception*: Legitimate cross-interface tasks or broad refactors must be declared in `TARGET: <path1>, <path2>, <dir>/` (Declare to Authorize) or flagged in `CONSTRAINTS: Multi-interface refactor approved`. Undeclared cross-subsystem tasks are rejected with `[NEED_DECOMPOSITION]`.
+    *   *Planner Authorization Gates (Must satisfy all 4 to approve multi-interface/refactor)*:
+        1. *Inseparability*: Splitting into smaller tasks would cause intermediate commit build/test failure.
+        2. *Vertical Slice*: Only cohesive protocol -> impl -> test; zero horizontal sprawl across decoupled systems.
+        3. *Profile Credit*: Target module has >= 4.5 star rating in `docs/agents/granularity-profile.json` (unrated/low-credit modules restricted to single unit).
+        4. *Topology Proof*: Refactors require a prior verified `[DIAGNOSTIC]` or `[RESEARCH]` topology report in `docs/reports/`.
     *   *No Silent Compile-Fix Edits*: Never modify unlisted files (e.g. dummy main.swift or configs) just to satisfy compilers. Emit `[NEED_DECOMPOSITION]` instead.
     *   *Diagnostic Scope*: `[DIAGNOSTIC]` traces across all layers (UI -> OS) without seam limits.
 *   **Clean Tree Gate**: Tasks must leave `git status --porcelain` 100% clean after commit. Ghost tests or uncommitted files trigger task failure.
