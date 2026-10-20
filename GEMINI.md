@@ -4,36 +4,57 @@ Strict operational guardrails for AI agents operating in this repository.
 
 ---
 
-## 1. Role Boundaries (Dual-Terminal Firewall)
+## 1. Role Boundaries & Skill Partitioning (Dual-Terminal Firewall)
 
 Strict physical and logical separation between **Planner (Terminal A)** and **Background Worker (Terminal B)**.
 
 ### Terminal A: Interactive Planner (This Session)
-- **Mission**: System architecture, domain modeling, task decomposition, and verification audit.
-- **Rules**:
-  - **Never code directly**: Do NOT modify business code (`Sources/`, `src/`, `app/`, `lib/`, `tests/`) via edit/write tools during routine requests.
-  - **Never debug in-session**: Do NOT run exploratory debug loops or subagent sweeps in Terminal A.
-  - **Queue and yield**: Decompose requirements into atomic contracts in `tasks.txt`, then **immediately yield control**.
-  - **Diagnostic Preemption**: Inject `[DIAGNOSTIC]` and `[RESEARCH]` tasks at line 1 of `tasks.txt` (via `scripts/reorder_queue.sh`). Worker preempts existing tasks to gather facts without context bloat.
-  - **Zero-token Wakeup**: Deploy Queue Sentinel (`scripts/watch_worker.sh 3600`) to wait passively. **Never run sleep or polling loops in chat**.
+- **Mission**: System architecture, domain modeling, requirement grooming, and task decomposition.
+- **Active Skills**: `/domain-modeling`, `/calibrate-task-granularity`, `/watch-worker-queue`, `/code-review`.
+- **Forbidden Reflex**: Never execute implementation habits (`/tdd`, `/universal-build-verify`) as personal defaults in Terminal A. Never modify business code (`Sources/`, `src/`, `app/`, `lib/`, `tests/`) directly via edit/write tools during routine requests.
+- **Queue and Yield**: Decompose requirements into atomic contracts in `tasks.txt`, then **immediately yield control**.
+- **Zero-token Wakeup**: Deploy Queue Sentinel (`scripts/watch_worker.sh 3600`) to wait passively. **Never run sleep or polling loops in chat**.
 - **Sovereign Intervention Thresholds** (When Planner MUST intervene):
   1. **Level 3 Failure**: A task is already at Level 3 (Micro) and Worker fails all 3 retries.
   2. **Diagnostic Hallucination / Block**: Worker produces speculative/unverified reports or fails to isolate root cause after 2-3 attempts.
   3. **Explicit Mandate**: Human explicitly requests direct action.
-  - *Post-Intervention Rule*: Planner applies surgical fix, commits, and logs the root cause in `docs/agents/granularity-profile.json` and `.worker.notes.md`.
+  - *Post-Intervention Rule*: Planner applies surgical fix, commits, and logs root cause in `docs/agents/granularity-profile.json` and `.worker.notes.md`.
 
 ### Terminal B: Headless Background Worker (`worker.sh`)
 - **Mission**: Hands-on unattended implementation, test-driven execution, and atomic commits.
+- **Active Skills**: `/universal-build-verify`, `/record-attempt-trace`, `/manage-worker-notes`.
 - **Rules**:
-  - Operates exclusively in `.worker-tree` on branch `feature/worker-frontier` (when `WORKER_ISOLATION=1`).
   - Reads `tasks.txt` FIFO queue.
   - Executes `.skills/universal-build-verify.md`. Max 3 repair attempts per task before automated rollback (`git restore`) and `[BLOCKED]` status.
   - Follows Conventional Commit format. Prepends <=15 lines to `progress.log`. Stages verified snapshot to `.preview/`.
   - Never changes high-level architecture; never enters chat loops.
 
+### Engineering Foundations
+Both terminals adhere to Matt Pocock engineering skills: `/tdd`, `/codebase-design`, `/domain-modeling`, `/diagnosing-bugs`, `/git-guardrails`.
+
 ---
 
-## 2. Dynamic Granularity Ladder
+## 2. Physical Workspace Isolation (`WORKER_ISOLATION=1|0`)
+
+Configured via `WORKER_ISOLATION` in `.worker.env`:
+
+### Mode 1: Dual-Worktree Isolation (`WORKER_ISOLATION=1`, Default)
+- **Two Persistent Worktrees**: `main` (human workspace) and `.worker-tree` (unattended worker workspace on branch `feature/worker-frontier`).
+- **Zero Human Disruption**: IDE files never flicker; compiler/linker locks (`ETXTBSY`) are eliminated.
+- **Symlinked Caches**: `.worker-tree` symlinks heavy dependencies (`node_modules`, `.venv`) and mirrors configs (`.env`, `.worker.env`) to preserve warm build caches without disk bloat.
+- **Port Offset**: Background worker uses port offset (e.g., `PORT=3001`) and isolated test DBs to prevent conflict with live human previews.
+- **Auto-Merge on Completion**: When Sentinel signals all tasks done, Planner conducts audit and merges via `git merge --ff-only feature/worker-frontier`.
+
+### Mode 2: In-Place Execution (`WORKER_ISOLATION=0`)
+- Dedicated to projects bound to singleton hardware or fixed ports (e.g., port 22). Worker executes directly in project root.
+
+### Intermediate Compilation-Free Preview (`.preview/` Drop-box)
+- On every task PASS, Worker stages a verified snapshot and binary with `version.json` to `.preview/`.
+- Human can inspect and test intermediate milestones (e.g., task 3/10) via native preview commands *while background worker continues running subsequent tasks*.
+
+---
+
+## 3. Dynamic Granularity Ladder
 
 Size tasks in `tasks.txt` according to `docs/agents/granularity-profile.json`:
 
@@ -58,8 +79,14 @@ When addressing complex defects or unknown systems, proceed strictly top-down:
 
 ---
 
-## 3. Worker Execution Guardrails & Honest Treaty
+## 4. Hot Preemption Protocol & Honest Treaty
 
+### Hot Preemption for Diagnostics (`scripts/reorder_queue.sh`)
+- `[DIAGNOSTIC]` and `[RESEARCH]` tasks have top scheduling priority.
+- Planner injects diagnostic tasks at line 1 of `tasks.txt` (via `scripts/reorder_queue.sh`).
+- Worker immediately preempts existing queue, executes in `.worker-tree`, and returns verified findings. Zero token bloat in Terminal A.
+
+### Honest Treaty & Execution Guardrails
 - **Archetypes**: `[CODE]`, `[RESEARCH]`, `[BENCHMARK]`, `[DIAGNOSTIC]`.
 - **Zero-Guessing Treaty**: Never speculate on ambiguous code or obscure errors. Clearly separate **Verified Facts** (exact code lines, test outputs, stack traces) from **Hypotheses**.
 - **Evidence Gate**: A diagnostic report without a minimal failing test command, exact file/line pointers, or raw error logs is invalid and rejected.
@@ -72,7 +99,7 @@ When addressing complex defects or unknown systems, proceed strictly top-down:
 
 ---
 
-## 4. Verification & Context Protection
+## 5. Verification & Context Protection
 
 Keep context token-lean and prevent rubber-stamping:
 - **Concise Protocol**: Worker entries in `progress.log` <= 15 lines. Formal reports in `docs/reports/*.md` require an Executive Summary <= 30 lines.
@@ -88,7 +115,7 @@ Keep context token-lean and prevent rubber-stamping:
 
 ---
 
-## 5. Git Commit & Command Guardrails
+## 6. Git Commit & Command Guardrails
 
 ### Unified Commit Standard
 All commits by Planner and Worker MUST follow this template:
@@ -115,7 +142,7 @@ Attempts: <attempts_count> | Confidence: <confidence_score>"
 
 ---
 
-## 6. Language & Communication Policy
+## 7. Language & Communication Policy
 
 - **Human-AI Chat (Terminal A)**: Traditional Chinese or English as preferred by Human.
 - **Inter-AI Artifacts**: STRICTLY ENGLISH ONLY (`tasks.txt`, `progress.log`, `worker.status`, `tasks.done`, commit messages, code comments, and documentation).
