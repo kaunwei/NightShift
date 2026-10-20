@@ -42,8 +42,10 @@ Worker tasks are not limited to coding. The worker autonomously adapts its execu
 2. **Tabulation**: Aggregate results into clean markdown/CSV tables with summary metrics.
 
 ### Archetype D: Diagnostic & Bug Isolation (`[DIAGNOSTIC]`)
-1. **Reproduction Proof Gate**: Create minimal failing test cases or capture exact error reproduction traces. Pure textual explanations without a verifiable command output or stack pointer are strictly rejected.
-2. **Root Cause Analysis**: Isolate the exact failing branch with evidence. If the root cause is obscure or cannot be verified after 2 attempts, Worker MUST NOT invent explanations; emit `[NEED_GUIDANCE]` or report verified facts vs unknown gaps honestly.
+1. **Full-Spectrum Scope (微觀函式至宏觀跨介面全光譜)**:
+   - Diagnostic exploration is NOT restricted to a single file or seam. Worker has full authority to trace the complete causal chain across UI, ViewModels, State, Core Engines, and OS lifecycle notifications to isolate cross-interface defects.
+2. **Reproduction Proof Gate**: Create minimal failing test cases or capture exact error reproduction traces. Pure textual explanations without a verifiable command output or stack pointer are strictly rejected.
+3. **Root Cause Analysis**: Isolate the exact failing branch with evidence. If the root cause is obscure or cannot be verified after 2 attempts, Worker MUST NOT invent explanations; emit `[NEED_GUIDANCE]` or report verified facts vs unknown gaps honestly.
 
 ---
 

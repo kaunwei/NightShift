@@ -118,10 +118,16 @@ When all tasks in `tasks.txt` are completed:
 TASK-XXX | LEVEL: 1 | AFTER: <task_id> | TARGET: <file_paths> | ACTION: <concrete logic> | VERIFY: <test command> | CONSTRAINTS: <bounds>
 ```
 
-### 5.2 Dynamic Granularity Levels
-- **Level 1 (Coarse / Feature Seam)**: Defines public interface, verification test, and constraints. Worker has full autonomy on internal data structures and helpers.
-- **Level 2 (Medium / Component Slice)**: Decomposes into distinct modules (e.g. data schema vs engine).
-- **Level 3 (Micro / Step)**: Precise function-level instructions used when worker requested guidance or previous attempts struggled.
+### 5.2 Dynamic Granularity Levels (Implementation & Exploration)
+- **Level 1 (Coarse / Macro)**:
+  - *Implementation*: Defines public interface, verification test, and constraints. Worker has full autonomy on internal data structures and helpers.
+  - *Exploration (`[DIAGNOSTIC]` / `[RESEARCH]`)*: Full-spectrum project-wide cross-interface trace (e.g. UI ➔ ViewModel ➔ Engine ➔ OS lifecycle).
+- **Level 2 (Medium / Meso)**:
+  - *Implementation*: Decomposes into distinct modules (e.g. data schema vs engine).
+  - *Exploration*: Interface contract and state synchronization trace between interacting services.
+- **Level 3 (Micro / Step)**:
+  - *Implementation*: Precise function-level instructions used when worker requested guidance or previous attempts struggled.
+  - *Exploration*: Function deep dive into specific timing calculations, drift, race conditions, or localized error branches.
 
 ### 5.3 Granularity Escalation Ladder & Level 3 Sovereign Intervention
 1. **Escalation on Failure**: When a task blocks (`[BLOCKED]`):

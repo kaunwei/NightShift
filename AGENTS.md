@@ -113,11 +113,11 @@ To optimize token efficiency (50-70% savings) and ensure maximum instruction-fol
 
 Terminal A dynamically sizes tasks into `tasks.txt` based on `docs/agents/granularity-profile.json`:
 
-| Level | Granularity | Scope & Action |
-| :---: | :--- | :--- |
-| **Level 1** | **Coarse (Seam / Feature)** | Specify public interface & verification test. Worker autonomously creates internal helpers & implementation. |
-| **Level 2** | **Medium (Component Slice)** | Break down into discrete module units (e.g. data model vs processor). |
-| **Level 3** | **Micro (Step / Function)** | Precise function-level instructions. Used only when worker requested guidance or previous attempt struggled. |
+| Level | Granularity | Implementation Scope (`[CODE]`) | Diagnostic & Exploration Scope (`[DIAGNOSTIC]` / `[RESEARCH]`) |
+| :---: | :--- | :--- | :--- |
+| **Level 1** | **Coarse / Macro** | Feature seam: Specify public interface & test contract; Worker creates internal helpers. | **Project-Wide & Cross-Interface**: Trace end-to-end event loops, lifecycle hooks (sleep/wake), and cross-module pipelines. |
+| **Level 2** | **Medium / Meso** | Component slice: Break down into discrete module units (e.g. data model vs processor). | **Interface Boundary**: Trace contract compliance, parameter handoffs, and state synchronization between interacting layers. |
+| **Level 3** | **Micro** | Precise function: Surgical instructions for specific functions or algorithms. | **Function Deep Dive**: Inspect specific timing calculations, drift, race conditions, or localized error branches. |
 
 ### Task Format (Tracer-Bullet Schema):
 ```text
@@ -138,9 +138,16 @@ TASK-XXX | LEVEL: 1 | AFTER: <task_id> | TARGET: <file_paths> | ACTION: <precise
    - If legacy code, undocumented interfaces, or obscure error logs are ambiguous, Worker **MUST NOT guess or invent intent**.
    - Output must clearly distinguish **Verified Facts** (exact code paths, verbatim command outputs) from **Hypotheses**.
    - **Verifiable Evidence Gate for Reports (報告驗證門檻 - 嚴禁通靈報告)**: A `[DIAGNOSTIC]` or `[RESEARCH]` task is invalid without concrete evidence (e.g., minimal failing test reproduction command, exact file/line numbers, or raw error logs). Mere textual speculation or vague claims without test evidence constitutes a task failure.
-3. **Single-Seam Freedom (接縫自由實作)**: As long as a task operates on a single architectural module/seam, there is **NO line-of-code limit**. Worker has full autonomy on internal helpers, data structures, and tests.
-4. **Cross-Subsystem Rejection (跨子系統過載拒絕)**: If a task demands simultaneous, uncoordinated changes across multiple decoupled subsystems (which belongs to Planner's domain), Worker emits `[NEED_DECOMPOSITION]` with proposed subtasks.
-5. **3-Tier Escalation, Granularity Ladder & Sovereign Intervention Protocol**:
+3. **Full-Spectrum Exploration Scope for Diagnostics (探勘全光譜：微觀函式至宏觀全專案跨介面)**:
+   - **Why Necessary**: Real-world bugs, performance leaks, and new capabilities often cut across interfaces (e.g. UI View ➔ ViewModel ➔ State ➔ AudioEngine ➔ OS Lifecycle). If diagnostic scope is artificially constrained to a single file, cross-interface defects can never be isolated or fixed!
+   - **Exemption from Single-Seam Constraint**: Unlike `[CODE]` tasks, `[DIAGNOSTIC]` and `[RESEARCH]` tasks are **exempt from single-seam restrictions** and possess full-spectrum exploration authority:
+     - **Macro (Project-Wide Flow)**: Trace end-to-end data pipelines, asynchronous event loops, system lifecycle notifications (e.g. sleep/wake), and cross-subsystem protocol boundaries.
+     - **Meso (Interface Contract / Seam)**: Verify parameter passing, type marshaling, and state synchronization between interacting components.
+     - **Micro (Function / Logic Branch)**: Deep dive into timer calculations, race conditions, memory leaks, and specific arithmetic branches.
+   - **Outcome**: The diagnostic report maps the entire cross-interface causal chain. Planner then uses this verified map to decompose subsequent `[CODE]` tasks into atomic, single-seam implementation tickets.
+4. **Single-Seam Freedom for Implementation (代碼實作接縫自由)**: For `[CODE]` tasks, as long as the modification operates on a single architectural module/seam, there is **NO line-of-code limit**. Worker has full autonomy on internal helpers, data structures, and tests.
+5. **Cross-Subsystem Rejection for Code Modifications (代碼實作之跨子系統拒絕)**: If a `[CODE]` task demands simultaneous, uncoordinated implementation changes across multiple decoupled subsystems, Worker emits `[NEED_DECOMPOSITION]` with proposed subtasks. *(Note: This restriction applies to code modification only; diagnostic exploration has full cross-interface permission).*
+6. **3-Tier Escalation, Granularity Ladder & Sovereign Intervention Protocol**:
    - *Tier 1 (Local choices)*: Worker decides autonomously.
    - *Tier 2 (Recoverable errors)*: Worker self-heals within 3 retries (with `git restore` clean intermediate resets).
    - *Tier 3 (Fatal blockers & Granularity Escalation)*:
