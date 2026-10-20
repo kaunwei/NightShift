@@ -28,9 +28,10 @@ The framework physically separates interactive architectural reasoning from unat
 ┌────────────────────────────────────────────────────────────────────────┐
 │               Terminal A: Interactive Architect (In-Session)           │
 │  • Discuss architecture & requirements with user in Chinese/English.   │
-│  • Offload 1: Delegate heavy exploration to In-Session Subagents.      │
-│  • Decompose goals into single-line atomic English contracts.          │
+│  • Zero in-session exploration: All fact-finding offloaded to Worker.  │
+│  • Decompose goals/bugs into single-line atomic English contracts.     │
 │  • Writes tasks to tasks.txt and yields control immediately.           │
+│  • Sentinel Subagent deployed for zero-token batch wakeup.             │
 │  • Guides user with project-native preview commands for .preview/.     │
 │  • Automatically merges feature/worker-frontier upon batch completion. │
 └───────────────────────────────────┬────────────────────────────────────┘

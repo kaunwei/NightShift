@@ -118,8 +118,8 @@ This repository supports the 24-Hour Unattended Dual-Terminal AI Development Fra
 ### 1. Dual-Terminal Architecture & Dual-Track Offload
 - **Terminal A (Interactive Architect)**: Discuss requirements with human, groom specs into atomic tracer-bullet tasks, write to `tasks.txt`, and inspect `progress.log` for rapid acceptance.
 - **Terminal B (Background Worker)**: Runs `./worker.sh`. Stateless process per task, executes build, test, and auto-commits.
-- **Track 1 Offload**: Exploratory code-reading is delegated to in-session Subagents (`invoke_subagent`).
-- **Track 2 Offload**: Batch unattended execution is delegated to Terminal B.
+- **Zero In-Session Exploration**: In-session subagent exploration is prohibited. All codebase fact-finding, bug reproduction, and diagnostics are offloaded to Terminal B Worker via `[DIAGNOSTIC]` / `[RESEARCH]` tasks in `tasks.txt`.
+- **Sentinel Waiter Subagent**: Subagents in Terminal A are restricted to non-blocking queue monitoring (`scripts/watch_worker.sh`).
 
 ### 2. Dual-Worktree Isolation vs In-Place Execution Modes
 - **Mode 1: Dual-Worktree Isolation (`WORKER_ISOLATION=1`, Default)**:
