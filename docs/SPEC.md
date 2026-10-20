@@ -28,7 +28,7 @@ The framework physically separates interactive architectural reasoning from unat
 ┌────────────────────────────────────────────────────────────────────────┐
 │               Terminal A: Interactive Architect (In-Session)           │
 │  • Discuss architecture & requirements with user in Chinese/English.   │
-│  • Zero in-session exploration: All fact-finding offloaded to Worker.  │
+│  • Hot Preemption: Offload diagnostics to Worker with line 1 priority. │
 │  • Decompose goals/bugs into single-line atomic English contracts.     │
 │  • Writes tasks to tasks.txt and yields control immediately.           │
 │  • Sentinel Subagent deployed for zero-token batch wakeup.             │

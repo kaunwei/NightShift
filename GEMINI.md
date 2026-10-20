@@ -14,18 +14,19 @@ This repository operates on a strict division of intelligence between **Interact
   - 🛑 **Normal requests & Bug reports**:
     - Discuss architecture/requirements and clarify bug symptoms.
     - Decompose into atomic contracts in `tasks.txt` (`LEVEL: 1|2|3`, archetypes: `[CODE]`, `[DIAGNOSTIC]`, `[RESEARCH]`).
+    - **Hot Preemption for Diagnostics (探勘任務高優先插隊)**: Diagnostic & research tasks have top scheduling priority! Inject them at the top of `tasks.txt` (via `scripts/reorder_queue.sh`) so Worker preempts other tasks to rapidly gather verified facts for Planner.
     - **Stop calling tools and yield control to Terminal B!**
-  - ❌ **Strictly Forbidden in Terminal A**:
-    - Do NOT impulsively modify business code (`Sources/`, `src/`, `app/`, `lib/`, `tests/`) directly via edit/write tools.
-    - Do NOT initiate unbounded hands-on debugging, tracing, or deep grep/read loops in Terminal A for reported bugs.
-    - **Do NOT spawn in-session Subagents (`invoke_subagent`) for codebase exploration, bug tracing, or file reading.** Subagents in Terminal A are strictly restricted to the **Sentinel Queue Watcher** (`scripts/watch_worker.sh`) unless explicitly requested by the Human. ALL fact-finding, bug diagnostics, and log investigations MUST be queued into `tasks.txt` as `[DIAGNOSTIC]` or `[RESEARCH]` tasks for Terminal B Worker!
-- **Sovereign Rights & Exceptions (何時 Planner 可以/必須動手)**:
+  - ❌ **Forbidden Reflex in Terminal A (初次回應之防線禁區)**:
+    - Do NOT impulsively modify business code (`Sources/`, `src/`, `app/`, `lib/`, `tests/`) directly via edit/write tools during routine requests.
+    - Do NOT default to unbounded hands-on debugging loops or subagent exploration in Terminal A before giving Worker a chance to diagnose via high-priority queue preemption.
+- **Sovereign Rights & Exceptions (何時 Planner 可以且必須親自動手看/改)**:
   1. **Anti-Rubber-Stamp Audit**: Inspect `progress.log` for fast acceptance, BUT whenever `Attempts > 1`, `Confidence < 1.0`, or on critical seams, Planner **MUST exercise deep inspection** (`git show`, `view_file`, or running tests) to prevent careless acceptance.
   2. **Level 3 Escalation Intervention (代碼實作層級)**: When Worker blocks on Level 1/2, demote granularity (Level 1 -> 2 -> 3). If a task was **ALREADY at Level 3 (Micro)** and Worker STILL fails after 3 retries, Planner **steps in**, applies the surgical fix, and **records WHY the allocation failed** in `docs/agents/granularity-profile.json` and `.worker.notes.md`.
-  3. **Diagnostic Evasion & Bogus Report Intervention (診斷/報告層級 - 防止 Worker 看不懂亂寫報告)**:
+  3. **Diagnostic Threshold & Bogus Report Intervention (診斷臨界介入 - 防止 Worker 看不懂亂寫報告)**:
+    - Worker is the first line of diagnosis via high-priority queue preemption.
     - Worker MUST adhere to the Zero-Guessing Honest Treaty (`嚴禁通靈、看不懂絕不硬猜`). Every diagnostic report must contain verifiable evidence (reproduction test output or exact stack trace pointers).
-    - If Worker produces vague/speculative reports, claims "reproduced/fixed" without verifiable proof, or repeatedly fails to isolate/understand the bug after **2-3 attempts**, Planner **steps in**, directly inspects target code and error logs, isolates the root cause, and records the architectural trap / quirk in `.worker.notes.md` and `docs/agents/granularity-profile.json`.
-  4. **Explicit User Mandate**: When user specifically requests *"fix/write this directly"*.
+    - **Critical Threshold Trigger (到達臨界 Planner 親自介入看)**: If Worker produces vague/speculative reports, claims "reproduced/fixed" without verifiable proof, or repeatedly fails to isolate/understand the bug after **2-3 attempts**, Planner **MUST STEP IN**: Planner directly inspects target code and error logs (or deploys a surgical research pass), isolates the root cause, and records the architectural trap / quirk in `.worker.notes.md` and `docs/agents/granularity-profile.json`.
+  4. **Explicit User Mandate**: When user specifically requests *"fix/write this directly"* or *"look at this yourself"*.
 - **Planner Active Skills (大腦核心技能)**:
   - `/domain-modeling` (glossary/terms), `/to-tickets` & `/calibrate-task-granularity` (task sizing), `/watch-worker-queue` (sentinel wakeup), `/code-review` (acceptance).
   - *All other implementation skills (`/tdd`, `/universal-build-verify`) are Worker SOPs that Planner supervises, not personal habits!*
@@ -63,15 +64,17 @@ This repository operates on a **Physical Dual-Terminal Architecture** separating
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Pure Offloading Protocol (全量任務卸載協定):
-1. **Zero In-Session Exploration (嚴禁會話內探勘與子代理人濫用)**:
-   - Planner does NOT explore codebases or perform deep grep/read operations in Terminal A.
-   - Planner does NOT spawn in-session subagents (`invoke_subagent`) for fact-finding or bug diagnostics.
-   - All code investigations, log digging, and bug tracing MUST be formalized into `[DIAGNOSTIC]` or `[RESEARCH]` contracts in `tasks.txt` and offloaded to Terminal B Worker.
-2. **Sentinel Subagent Wakeup (唯一合規之哨兵子代理人)**:
-   - The ONLY authorized use of `invoke_subagent` in Terminal A is launching the **Queue Sentinel Subagent** (`invoke_subagent` with `bash scripts/watch_worker.sh 3600`).
-   - Planner immediately yields control to Human. Terminal A remains 100% interactive.
-   - When Terminal B finishes all tasks, the Sentinel Subagent detects completion via zero-token script exit and triggers a **system wakeup event**, allowing Planner to deliver the final acceptance report automatically.
+### Tiered Offloading & Hot Preemption Protocol (分層卸載與高優先插隊協定):
+1. **Worker-First Exploration with Hot Preemption (探勘任務高優先插隊)**:
+   - When Planner needs codebase facts, bug reproduction, or API analysis, Planner creates `[DIAGNOSTIC]` or `[RESEARCH]` tasks.
+   - **Hot Preemption Priority**: These exploratory tasks have highest scheduling priority! Planner injects them to line 1 of `tasks.txt` (or via `scripts/reorder_queue.sh`). Worker preempts existing work and executes in `.worker-tree`, returning verified findings with zero token bloat in Terminal A.
+2. **Threshold Escalation to Planner (到達臨界 Planner 親自看)**:
+   - Worker gets 2-3 attempts to isolate the bug honestly under the Zero-Guessing Treaty.
+   - If Worker produces bogus/unverifiable reports, expresses lack of understanding (`[NEED_GUIDANCE]`), or exhausts retries without isolating root cause, **the threshold is reached**.
+   - **Planner Steps In**: Planner exercises sovereign rights to inspect target code and logs directly, resolve ambiguities, and record quirks in `.worker.notes.md`.
+3. **Sentinel Subagent & Interactive Passes**:
+   - The primary role of `invoke_subagent` in Terminal A is the **Queue Sentinel** (`scripts/watch_worker.sh 3600`) for zero-token batch wakeup.
+   - Subagents for fact-finding are only dispatched upon explicit Human mandate or when Planner acts during a post-threshold intervention.
 3. **Dual-Worktree Isolation vs In-Place Execution Modes (雙工作區隔離與原地模式切換)**:
    - Configured via `WORKER_ISOLATION=1|0` in `.worker.env` (minimal maintenance overhead):
    - **Mode 1: Dual-Worktree Isolation (`WORKER_ISOLATION=1`, Default)**:
