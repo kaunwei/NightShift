@@ -42,6 +42,10 @@ while true; do
   fi
 
   # Check for terminal/blocking states
+  if [ "$STATE" = "SCOPE_BLOCKED" ]; then
+    echo "[SENTINEL_SCOPE_BLOCKED] Worker encountered unannounced downstream scope after ${ELAPSED}s. (No-fault escalation)."
+    exit 3
+  fi
   if [ "$STATE" = "BLOCKED" ] || [ "$STATE" = "AWAITING_GUIDANCE" ]; then
     echo "[SENTINEL_BLOCKED] Worker entered state: $STATE after ${ELAPSED}s."
     exit 1

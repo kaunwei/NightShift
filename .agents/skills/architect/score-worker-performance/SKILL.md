@@ -17,6 +17,9 @@ Audit worker execution trace from `progress.log` and update subsystem capability
 | ⭐⭐ | **2 Stars** | Raised `[NEED_GUIDANCE]` or `[NEED_DECOMPOSITION]`. | Demote to Level 2/3, provide guidance. |
 | ⭐ | **1 Star** | Blocked after 3 retries, timed out, crashed, or caught by anti-cheating guard (tampering with tests, invalid repro false red-light, or line probe mismatch). | Demote to Level 3. Re-architect with user. |
 
+> [!NOTE]
+> **No-Fault Exemption (`[SCOPE_BLOCKED]`)**: When Worker halts honestly upon discovering compiler errors in downstream files outside declared `TARGET:`, this is boundary compliance, NOT a task failure. Do NOT deduct rating stars in `granularity-profile.json` (maintain current score and escalate to Planner to expand `TARGET:` or decompose into Expand-Migrate-Contract).
+
 ## Process
 
 1. **Read Top Entry in `progress.log`**: Inspect `Attempts`, `Attempt Trace`, `Duration`, and `Confidence`.

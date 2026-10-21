@@ -15,13 +15,18 @@ MANDATORY execution protocol for Background Worker (Terminal B) when processing 
     *   `[CODE]` tasks modify declared `TARGET` paths ONLY.
     *   *Cohesive Seams*: Legitimate seams can cover multiple objects/interfaces (protocols, classes, tests) when declared in `TARGET:`.
     *   *Deliberate Refactors*: Large-scale multi-interface refactors must be declared in `TARGET` or marked `CONSTRAINTS: Multi-interface refactor approved`.
-    *   *No Silent Compile-Fix Edits*: Never touch unlisted files (e.g. creating dummy `main.swift` or modifying configs) just to satisfy compilers. If an unlisted dependency is missing, STOP and emit `[NEED_DECOMPOSITION]`.
+    *   *No Silent Compile-Fix Edits*: Never touch unlisted files (e.g. creating dummy `main.swift` or modifying configs) just to satisfy compilers. If an unlisted dependency is missing, STOP and emit `[SCOPE_BLOCKED]` or `[NEED_DECOMPOSITION]`.
     *   `[DIAGNOSTIC] / [RESEARCH]` tasks have full authority to trace across all layers (UI -> OS).
-*   **Test Immutability Gate**: During `[CODE]` bugfix tasks, modifying or weakening assertions in existing repro tests is strictly forbidden (Cheating). Worker can only touch product files declared in `TARGET:`. Test files cannot be altered unless explicitly declared in `TARGET:`.
+*   **Test Immutability & Refactor Gates**:
+    *   `[CODE: FIX]`: Test files are strictly read-only. Worker can only touch product files declared in `TARGET:`.
+    *   `[CODE: REFACTOR]`: `Tests/` and `Mocks/` can be declared in `TARGET:`. **Assertion Non-Decrease Gate**: Worker may update method call signatures, but total assertion count must NEVER decrease (`count(assert) >= old_count`).
+*   **Blast Radius Gate**: Line deletions limited dynamically by Level: Level 3 (Micro) <= 40 lines, Level 2 (Standard) <= 150 lines, Level 1 (Macro) unlimited (TARGET-bounded).
 
 ## 2. Execution Archetypes
-*   **[CODE] / [REFACTOR]**: Follow Red-Green-Refactor TDD. Implement -> Unit Test -> GUI Smoke Check (if applicable).
+*   **[CODE: FIX] / [CODE: REFACTOR]**: Follow Red-Green-Refactor TDD. Refactors must satisfy Assertion Non-Decrease and structural verification (`VERIFY:`).
+*   **[CODE: EXPAND] / [CODE: MIGRATE] / [CODE: CONTRACT]**: Phased refactoring progression. Each step must leave build and tests 100% PASS.
 *   **[RESEARCH] / [BENCHMARK]**: Gather facts/metrics -> Format into Markdown/CSV -> Output to `.reports/<issue-slug>/` (or `docs/research/` if permanent).
+    *   *Compiler Probe Allowed*: In addition to `grep`, Worker may temporarily modify interface signatures and execute `build` to capture 100% of affected call-sites from compiler diagnostics into `SUMMARY.md`. Worker MUST immediately run `git restore .` to return working tree to 100% clean.
 *   **[DIAGNOSTIC]**: Isolate root cause with minimal failing tests or exact error traces. Output to `.reports/<issue-slug>/<phase>.md` and update `SUMMARY.md`. **Reject pure textual speculation.**
     *   *Valid Red-Light Rule*: Repro tests MUST compile cleanly (`Build PASS` / 0 syntax errors) and fail strictly on assertion (`Test FAIL`). Compilation failures or missing symbols are Invalid Repros.
     *   *Production Code Lock*: Strictly forbidden from modifying production code (`Sources/`, `src/`, etc.) during diagnostics. Only tests and `.reports/` may be touched.
@@ -37,6 +42,7 @@ MANDATORY execution protocol for Background Worker (Terminal B) when processing 
     2. If failed, `git restore <file>` to reset baseline -> Apply alternative fix.
     3. Final attempt.
 *   **Immediate Stop**: If Attempt 3 fails, STOP immediately. Emit `[BLOCKED]` in `progress.log` and exit.
+*   **Scope Blocked Escape Hatch**: If compiler errors point to downstream files outside declared `TARGET:`, DO NOT touch them! Stop immediately and emit `STATUS: SCOPE_BLOCKED (Need Target: <File>#L<Line>)`. This is a no-fault compliance exit without credit loss.
 *   **Best-Effort Notes**: For minor non-blocking ambiguities, make a standard choice, commit, and append `Notes:` in `progress.log`.
 
 ## 5. Protocol & Evidence Logging (Token-Lean)

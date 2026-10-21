@@ -47,10 +47,14 @@ All skills reside in `.agents/skills/` (and `.skills/`). Reference by exact dire
 
 | Level | Granularity | `[CODE]` Scope (Strict 1 Seam) | `[DIAGNOSTIC]`/`[RESEARCH]` Scope (Full-Spectrum) |
 | :---: | :--- | :--- | :--- |
-| **1** | Macro | Feature public interface & tests. | End-to-end event loops, subsystem topology. |
-| **2** | Meso | Component slice (1 module unit). | Cross-module contract, state synchronization. |
-| **3** | Micro | Specific function / exact math. | Timing calculations, race conditions, exact logs. |
+| **1** | Macro | Feature public interface & tests. Deletion unlimited. | End-to-end event loops, subsystem topology. |
+| **2** | Meso | Component slice (1 module unit). Deletion <= 150 lines. | Cross-module contract, state synchronization. |
+| **3** | Micro | Specific function / exact math. Deletion <= 40 lines. | Timing calculations, race conditions, exact logs. |
 
+*   **Task Archetypes & Refactoring**:
+    *   `[CODE: FIX]`: General bugfix. `Tests/` immutable. Modifies product code in `TARGET:` only.
+    *   `[CODE: REFACTOR]`: Interface refactor. `Tests/` and `Mocks/` permitted in `TARGET:`. Enforces **Assertion Non-Decrease Gate** and structural closure in `VERIFY:` (e.g. `<test_cmd> && ! grep -rn "<Deprecated_Symbol>" Sources/`).
+    *   `[CODE: EXPAND]` / `[CODE: MIGRATE]` / `[CODE: CONTRACT]`: Phased large refactoring progression.
 *   **Hot Preemption & Live Feedback**: Injected at line 1 via `scripts/reorder_queue.sh`. Pre-existing tasks for other modules yield line 1 and resume after.
     *   *Known Fix*: Inject single-seam `[CODE]` directly at line 1.
     *   *Unknown Bug*: Inject **solitary** `[DIAGNOSTIC]` task only.
@@ -62,18 +66,24 @@ All skills reside in `.agents/skills/` (and `.skills/`). Reference by exact dire
 *   **Zero-Guessing**: Worker MUST provide verifiable evidence (test outputs/stack traces) for diagnostics. Vague reports are invalid.
 *   **Anti-Cheating & Verification Gates**:
     *   *False Red-Light Prevention*: In `[DIAGNOSTIC]`, repro test must compile cleanly (`Build PASS` / 0 syntax errors) and fail strictly on assertion (`Test FAIL`). Syntax/compiler errors or missing symbols are strictly Invalid Repros (Cheating/Rejection). Modifying product code (`Sources/`, `src/`) is strictly forbidden during diagnostics.
-    *   *Test Immutability Gate*: In `[CODE]` fixes, modifying or weakening assertions in existing repro tests is strictly forbidden. Tests are immutable unless explicitly declared in `TARGET:` or flagged `CONSTRAINTS: Test refactor approved`.
+    *   *Test Immutability & Assertion Non-Decrease*: In `[CODE: FIX]`, modifying or weakening assertions in existing repro tests is strictly forbidden. In `[CODE: REFACTOR]`, `Tests/` may be updated only when in `TARGET:`, and total assertion count post-commit must be `>=` pre-commit (`XCTAssert`, `#expect`, `assert`, `expect(`, `self.assert`).
     *   *Proof of Negative for `[DEAD_END]`*: Declaring `[DEAD_END]` requires tangible proof of negative (isolated unit test passing or runtime log snippet proving suspect module is innocent while global symptom persists). Speculative exclusions = Task Failure.
     *   *5-Line Code Probe*: Verify line claims in `SUMMARY.md` (`File#L<N>`) using `scripts/probe_line.sh <File>#L<N>` (or `sed -n '<N-3>,<N+3>p' <File>`). Misaligned line references trigger immediate credit demotion to 1 Star.
+*   **Compiler Probe & Scope Blocked Escape Hatch**:
+    *   *Compiler Probe in `[RESEARCH]`*: In addition to `grep`, Worker is authorized to temporarily modify interface signatures and execute `build` to capture 100% of affected call-sites from compiler diagnostics into `SUMMARY.md`. Mandatory `git restore .` immediately after.
+    *   *`[SCOPE_BLOCKED]` No-Fault Escalation*: If compiler errors hit downstream files outside declared `TARGET:`, Worker MUST NOT touch unlisted files. Emit `STATUS: SCOPE_BLOCKED (Need Target: <File>#L<Line>)`. Sentinel/Planner wakes up to expand `TARGET:` or decompose; **zero star deduction** in `granularity-profile.json`.
 *   **Single-Seam vs. Full-Spectrum**:
     *   *Seam Scope*: A seam is not 1 file; it covers all cohesive objects, interfaces, protocols, and tests supporting the slice.
-    *   *Multi-Interface & Refactor Exception*: Legitimate cross-interface tasks or broad refactors must be declared in `TARGET: <path1>, <path2>, <dir>/` (Declare to Authorize) or flagged in `CONSTRAINTS: Multi-interface refactor approved`. Undeclared cross-subsystem tasks are rejected with `[NEED_DECOMPOSITION]`.
+    *   *Multi-Interface & Refactor Exception*: Legitimate cross-interface tasks or broad refactors must be declared in `TARGET: <path1>, <path2>, <dir>/` (Declare to Authorize) or flagged in `CONSTRAINTS: Multi-interface refactor approved`. Undeclared cross-subsystem tasks are rejected with `[SCOPE_BLOCKED]` or `[NEED_DECOMPOSITION]`.
     *   *Planner Authorization Gates (Must satisfy all 4 to approve multi-interface/refactor)*:
         1. *Inseparability*: Splitting into smaller tasks would cause intermediate commit build/test failure.
         2. *Vertical Slice*: Only cohesive protocol -> impl -> test; zero horizontal sprawl across decoupled systems.
         3. *Profile Credit*: Target module has >= 4.5 star rating in `docs/agents/granularity-profile.json` (unrated/low-credit modules restricted to single unit).
         4. *Topology Proof*: Refactors require a prior verified `[DIAGNOSTIC]` or `[RESEARCH]` topology report in `.reports/<issue-slug>/`.
-    *   *No Silent Compile-Fix Edits*: Never modify unlisted files (e.g. dummy main.swift or configs) just to satisfy compilers. Emit `[NEED_DECOMPOSITION]` instead.
+    *   *Planner Cross-Module Refactor Strategy (Dual-Track)*:
+        - *Track A: Atomic Vertical-Slice (Small/Medium: <= 5 files & >= 3 stars)*: Single `[CODE: REFACTOR]` ticket with Interface, implementations, call-sites, and tests in `TARGET:`.
+        - *Track B: Expand-Migrate-Contract (Large-Scale: > 5 files or 1-star module)*: Decompose into 3 green-to-green phases (`[CODE: EXPAND]`, `[CODE: MIGRATE]`, `[CODE: CONTRACT]`). Create checkpoint `git tag -f nightshift-refactor-base` before Task 1.
+    *   *No Silent Compile-Fix Edits*: Never modify unlisted files (e.g. dummy main.swift or configs) just to satisfy compilers. Emit `[SCOPE_BLOCKED]` instead.
     *   *Diagnostic Scope*: `[DIAGNOSTIC]` traces across all layers (UI -> OS) without seam limits.
 *   **Ephemeral Diagnostic Dossier Lifecycle**:
     *   *Zero Git Pollution*: Diagnostic reports are transient forensic evidence, NEVER committed or merged to `main`. Output to Git-ignored `.reports/<issue-slug>/`.

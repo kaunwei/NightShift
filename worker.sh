@@ -354,6 +354,7 @@ validate_post_flight() {
   local task_target="$2"
   local task_constraints="$3"
   local task_title="$4"
+  local task_level="${5:-1}"
 
   # 1. Check clean working tree (Ghost files & uncommitted tests check)
   local dirty_files
@@ -381,22 +382,55 @@ validate_post_flight() {
     fi
   fi
 
-  # 3. [Anti-Cheating Mech 2] Test Immutability Gate in [CODE] tasks
-  # Worker must not modify tests during [CODE] fixes unless tests are declared in TARGET.
+  # 3. [Anti-Cheating Mech 2 & Refactor Gate] Test Immutability & Assertion Non-Decrease
   if ! echo "$task_title $task_constraints" | grep -iqE "\[DIAGNOSTIC\]|\[RESEARCH\]"; then
     local committed_test_files
     committed_test_files=$(echo "$committed_files" | grep -iE '(^tests/|^Tests/|Test\.[a-z]+$|_test\.[a-z]+$)' || true)
     if [ -n "$committed_test_files" ]; then
-      if ! echo "$task_target" | grep -iqE "(tests/|Tests/|test)" && ! echo "$task_constraints" | grep -iqE "test refactor approved"; then
-        echo "[WORKER_GUARD] ❌ Test Immutability Violation! Test files modified during [CODE] fix without explicit TARGET authorization:"
-        echo "$committed_test_files"
-        GUARD_ERROR="Test Immutability Violation: Modified test files without authorization in TARGET ($committed_test_files)."
-        return 5
+      # If [CODE: FIX] or tests not in TARGET:
+      if echo "$task_title" | grep -iqE "\[CODE:[[:space:]]*FIX\]" || ! echo "$task_target" | grep -iqE "(tests/|Tests/|test)"; then
+        if ! echo "$task_constraints" | grep -iqE "test refactor approved"; then
+          echo "[WORKER_GUARD] ❌ Test Immutability Violation! Test files modified during fix without explicit TARGET authorization:"
+          echo "$committed_test_files"
+          GUARD_ERROR="Test Immutability Violation: Modified test files without authorization in TARGET ($committed_test_files)."
+          return 5
+        fi
+      fi
+
+      # When test edits are authorized (e.g. [CODE: REFACTOR]): Assertion Non-Decrease Gate
+      local deleted_asserts added_asserts
+      deleted_asserts=$(git -C "$WORK_DIR" diff HEAD~1 HEAD -- $committed_test_files 2>/dev/null | grep -E '^\-[[:space:]]*(XCTAssert|#expect|assert|expect\(|self\.assert)' | grep -v -- '^\-\-\-' | wc -l | tr -dc '0-9')
+      added_asserts=$(git -C "$WORK_DIR" diff HEAD~1 HEAD -- $committed_test_files 2>/dev/null | grep -E '^\+[[:space:]]*(XCTAssert|#expect|assert|expect\(|self\.assert)' | grep -v -- '^\+\+\+' | wc -l | tr -dc '0-9')
+      [ -z "$deleted_asserts" ] && deleted_asserts=0
+      [ -z "$added_asserts" ] && added_asserts=0
+
+      if [ "$deleted_asserts" -gt "$added_asserts" ]; then
+        echo "[WORKER_GUARD] ❌ Assertion Non-Decrease Violation! Deleted assertions ($deleted_asserts) > Added assertions ($added_asserts)."
+        echo "[WORKER_GUARD] Weakening or deleting assertions during refactoring is strictly forbidden."
+        GUARD_ERROR="Assertion Non-Decrease Violation: Deleted $deleted_asserts assertions while adding only $added_asserts."
+        return 7
       fi
     fi
   fi
 
-  # 4. Check target whitelist
+  # 4. [Blast Radius Gate] Limit line deletions dynamically by Level
+  local deleted_lines
+  deleted_lines=$(git -C "$WORK_DIR" diff --numstat HEAD~1 HEAD 2>/dev/null | awk '{sum += $2} END {print sum+0}')
+  [ -z "$deleted_lines" ] && deleted_lines=0
+
+  if ! echo "$task_constraints" | grep -iqE "large deletion approved|unrestricted"; then
+    if [ "$task_level" -eq 3 ] && [ "$deleted_lines" -gt 40 ]; then
+      echo "[WORKER_GUARD] ❌ Blast Radius Violation! Level 3 (Micro) deleted $deleted_lines lines (Max: 40)."
+      GUARD_ERROR="Blast Radius Violation: Level 3 tasks cannot delete >40 lines (Deleted: $deleted_lines). Split task or calibrate to Level 2."
+      return 8
+    elif [ "$task_level" -eq 2 ] && [ "$deleted_lines" -gt 150 ]; then
+      echo "[WORKER_GUARD] ❌ Blast Radius Violation! Level 2 (Standard) deleted $deleted_lines lines (Max: 150)."
+      GUARD_ERROR="Blast Radius Violation: Level 2 tasks cannot delete >150 lines (Deleted: $deleted_lines). Split task or calibrate to Level 1."
+      return 8
+    fi
+  fi
+
+  # 5. Check target whitelist
   if [ -n "$task_target" ]; then
     # Unrestricted bypass only if explicitly stated
     if echo "$task_constraints" | grep -iqE "unrestricted"; then
@@ -441,7 +475,7 @@ validate_post_flight() {
 
         if [ $matched -eq 0 ]; then
           echo "[WORKER_GUARD] ❌ Target Whitelist Violation! File '$f' is not declared in TARGET ($task_target)."
-          echo "[WORKER_GUARD] Undeclared cross-subsystem edits are forbidden. Declare target or emit [NEED_DECOMPOSITION]."
+          echo "[WORKER_GUARD] Undeclared cross-subsystem edits are forbidden. Declare target or emit [SCOPE_BLOCKED] / [NEED_DECOMPOSITION]."
           GUARD_ERROR="Target Whitelist Violation: Modified unannounced file '$f' outside declared scope."
           return 2
         fi
@@ -580,8 +614,12 @@ MANDATORY EXECUTION RULES:
 2. TARGET SCOPE & CONSTRAINTS:
    - Modify ONLY declared files/directories (${TASK_TARGET:-target files}).
    - Cohesive multi-object / multi-interface changes are allowed when declared in TARGET.
-   - Broad refactors are permitted if CONSTRAINTS mentions 'Multi-interface refactor approved' or archetype is [REFACTOR].
-   - STRICT PROHIBITION: Never modify unlisted files (e.g. dummy main.swift or configs) just to satisfy compiler errors! If unlisted dependencies are missing, STOP immediately and emit [NEED_DECOMPOSITION].
+   - [CODE: FIX]: Tests/ are strictly read-only. Modify only product files declared in TARGET.
+   - [CODE: REFACTOR]: Tests/ and Mocks/ can be declared in TARGET.
+     * ASSERTION NON-DECREASE GATE: You may update test method calls, but the total count of test assertions must NEVER decrease! Deleting or weakening assertions is strictly forbidden (Cheating).
+   - [SCOPE_BLOCKED] ESCAPE HATCH: If compiler errors occur in downstream files outside declared TARGET, DO NOT touch them! Stop immediately and emit "[SCOPE_BLOCKED] (Need Target: <File>#L<Line>)" in your output. This will NOT deduct credit.
+   - BLAST RADIUS LIMITS: Level 3 tasks max deletion <= 40 lines; Level 2 tasks max deletion <= 150 lines; Level 1 tasks unlimited (TARGET-bounded).
+   - [RESEARCH]: Compiler Probes permitted: You may temporarily tweak interface signatures and run 'build' to extract all affected call-sites into SUMMARY.md. You MUST run 'git restore .' immediately after.
    - All tests and modified files MUST be staged and committed cleanly. Working tree must be 100% clean after commit.
 3. NO SUDO: Under NO circumstances run sudo, apt, or global system commands.
 4. BUILD & VERIFY (ANTI-CHEATING GATES):
@@ -694,6 +732,25 @@ BLOCK_EOF
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] [FAILED] $TASK_TITLE [TIMEOUT]" >> "$TASKS_DONE_FILE"
     update_status "BLOCKED" "$TASK_TITLE (TIMEOUT)" "$DURATION" "$CURRENT_IDX" "$TOTAL_COUNT" "$((REMAINING_COUNT - 1))" "${PERCENT_START}%" "$BAR_START"
 
+  elif grep -q '\[SCOPE_BLOCKED\]' "$CMD_OUTPUT_TMP" 2>/dev/null; then
+    # Worker honestly reported downstream scope blocked
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] 🚧 [SCOPE BLOCKED] Worker honestly stopped at unannounced downstream boundaries."
+    isolate_and_rollback_dirty_tree "$TASK_ID"
+    
+    BLOCKED_SUMMARY=$(cat <<BLOCK_EOF
+================================================================================
+[SCOPE_BLOCKED] $TASK_ID: Downstream Scope Boundary Reached
+Time: $(date '+%Y-%m-%d %H:%M:%S') | Status: SCOPE_BLOCKED
+Details: Compiler errors detected in files outside TARGET whitelist.
+Worker honestly stopped without violating boundaries. (No credit deduction).
+Action Needed for Human: Expand TARGET in tasks.txt or adopt Expand-Migrate-Contract.
+================================================================================
+BLOCK_EOF
+)
+    prepend_progress_log "$BLOCKED_SUMMARY"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [SCOPE_BLOCKED] $TASK_TITLE" >> "$TASKS_DONE_FILE"
+    update_status "SCOPE_BLOCKED" "$TASK_TITLE" "$DURATION" "$CURRENT_IDX" "$TOTAL_COUNT" "$((REMAINING_COUNT - 1))" "${PERCENT_START}%" "$BAR_START"
+
   elif grep -q '\[NEED_GUIDANCE\]\|\[NEED_DECOMPOSITION\]' "$CMD_OUTPUT_TMP" 2>/dev/null; then
     # Worker honestly requested guidance or decomposition
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] ✋ [AWAITING GUIDANCE] Worker honestly requested manager guidance."
@@ -722,7 +779,7 @@ BLOCK_EOF
   else
     # Run Post-Flight Guard Validation
     GUARD_ERROR=""
-    validate_post_flight "$TASK_ID" "$TASK_TARGET" "$TASK_CONSTRAINTS" "$TASK_TITLE"
+    validate_post_flight "$TASK_ID" "$TASK_TARGET" "$TASK_CONSTRAINTS" "$TASK_TITLE" "$TASK_LEVEL"
     GUARD_STATUS=$?
 
     MECH_VERIFY_EXIT=0
