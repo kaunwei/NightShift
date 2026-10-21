@@ -39,6 +39,7 @@ Operational guardrails for autonomous dual-terminal execution. Zero context bloa
   - `[CODE: FIX]`: Bugfix. Modifies `TARGET:` product code only. `Tests/` strictly immutable.
   - `[CODE: REFACTOR]`: Interface refactor. `Tests/` and `Mocks/` permitted in `TARGET:`. Enforces **Assertion Non-Decrease Gate** and structural closure in `VERIFY:` (e.g. `<test_cmd> && ! grep -rn "<Deprecated_Symbol>" Sources/`).
   - `[CODE: EXPAND]` / `[CODE: MIGRATE]` / `[CODE: CONTRACT]`: Phased large refactoring progression.
+  - `[RESEARCH]`: Topology & seam discovery. Product code strictly read-only. Produces `.reports/<slug>/SUMMARY.md`. `VERIFY:` defaults to automatic artifact/cleanliness audit or `REPORT_ONLY`.
 - **Mandatory `FORBIDDEN_SHORTCUTS:`**: Explicitly ban hacks (thread sleeps / `asyncAfter`, error swallowing via `try?`/empty catch, turning non-optional into optional, deleting assertions).
 - **Hot Preemption**: Inject at line 1 via `scripts/reorder_queue.sh`. Known fix = single-seam `[CODE]`; Unknown bug = solitary `[DIAGNOSTIC]`. Never pipeline speculative `[CODE]` tasks behind an unverified diagnostic.
 - **Progression**: Top-down (L1 -> L2 -> L3 Diagnostic -> Code). Planner uses Matt's foundations (`/domain-modeling`, `/codebase-design`, `/tdd`, `/diagnosing-bugs`) to compose tickets; at Level 3 (Micro), Planner provides exact TDD blueprints (Red contract -> Green contract -> Seam boundary) so Worker's `/tdd` executes without guesswork.
@@ -50,7 +51,12 @@ Operational guardrails for autonomous dual-terminal execution. Zero context bloa
   1. *False Red-Light Prevention*: In `[DIAGNOSTIC]`, repro test must compile cleanly (`Build PASS`, 0 syntax errors) and fail strictly on assertion (`Test FAIL`). Modifying product code (`Sources/`, `src/`) during diagnostics is strictly forbidden.
   2. *Test Immutability & Assertion Non-Decrease*: Tests are read-only in `[CODE: FIX]`. In `[CODE: REFACTOR]`, total assertion count post-commit must be `>=` pre-commit (`XCTAssert`, `#expect`, `assert`, `expect(`, `self.assert`).
   3. *Proof of Negative for `[DEAD_END]`*: Tangible proof required (isolated passing unit test or log snippet proving module health). Speculative exclusions = task failure.
-  4. *Interface Skeleton & 10-Line Probe*: Worker appends declaration skeletons and 10-line slices (`scripts/extract_skeleton.sh <File>#L<N>`) to `SUMMARY.md`. Planner verifies with `scripts/probe_line.sh <File>#L<N> 10`. Line mismatches demote credit to 1 Star.
+  4. *Interface Skeleton & Pointer Audit*: In `[RESEARCH]`, pointers (`<File>#L<Line>`) must match real files and valid line numbers. Detailed skeletons/slices belong in `03-micro.md`.
+- **Dedicated Mechanical Audits by Archetype**:
+  `worker.sh` evaluates tasks via decoupled gates to eliminate shell-quoting accidents:
+  - `[CODE]`: Test suite exit 0, Anti-Idle (`Tests_Run >= 1`), whitelist check, blast radius limits.
+  - `[RESEARCH]`: Artifact Integrity (non-empty `SUMMARY.md` with markdown headings), Clean Tree (zero uncommitted/modified product code), Pointer Validity (sampled `<File>#L<N>` verified on disk).
+  - `[DIAGNOSTIC]`: Production code lock, clean build, repro failure strictly on test assertion.
 - **Scope & Compiler Probes**:
   - *Compiler Probe*: In `[RESEARCH]`, Worker may temporarily alter signatures and run `build` to capture 100% of affected call-sites into `SUMMARY.md`, followed by mandatory `git restore .`.
   - *`[SCOPE_BLOCKED]` No-Fault Exit*: When compiler errors hit downstream files outside `TARGET:`, never touch unlisted files. Emit `STATUS: SCOPE_BLOCKED (Need Target: <File>#L<Line>)`. Planner expands `TARGET:` or decomposes; zero star deduction in `granularity-profile.json`.
@@ -62,8 +68,8 @@ Operational guardrails for autonomous dual-terminal execution. Zero context bloa
     - **Track A (Vertical-Slice)**: Small/Medium (<=5 files & >=3 stars). Single `[CODE: REFACTOR]` ticket.
     - **Track B (Expand-Migrate-Contract)**: Large-Scale (>5 files or 1-star module). Checkpoint `git tag -f nightshift-refactor-base`. 3 green-to-green phases: `[CODE: EXPAND]`, `[CODE: MIGRATE]`, `[CODE: CONTRACT]`.
 - **Ephemeral Diagnostic Dossier Lifecycle**:
-  - Ephemeral forensic evidence lives in git-ignored `.reports/<issue-slug>/` (`01-macro.md`, `02-meso.md`, `03-micro.md`, `SUMMARY.md`). Never commit or merge to `main`.
-  - Archive to `.reports/.archive/` upon successful fix and merge.
+  - Ephemeral forensic evidence lives in git-ignored `.reports/<issue-slug>/` (`01-macro.md`, `02-meso.md`, `03-micro.md`, `SUMMARY.md`). Never commit or merge to `main`. Archive to `.reports/.archive/` on fix merge.
+  - *Progressive Disclosure*: `SUMMARY.md` is an executive decision digest (<= 5 KB): topology diagrams, coupling bottlenecks, Expand-Migrate-Contract execution matrix, and validated file pointers. Raw inlined 10-line code slices and interface AST skeletons belong in `03-micro.md` to prevent Summary bloat.
 - **Clean Tree Gate & Escalation**:
   - `git status --porcelain` must be 100% clean after commit.
   - Worker allowed max 3 retries (with `git restore` cleanups). If blocked, demote granularity (L1->L2->L3).

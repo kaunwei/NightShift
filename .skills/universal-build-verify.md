@@ -27,7 +27,8 @@ Mandatory execution protocol for Background Worker (Terminal B) processing `task
 - **`[CODE: EXPAND/MIGRATE/CONTRACT]`**: Phased migration. Every intermediate step must leave builds and tests 100% green.
 - **`[RESEARCH]` / `[BENCHMARK]`**: Capture metrics/facts to `.reports/<issue-slug>/` or `docs/research/`.
   - *Compiler Probe*: Temporarily alter signatures and run `build` to capture 100% of call-sites into `SUMMARY.md`. Mandatory immediate `git restore .`.
-  - *Interface Skeletons*: Append declaration skeletons and 10-line slices (`scripts/extract_skeleton.sh <files>`).
+  - *Progressive Disclosure*: `SUMMARY.md` is strictly an executive digest (<= 5 KB: topology, coupling bottlenecks, Expand-Migrate-Contract matrix, validated pointers). Full skeletons and inlined 10-line slices belong in `03-micro.md`.
+  - *Dedicated Audit*: Evaluated on Artifact Integrity (valid non-empty report), Clean Tree (zero uncommitted product code), and Pointer Validity (`<File>#L<Line>` verified on disk). `VERIFY:` can be `REPORT_ONLY`.
 - **`[DIAGNOSTIC]`**: Follow `/diagnosing-bugs`. Isolate root cause with minimal repro test or exact trace in `.reports/<issue-slug>/`. Reject ungrounded speculation.
   - *Valid Red-Light Rule*: Repro test must compile cleanly (0 errors) and fail strictly on assertion. Syntax errors or missing symbols = Invalid Repro.
   - *Product Code Lock*: Modifying production code (`Sources/`, `src/`) during diagnostics is strictly forbidden. Touch only tests and `.reports/`.

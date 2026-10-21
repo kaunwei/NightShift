@@ -597,10 +597,10 @@ while true; do
   TASK_TITLE="$RAW_TASK"
   TASK_ID=$(echo "$RAW_TASK" | awk -F'|' '{print $1}' | tr -d ' ' || echo "TASK-UNKNOWN")
   TASK_LEVEL=$(echo "$RAW_TASK" | grep -o 'LEVEL:[[:space:]]*[0-9]' | awk '{print $2}' || echo "1")
-  TASK_TARGET=$(echo "$RAW_TASK" | sed -n 's/.*TARGET:[[:space:]]*\([^|]*\).*/\1/p' | xargs || echo "")
-  TASK_VERIFY=$(echo "$RAW_TASK" | sed -n 's/.*VERIFY:[[:space:]]*\([^|]*\).*/\1/p' | xargs || echo "")
-  TASK_FORBIDDEN=$(echo "$RAW_TASK" | sed -n 's/.*FORBIDDEN_SHORTCUTS:[[:space:]]*\([^|]*\).*/\1/p' | xargs || echo "")
-  TASK_CONSTRAINTS=$(echo "$RAW_TASK" | sed -n 's/.*CONSTRAINTS:[[:space:]]*\([^|]*\).*/\1/p' | xargs || echo "")
+  TASK_TARGET=$(echo "$RAW_TASK" | sed -n 's/.*TARGET:[[:space:]]*\([^|]*\).*/\1/p' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' || echo "")
+  TASK_VERIFY=$(echo "$RAW_TASK" | sed -n 's/.*VERIFY:[[:space:]]*\([^|]*\).*/\1/p' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' || echo "")
+  TASK_FORBIDDEN=$(echo "$RAW_TASK" | sed -n 's/.*FORBIDDEN_SHORTCUTS:[[:space:]]*\([^|]*\).*/\1/p' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' || echo "")
+  TASK_CONSTRAINTS=$(echo "$RAW_TASK" | sed -n 's/.*CONSTRAINTS:[[:space:]]*\([^|]*\).*/\1/p' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' || echo "")
   TASK_BASE_SHA=$(git -C "$WORK_DIR" rev-parse HEAD 2>/dev/null || echo "HEAD~1")
   START_TIME=$(date +%s)
   
@@ -799,51 +799,133 @@ BLOCK_EOF
 
     MECH_VERIFY_EXIT=0
     VERIFY_LOG_TMP=$(mktemp)
-    if [ $GUARD_STATUS -eq 0 ] && [ -n "$TASK_VERIFY" ]; then
+    if [ $GUARD_STATUS -eq 0 ]; then
       # Run Mechanical Verification Audit (Mechanism 5)
       if echo "$TASK_TITLE $TASK_CONSTRAINTS" | grep -iqE "\[DIAGNOSTIC\]"; then
-        echo "[WORKER_GUARD] 🔍 Executing Mechanical Audit ([DIAGNOSTIC]): $TASK_VERIFY"
-        (
-          cd "$WORK_DIR" && \
-          export PORT="$WORKER_PORT" && \
-          export TEST_PORT="$WORKER_PORT" && \
-          run_with_timeout 180 bash -c "$TASK_VERIFY"
-        ) > "$VERIFY_LOG_TMP" 2>&1 || true
-        # In [DIAGNOSTIC]: Ensure it did not fail from compilation error
-        if grep -iqE "error: cannot find|syntax error|compilation failed|build failed|undefined symbol" "$VERIFY_LOG_TMP" 2>/dev/null; then
-          GUARD_STATUS=4
-          GUARD_ERROR="False Red-Light Detected: Repro failed on compilation/syntax error instead of test assertion."
+        echo "[WORKER_GUARD] 🔍 Executing Mechanical Audit ([DIAGNOSTIC]): ${TASK_VERIFY:-None}"
+        if [ -n "$TASK_VERIFY" ]; then
+          (
+            cd "$WORK_DIR" && \
+            export PORT="$WORKER_PORT" && \
+            export TEST_PORT="$WORKER_PORT" && \
+            run_with_timeout 180 bash -c "$TASK_VERIFY"
+          ) > "$VERIFY_LOG_TMP" 2>&1 || true
+          # In [DIAGNOSTIC]: Ensure it did not fail from compilation error
+          if grep -iqE "error: cannot find|syntax error|compilation failed|build failed|undefined symbol" "$VERIFY_LOG_TMP" 2>/dev/null; then
+            GUARD_STATUS=4
+            GUARD_ERROR="False Red-Light Detected: Repro failed on compilation/syntax error instead of test assertion."
+          fi
+        fi
+      elif echo "$TASK_TITLE $TASK_CONSTRAINTS" | grep -iqE "\[RESEARCH\]"; then
+        echo "[WORKER_GUARD] 🔍 Executing Mechanical Audit ([RESEARCH])..."
+
+        # 1. Gate 2: Clean Tree / Git Zero-Modification Gate
+        # Ensure working tree has no uncommitted changes to product code or test files
+        local research_dirty
+        research_dirty=$(git -C "$WORK_DIR" status --porcelain 2>/dev/null | grep -vE "(progress\.log|tasks\.txt|tasks\.done|worker\..*\.status|\.preview|\.worker\..*|\.reports/)" || true)
+        if [ -n "$research_dirty" ]; then
+          GUARD_STATUS=12
+          GUARD_ERROR="Research Zero-Touch Violation: Uncommitted/modified files detected after research ($research_dirty)."
+        fi
+
+        # 2. Gate 1: Artifact Integrity Gate
+        # Look for SUMMARY.md in .reports/ or report path in TARGET
+        if [ $GUARD_STATUS -eq 0 ]; then
+          local report_path=""
+          if [ -n "$TASK_TARGET" ] && [ -f "$WORK_DIR/$TASK_TARGET" ]; then
+            report_path="$WORK_DIR/$TASK_TARGET"
+          else
+            report_path=$(find "$WORK_DIR/.reports" -name "SUMMARY.md" 2>/dev/null | head -n 1 || true)
+            if [ -z "$report_path" ]; then
+              report_path=$(find "$WORK_DIR/docs/research" -name "*.md" 2>/dev/null | head -n 1 || true)
+            fi
+          fi
+
+          if [ -z "$report_path" ] || [ ! -s "$report_path" ]; then
+            GUARD_STATUS=11
+            GUARD_ERROR="Research Artifact Missing: No non-empty SUMMARY.md found in .reports/ or declared TARGET."
+          else
+            # Check for core markdown structure (at least one heading)
+            if ! grep -qE '^#+[[:space:]]+' "$report_path" 2>/dev/null; then
+              GUARD_STATUS=11
+              GUARD_ERROR="Research Artifact Invalid: Report '$report_path' lacks standard markdown headings."
+            else
+              echo "[WORKER_GUARD] ✅ Artifact verified: $report_path ($(wc -c < "$report_path" | tr -dc '0-9') bytes)"
+
+              # 3. Gate 4: Pointer Validity Probe
+              # Extract pointers like <File>#L<Line> from report and verify target file and line count
+              local sampled_ptrs
+              sampled_ptrs=$(grep -oE '[a-zA-Z0-9_./-]+\.[a-zA-Z0-9]+#L[0-9]+' "$report_path" 2>/dev/null | head -n 5 || true)
+              if [ -n "$sampled_ptrs" ]; then
+                while IFS= read -r ptr; do
+                  [ -z "$ptr" ] && continue
+                  local p_file="${ptr%#L*}"
+                  local p_line="${ptr##*#L}"
+                  if [ -f "$WORK_DIR/$p_file" ]; then
+                    local total_lines
+                    total_lines=$(wc -l < "$WORK_DIR/$p_file" | tr -dc '0-9')
+                    if [ "$p_line" -gt "$total_lines" ]; then
+                      GUARD_STATUS=13
+                      GUARD_ERROR="Pointer Validity Violation: Line $p_line in pointer '$ptr' exceeds total file lines ($total_lines)."
+                      break
+                    fi
+                    echo "[WORKER_GUARD] 🔍 Verified pointer target: $p_file#L$p_line (Total lines: $total_lines)"
+                  fi
+                done <<< "$sampled_ptrs"
+              fi
+            fi
+          fi
+        fi
+
+        # 4. Optional Custom VERIFY (only if explicitly specified and not REPORT_ONLY / none)
+        if [ $GUARD_STATUS -eq 0 ] && [ -n "$TASK_VERIFY" ]; then
+          if ! echo "$TASK_VERIFY" | grep -iqE "^(REPORT_ONLY|none)$"; then
+            echo "[WORKER_GUARD] 🔍 Executing Custom Research VERIFY: $TASK_VERIFY"
+            (
+              cd "$WORK_DIR" && \
+              export PORT="$WORKER_PORT" && \
+              export TEST_PORT="$WORKER_PORT" && \
+              run_with_timeout 180 bash -c "$TASK_VERIFY"
+            ) > "$VERIFY_LOG_TMP" 2>&1
+            MECH_VERIFY_EXIT=$?
+            if [ $MECH_VERIFY_EXIT -ne 0 ]; then
+              GUARD_STATUS=6
+              GUARD_ERROR="Mechanical Verification Failed: '$TASK_VERIFY' returned exit code $MECH_VERIFY_EXIT (Expected 0)."
+            fi
+          fi
         fi
       else
-        echo "[WORKER_GUARD] 🔍 Executing Mechanical Audit ([CODE]): $TASK_VERIFY"
-        (
-          cd "$WORK_DIR" && \
-          export PORT="$WORKER_PORT" && \
-          export TEST_PORT="$WORKER_PORT" && \
-          run_with_timeout 180 bash -c "$TASK_VERIFY"
-        ) > "$VERIFY_LOG_TMP" 2>&1
-        MECH_VERIFY_EXIT=$?
-        if [ $MECH_VERIFY_EXIT -ne 0 ]; then
-          GUARD_STATUS=6
-          GUARD_ERROR="Mechanical Verification Failed: '$TASK_VERIFY' returned exit code $MECH_VERIFY_EXIT (Expected 0)."
-        else
-          # Anti-Idle Check: Ensure tests executed >= 1 (prevent typo in test filter)
-          if grep -iqE "(0 tests passed|0 passed|ran 0 tests|0 suites passed|No matching tests)" "$VERIFY_LOG_TMP" 2>/dev/null; then
-            GUARD_STATUS=9
-            GUARD_ERROR="Empty Test Run Detected (Anti-Idle): VERIFY ran 0 tests. Possible test filter typo."
+        echo "[WORKER_GUARD] 🔍 Executing Mechanical Audit ([CODE]): ${TASK_VERIFY:-None}"
+        if [ -n "$TASK_VERIFY" ]; then
+          (
+            cd "$WORK_DIR" && \
+            export PORT="$WORKER_PORT" && \
+            export TEST_PORT="$WORKER_PORT" && \
+            run_with_timeout 180 bash -c "$TASK_VERIFY"
+          ) > "$VERIFY_LOG_TMP" 2>&1
+          MECH_VERIFY_EXIT=$?
+          if [ $MECH_VERIFY_EXIT -ne 0 ]; then
+            GUARD_STATUS=6
+            GUARD_ERROR="Mechanical Verification Failed: '$TASK_VERIFY' returned exit code $MECH_VERIFY_EXIT (Expected 0)."
           else
-            # Module Regression Check: Ensure whole package/module tests still pass
-            if [ -f "$WORK_DIR/Package.swift" ]; then
-              echo "[WORKER_GUARD] 🔍 Executing Regression Check (swift test)..."
-              (
-                cd "$WORK_DIR" && \
-                export PORT="$WORKER_PORT" && \
-                export TEST_PORT="$WORKER_PORT" && \
-                run_with_timeout 180 swift test
-              ) >/dev/null 2>&1
-              if [ $? -ne 0 ]; then
-                GUARD_STATUS=10
-                GUARD_ERROR="Regression Check Failed: Whole-suite regression tests failed."
+            # Anti-Idle Check: Ensure tests executed >= 1 (prevent typo in test filter)
+            if grep -iqE "(0 tests passed|0 passed|ran 0 tests|0 suites passed|No matching tests)" "$VERIFY_LOG_TMP" 2>/dev/null; then
+              GUARD_STATUS=9
+              GUARD_ERROR="Empty Test Run Detected (Anti-Idle): VERIFY ran 0 tests. Possible test filter typo."
+            else
+              # Module Regression Check: Ensure whole package/module tests still pass
+              if [ -f "$WORK_DIR/Package.swift" ]; then
+                echo "[WORKER_GUARD] 🔍 Executing Regression Check (swift test)..."
+                (
+                  cd "$WORK_DIR" && \
+                  export PORT="$WORKER_PORT" && \
+                  export TEST_PORT="$WORKER_PORT" && \
+                  run_with_timeout 180 swift test
+                ) >/dev/null 2>&1
+                if [ $? -ne 0 ]; then
+                  GUARD_STATUS=10
+                  GUARD_ERROR="Regression Check Failed: Whole-suite regression tests failed."
+                fi
               fi
             fi
           fi
