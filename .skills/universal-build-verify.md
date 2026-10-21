@@ -20,16 +20,18 @@ MANDATORY execution protocol for Background Worker (Terminal B) when processing 
 *   **Test Immutability & Refactor Gates**:
     *   `[CODE: FIX]`: Test files are strictly read-only. Worker can only touch product files declared in `TARGET:`.
     *   `[CODE: REFACTOR]`: `Tests/` and `Mocks/` can be declared in `TARGET:`. **Assertion Non-Decrease Gate**: Worker may update method call signatures, but total assertion count must NEVER decrease (`count(assert) >= old_count`).
+*   **Forbidden Shortcuts (Symptom Masking Ban)**: Worker must strictly follow `FORBIDDEN_SHORTCUTS:`. Never use thread sleeps (`asyncAfter`, `sleep`) to mask race conditions, never swallow errors with `try?` or empty catch blocks, never alter non-optional properties to optional just to dodge initializers, and never hardcode dummy return values.
 *   **Blast Radius Gate**: Line deletions limited dynamically by Level: Level 3 (Micro) <= 40 lines, Level 2 (Standard) <= 150 lines, Level 1 (Macro) unlimited (TARGET-bounded).
 
 ## 2. Execution Archetypes
-*   **[CODE: FIX] / [CODE: REFACTOR]**: Follow Red-Green-Refactor TDD. Refactors must satisfy Assertion Non-Decrease and structural verification (`VERIFY:`).
+*   **[CODE: FIX] / [CODE: REFACTOR]**: Follow Red-Green-Refactor TDD. Refactors must satisfy Assertion Non-Decrease and structural verification in `VERIFY:` (e.g. `<test_cmd> && ! grep -rn "<Deprecated_Symbol>" Sources/`).
 *   **[CODE: EXPAND] / [CODE: MIGRATE] / [CODE: CONTRACT]**: Phased refactoring progression. Each step must leave build and tests 100% PASS.
 *   **[RESEARCH] / [BENCHMARK]**: Gather facts/metrics -> Format into Markdown/CSV -> Output to `.reports/<issue-slug>/` (or `docs/research/` if permanent).
-    *   *Compiler Probe Allowed*: In addition to `grep`, Worker may temporarily modify interface signatures and execute `build` to capture 100% of affected call-sites from compiler diagnostics into `SUMMARY.md`. Worker MUST immediately run `git restore .` to return working tree to 100% clean.
+    *   *Compiler Probe & Signature Skeletons*: In addition to `grep`, Worker may temporarily modify interface signatures and execute `build` to capture 100% of affected call-sites from compiler diagnostics. Worker MUST immediately run `git restore .`. `SUMMARY.md` MUST append Interface Skeletons and 10-line context slices (`scripts/extract_skeleton.sh <files>`).
 *   **[DIAGNOSTIC]**: Isolate root cause with minimal failing tests or exact error traces. Output to `.reports/<issue-slug>/<phase>.md` and update `SUMMARY.md`. **Reject pure textual speculation.**
     *   *Valid Red-Light Rule*: Repro tests MUST compile cleanly (`Build PASS` / 0 syntax errors) and fail strictly on assertion (`Test FAIL`). Compilation failures or missing symbols are Invalid Repros.
     *   *Production Code Lock*: Strictly forbidden from modifying production code (`Sources/`, `src/`, etc.) during diagnostics. Only tests and `.reports/` may be touched.
+    *   *Signature Skeleton*: `SUMMARY.md` must include pure declaration skeletons and 10-line slices of suspect files.
 
 ## 3. Honest Treaty (Anti-Hallucination)
 *   **Zero-Guessing**: If legacy code/logs are obscure, state ONLY verified facts/paths. Label all interpretations as `Hypothesis`.
@@ -48,7 +50,7 @@ MANDATORY execution protocol for Background Worker (Terminal B) when processing 
 ## 5. Protocol & Evidence Logging (Token-Lean)
 
 *   **Log Limits**: `progress.log` entries `<= 15 lines`. Report Executive Summaries in `.reports/<issue-slug>/` `<= 30 lines`. No verbose prose.
-*   **Mechanical Audit Stamp**: `worker.sh` mechanically re-runs verification and stamps `[MECHANICAL_AUDIT] Status: PASS | Verify_Exit: 0 | Whitelist: PASS | Tree: CLEAN | Attempts: <N>` directly at line 1 of `progress.log`. Planner Fast-Track requires this stamp.
+*   **Double-Funnel Mechanical Audit**: `worker.sh` mechanically re-runs verification, checks Anti-Idle (`Tests_Run >= 1`), runs regression checks, and stamps `[MECHANICAL_AUDIT] Status: PASS | Verify_Exit: 0 | Tests_Run: >=1 | Whitelist: PASS | Tree: CLEAN | Diff: <stat> | Attempts: <N>` directly at line 1 of `progress.log`. Planner Fast-Track requires this stamp.
 *   **Auto-Commit Standard (English ONLY)**:
     ```bash
     git commit -m "<type>(<scope>): <concise action <= 60 chars> (<task_id>)" -m "<1-3 summary bullets>

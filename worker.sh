@@ -355,19 +355,22 @@ validate_post_flight() {
   local task_constraints="$3"
   local task_title="$4"
   local task_level="${5:-1}"
+  local task_base_sha="${6:-HEAD~1}"
 
   # 1. Check clean working tree (Ghost files & uncommitted tests check)
-  local dirty_files
-  dirty_files=$(git -C "$WORK_DIR" status --porcelain 2>/dev/null | grep -v "progress.log" || true)
-  if [ -n "$dirty_files" ]; then
-    echo "[WORKER_GUARD] ❌ Dirty tree detected after task! Uncommitted or untracked files left in working tree:"
+  local dirty_files untracked_files
+  dirty_files=$(git -C "$WORK_DIR" status --porcelain 2>/dev/null | grep -vE "(progress\.log|tasks\.txt|tasks\.done|worker\..*\.status|\.preview)" || true)
+  untracked_files=$(git -C "$WORK_DIR" ls-files --others --exclude-standard 2>/dev/null | grep -vE "(progress\.log|tasks\.txt|tasks\.done|worker\..*\.status|\.preview|\.worker\..*)" || true)
+  if [ -n "$dirty_files" ] || [ -n "$untracked_files" ]; then
+    echo "[WORKER_GUARD] ❌ Dirty tree / untracked files detected after task:"
     echo "$dirty_files"
-    GUARD_ERROR="Dirty working tree after task completion (untracked or uncommitted tests/files)."
+    echo "$untracked_files"
+    GUARD_ERROR="Dirty working tree or untracked ghost files detected after task."
     return 1
   fi
 
   local committed_files
-  committed_files=$(git -C "$WORK_DIR" diff-tree --no-commit-id --name-only -r HEAD 2>/dev/null || true)
+  committed_files=$(git -C "$WORK_DIR" diff --name-only "$task_base_sha" HEAD 2>/dev/null || git -C "$WORK_DIR" diff-tree --no-commit-id --name-only -r HEAD 2>/dev/null || true)
 
   # 2. [Anti-Cheating Mech 1] Diagnostic Product-Code Lock
   # Modifying product code in [DIAGNOSTIC] is strictly forbidden.
@@ -399,8 +402,8 @@ validate_post_flight() {
 
       # When test edits are authorized (e.g. [CODE: REFACTOR]): Assertion Non-Decrease Gate
       local deleted_asserts added_asserts
-      deleted_asserts=$(git -C "$WORK_DIR" diff HEAD~1 HEAD -- $committed_test_files 2>/dev/null | grep -E '^\-[[:space:]]*(XCTAssert|#expect|assert|expect\(|self\.assert)' | grep -v -- '^\-\-\-' | wc -l | tr -dc '0-9')
-      added_asserts=$(git -C "$WORK_DIR" diff HEAD~1 HEAD -- $committed_test_files 2>/dev/null | grep -E '^\+[[:space:]]*(XCTAssert|#expect|assert|expect\(|self\.assert)' | grep -v -- '^\+\+\+' | wc -l | tr -dc '0-9')
+      deleted_asserts=$(git -C "$WORK_DIR" diff "$task_base_sha" HEAD -- $committed_test_files 2>/dev/null | grep -E '^\-[[:space:]]*(XCTAssert|#expect|assert|expect\(|self\.assert)' | grep -v -- '^\-\-\-' | wc -l | tr -dc '0-9')
+      added_asserts=$(git -C "$WORK_DIR" diff "$task_base_sha" HEAD -- $committed_test_files 2>/dev/null | grep -E '^\+[[:space:]]*(XCTAssert|#expect|assert|expect\(|self\.assert)' | grep -v -- '^\+\+\+' | wc -l | tr -dc '0-9')
       [ -z "$deleted_asserts" ] && deleted_asserts=0
       [ -z "$added_asserts" ] && added_asserts=0
 
@@ -415,7 +418,7 @@ validate_post_flight() {
 
   # 4. [Blast Radius Gate] Limit line deletions dynamically by Level
   local deleted_lines
-  deleted_lines=$(git -C "$WORK_DIR" diff --numstat HEAD~1 HEAD 2>/dev/null | awk '{sum += $2} END {print sum+0}')
+  deleted_lines=$(git -C "$WORK_DIR" diff --numstat "$task_base_sha" HEAD 2>/dev/null | awk '{sum += $2} END {print sum+0}')
   [ -z "$deleted_lines" ] && deleted_lines=0
 
   if ! echo "$task_constraints" | grep -iqE "large deletion approved|unrestricted"; then
@@ -492,6 +495,13 @@ validate_post_flight() {
 touch "$TASKS_FILE" "$TASKS_DONE_FILE" "$PROGRESS_FILE"
 mkdir -p "$SCRIPT_DIR/.reports/.archive"
 ensure_worker_tree
+
+# Clean Pivot Checkpoint (Mechanism 4)
+if git -C "$WORK_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  git -C "$WORK_DIR" tag -f nightshift-session-base HEAD 2>/dev/null || true
+  git tag -f nightshift-session-base HEAD 2>/dev/null || true
+  echo "[WORKER] Checkpoint tagged: nightshift-session-base at $(git -C "$WORK_DIR" rev-parse --short HEAD 2>/dev/null)"
+fi
 
 echo "=============================================================================="
 echo " 24-Hour Unattended AI Worker Daemon Started"
@@ -589,7 +599,9 @@ while true; do
   TASK_LEVEL=$(echo "$RAW_TASK" | grep -o 'LEVEL:[[:space:]]*[0-9]' | awk '{print $2}' || echo "1")
   TASK_TARGET=$(echo "$RAW_TASK" | sed -n 's/.*TARGET:[[:space:]]*\([^|]*\).*/\1/p' | xargs || echo "")
   TASK_VERIFY=$(echo "$RAW_TASK" | sed -n 's/.*VERIFY:[[:space:]]*\([^|]*\).*/\1/p' | xargs || echo "")
+  TASK_FORBIDDEN=$(echo "$RAW_TASK" | sed -n 's/.*FORBIDDEN_SHORTCUTS:[[:space:]]*\([^|]*\).*/\1/p' | xargs || echo "")
   TASK_CONSTRAINTS=$(echo "$RAW_TASK" | sed -n 's/.*CONSTRAINTS:[[:space:]]*\([^|]*\).*/\1/p' | xargs || echo "")
+  TASK_BASE_SHA=$(git -C "$WORK_DIR" rev-parse HEAD 2>/dev/null || echo "HEAD~1")
   START_TIME=$(date +%s)
   
   echo ""
@@ -619,16 +631,19 @@ MANDATORY EXECUTION RULES:
      * ASSERTION NON-DECREASE GATE: You may update test method calls, but the total count of test assertions must NEVER decrease! Deleting or weakening assertions is strictly forbidden (Cheating).
    - [SCOPE_BLOCKED] ESCAPE HATCH: If compiler errors occur in downstream files outside declared TARGET, DO NOT touch them! Stop immediately and emit "[SCOPE_BLOCKED] (Need Target: <File>#L<Line>)" in your output. This will NOT deduct credit.
    - BLAST RADIUS LIMITS: Level 3 tasks max deletion <= 40 lines; Level 2 tasks max deletion <= 150 lines; Level 1 tasks unlimited (TARGET-bounded).
-   - [RESEARCH]: Compiler Probes permitted: You may temporarily tweak interface signatures and run 'build' to extract all affected call-sites into SUMMARY.md. You MUST run 'git restore .' immediately after.
+   - [RESEARCH] / [DIAGNOSTIC]: SUMMARY.md MUST include Interface Skeletons and 10-line context slices (use scripts/extract_skeleton.sh <file>#L<line>). Compiler probes permitted via dry-run signature tweak, build, and immediate 'git restore .'.
    - All tests and modified files MUST be staged and committed cleanly. Working tree must be 100% clean after commit.
-3. NO SUDO: Under NO circumstances run sudo, apt, or global system commands.
-4. BUILD & VERIFY (ANTI-CHEATING GATES):
+3. FORBIDDEN SHORTCUTS (SYMPTOM MASKING BAN):
+   ${TASK_FORBIDDEN:-"Never use thread sleeps/asyncAfter to mask race conditions, never swallow errors with try?/empty catch, never alter non-optional properties to optional just to dodge initializers, and never weaken assertions."}
+   VIOLATION OF THESE PROHIBITIONS = IMMEDIATE REJECTION & ROLLBACK.
+4. NO SUDO: Under NO circumstances run sudo, apt, or global system commands.
+5. BUILD & VERIFY (ANTI-CHEATING GATES):
    - For [CODE] tasks: Verification must 100% PASS. Test Immutability Lock: Modifying or weakening assertions in existing repro tests is strictly forbidden (Cheating). Modify product code in TARGET only.
    - For [DIAGNOSTIC] tasks: False Red-Light Prevention: Repro test must compile cleanly (Build PASS / 0 syntax errors) and fail strictly on assertion (Test FAIL). Compilation errors or missing symbols are INVALID repros. Modifying production code (Sources/, src/, etc.) is strictly forbidden.
    - Scientific [DEAD_END]: Declaring [DEAD_END] requires Proof of Negative (passing isolated unit test or runtime log proving suspect module is innocent while global symptom persists). Unsubstantiated claims are rejected as task failure.
    - Run the appropriate build and test commands (e.g. ${TASK_VERIFY:-build and test}).
-5. RETRY LIMIT: Max 3 repair attempts. If unable to pass after 3 fixes, stop immediately and record [BLOCKED].
-6. UNIFIED CONVENTIONAL COMMIT (STRICT STYLE):
+6. RETRY LIMIT: Max 3 repair attempts. If unable to pass after 3 fixes, stop immediately and record [BLOCKED].
+7. UNIFIED CONVENTIONAL COMMIT (STRICT STYLE):
    On 100% verification pass, stage modified files and commit using this clean two-part Conventional Commit format:
 
    git commit -m "<type>(<scope>): <concise action description in English <= 60 chars> ($TASK_ID)" -m "<1-3 summary bullet points of concrete changes>
@@ -641,7 +656,7 @@ Attempts: <attempts_count> | Confidence: <1.0 or confidence score>"
    * Allowed <type>: feat, fix, refactor, test, docs, perf.
    * <scope>: module or component name (e.g. calc, auth, api, ui).
    * STRICT PROHIBITION: Do NOT put raw task strings (e.g. "TASK-XXX | LEVEL: ... | TARGET: ...") into the commit title! The title line must be clean and elegant for 'git log --oneline'.
-7. TOP PREPEND PROGRESS: Write a structured <=10 lines report at the VERY TOP of $PROGRESS_FILE.
+8. TOP PREPEND PROGRESS: Write a structured <=10 lines report at the VERY TOP of $PROGRESS_FILE.
 PROMPT_EOF
 )
 
@@ -779,12 +794,13 @@ BLOCK_EOF
   else
     # Run Post-Flight Guard Validation
     GUARD_ERROR=""
-    validate_post_flight "$TASK_ID" "$TASK_TARGET" "$TASK_CONSTRAINTS" "$TASK_TITLE" "$TASK_LEVEL"
+    validate_post_flight "$TASK_ID" "$TASK_TARGET" "$TASK_CONSTRAINTS" "$TASK_TITLE" "$TASK_LEVEL" "$TASK_BASE_SHA"
     GUARD_STATUS=$?
 
     MECH_VERIFY_EXIT=0
+    VERIFY_LOG_TMP=$(mktemp)
     if [ $GUARD_STATUS -eq 0 ] && [ -n "$TASK_VERIFY" ]; then
-      # Run Mechanical Verification Audit (Mechanism 3)
+      # Run Mechanical Verification Audit (Mechanism 5)
       if echo "$TASK_TITLE $TASK_CONSTRAINTS" | grep -iqE "\[DIAGNOSTIC\]"; then
         echo "[WORKER_GUARD] 🔍 Executing Mechanical Audit ([DIAGNOSTIC]): $TASK_VERIFY"
         (
@@ -792,7 +808,12 @@ BLOCK_EOF
           export PORT="$WORKER_PORT" && \
           export TEST_PORT="$WORKER_PORT" && \
           run_with_timeout 180 bash -c "$TASK_VERIFY"
-        ) >/dev/null 2>&1 || true
+        ) > "$VERIFY_LOG_TMP" 2>&1 || true
+        # In [DIAGNOSTIC]: Ensure it did not fail from compilation error
+        if grep -iqE "error: cannot find|syntax error|compilation failed|build failed|undefined symbol" "$VERIFY_LOG_TMP" 2>/dev/null; then
+          GUARD_STATUS=4
+          GUARD_ERROR="False Red-Light Detected: Repro failed on compilation/syntax error instead of test assertion."
+        fi
       else
         echo "[WORKER_GUARD] 🔍 Executing Mechanical Audit ([CODE]): $TASK_VERIFY"
         (
@@ -800,25 +821,47 @@ BLOCK_EOF
           export PORT="$WORKER_PORT" && \
           export TEST_PORT="$WORKER_PORT" && \
           run_with_timeout 180 bash -c "$TASK_VERIFY"
-        ) >/dev/null 2>&1
+        ) > "$VERIFY_LOG_TMP" 2>&1
         MECH_VERIFY_EXIT=$?
         if [ $MECH_VERIFY_EXIT -ne 0 ]; then
           GUARD_STATUS=6
           GUARD_ERROR="Mechanical Verification Failed: '$TASK_VERIFY' returned exit code $MECH_VERIFY_EXIT (Expected 0)."
+        else
+          # Anti-Idle Check: Ensure tests executed >= 1 (prevent typo in test filter)
+          if grep -iqE "(0 tests passed|0 passed|ran 0 tests|0 suites passed|No matching tests)" "$VERIFY_LOG_TMP" 2>/dev/null; then
+            GUARD_STATUS=9
+            GUARD_ERROR="Empty Test Run Detected (Anti-Idle): VERIFY ran 0 tests. Possible test filter typo."
+          else
+            # Module Regression Check: Ensure whole package/module tests still pass
+            if [ -f "$WORK_DIR/Package.swift" ]; then
+              echo "[WORKER_GUARD] 🔍 Executing Regression Check (swift test)..."
+              (
+                cd "$WORK_DIR" && \
+                export PORT="$WORKER_PORT" && \
+                export TEST_PORT="$WORKER_PORT" && \
+                run_with_timeout 180 swift test
+              ) >/dev/null 2>&1
+              if [ $? -ne 0 ]; then
+                GUARD_STATUS=10
+                GUARD_ERROR="Regression Check Failed: Whole-suite regression tests failed."
+              fi
+            fi
+          fi
         fi
       fi
     fi
+    rm -f "$VERIFY_LOG_TMP"
 
     if [ $GUARD_STATUS -ne 0 ]; then
       echo "[$(date '+%Y-%m-%d %H:%M:%S')] 🛑 [GUARD REJECTION] Post-flight validation failed: $GUARD_ERROR"
       isolate_and_rollback_dirty_tree "$TASK_ID"
       BLOCKED_SUMMARY=$(cat <<BLOCK_EOF
-[MECHANICAL_AUDIT] Status: FAIL | Verify_Exit: $MECH_VERIFY_EXIT | Whitelist: VIOLATION | Tree: DIRTY
+[MECHANICAL_AUDIT] Status: FAIL | Verify_Exit: $MECH_VERIFY_EXIT | Whitelist: $GUARD_STATUS | Tree: DIRTY
 ================================================================================
 [BLOCKED] $TASK_ID: Guard Validation Failed
 Time: $(date '+%Y-%m-%d %H:%M:%S') | Status: GUARD_VIOLATION
 Failure Reason: $GUARD_ERROR
-Action Needed for Human: Inspect error and check target whitelist or immutability rules.
+Action Needed for Human: Inspect error and check target whitelist, forbidden shortcuts, or test assertions.
 ================================================================================
 BLOCK_EOF
 )
@@ -831,8 +874,10 @@ BLOCK_EOF
       [ -z "$DETECTED_ATTEMPTS" ] && DETECTED_ATTEMPTS=$(grep -oE 'Attempts:[[:space:]]*[0-9]+' "$PROGRESS_FILE" 2>/dev/null | head -n 1 | awk '{print $2}' || true)
       [ -z "$DETECTED_ATTEMPTS" ] && DETECTED_ATTEMPTS="1"
 
-      # Prepend machine audit stamp to progress.log (Anti-Cheating Mech 3)
-      prepend_progress_log "[MECHANICAL_AUDIT] Status: PASS | Verify_Exit: 0 | Whitelist: PASS | Tree: CLEAN | Attempts: $DETECTED_ATTEMPTS"
+      DIFF_STAT=$(git -C "$WORK_DIR" diff --stat "$TASK_BASE_SHA" HEAD 2>/dev/null | tail -n 1 | xargs || echo "0 files changed")
+
+      # Prepend machine audit stamp to progress.log (Mechanism 5)
+      prepend_progress_log "[MECHANICAL_AUDIT] Status: PASS | Verify_Exit: 0 | Tests_Run: >=1 | Whitelist: PASS | Tree: CLEAN | Diff: $DIFF_STAT | Attempts: $DETECTED_ATTEMPTS"
 
       # Success
       if [ "$WORKER_ISOLATION" = "1" ] || [ "$WORKER_ISOLATION" = "true" ]; then

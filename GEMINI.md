@@ -9,10 +9,11 @@ Strict operational guardrails for AI. Emphasize zero-context bloat and physical 
 | **A (Planner)** | Architecture, task decomposition, audit. | `/domain-modeling`, `/calibrate-task-granularity`, `/handle-worker-guidance`, `/score-worker-performance`, `/watch-worker-queue`, `/code-review` | No direct coding/debugging. No chat sleep/polling loops. No use of Worker skills. |
 | **B (Worker)** | Unattended TDD execution, atomic commits. | `/universal-build-verify`, `/record-attempt-trace`, `/manage-worker-notes` | No architectural changes. No entering chat loops. |
 
-*   **Planner Sovereign Intervention (Only step in if):**
+*   **Planner Sovereign Intervention & Clean Pivot Privilege:**
     1. Worker blocks on a Level 3 (Micro) task after 3 retries.
     2. Worker hallucinates diagnostics or fails to isolate root cause after 2-3 attempts.
-    3. Explicit user mandate. (Log root cause in `.worker.notes.md` and `docs/agents/granularity-profile.json`).
+    3. **Clean Pivot Privilege (架構斷捨離特權)**: If fixing side-effects from a previous ticket requires >2 patch tickets or triggers `[SCOPE_BLOCKED]` with unexpected coupling, Planner MUST NOT stack patch-on-patch. Planner has sovereign privilege to rollback (`git reset --hard nightshift-session-base`) and re-issue a unified vertical-slice ticket or Expand-Migrate-Contract plan.
+    4. Explicit user mandate. (Log root cause in `.worker.notes.md` and `docs/agents/granularity-profile.json`).
 
 ### Skill Catalog & Locations
 
@@ -43,18 +44,19 @@ All skills reside in `.agents/skills/` (and `.skills/`). Reference by exact dire
 
 ## 3. Task Queue (`tasks.txt`) & Granularity
 
-**Schema:** `TASK-XXX | LEVEL: 1-3 | [AFTER: <id>] | TARGET: <paths> | ACTION: <logic> | VERIFY: <test_cmd> | CONSTRAINTS: <limits>`
+**Schema:** `TASK-XXX | LEVEL: 1-3 | [AFTER: <id>] | TARGET: <paths> | ACTION: <logic> | VERIFY: <test_cmd> | FORBIDDEN_SHORTCUTS: <hacks> | CONSTRAINTS: <limits>`
 
-| Level | Granularity | `[CODE]` Scope (Strict 1 Seam) | `[DIAGNOSTIC]`/`[RESEARCH]` Scope (Full-Spectrum) |
+| Level | Granularity | Planner Instruction Style (No Arbitrary File Caps) | Blast Radius Limits |
 | :---: | :--- | :--- | :--- |
-| **1** | Macro | Feature public interface & tests. Deletion unlimited. | End-to-end event loops, subsystem topology. |
-| **2** | Meso | Component slice (1 module unit). Deletion <= 150 lines. | Cross-module contract, state synchronization. |
-| **3** | Micro | Specific function / exact math. Deletion <= 40 lines. | Timing calculations, race conditions, exact logs. |
+| **1** | Macro (5⭐) | **Intent-Driven**: High-level goal & acceptance intent. Declare all slice targets in `TARGET:`. | Deletion unlimited (bounded by `TARGET:`). |
+| **2** | Meso (3-4⭐) | **Structural Specification**: Explicit target files, function signatures, and error boundaries. | Deletion <= 150 lines. |
+| **3** | Micro (1-2⭐) | **Blueprint Mode**: Zero-ambiguity type signature diffs & step-by-step pseudocode in `ACTION:`. | Deletion <= 40 lines. |
 
 *   **Task Archetypes & Refactoring**:
     *   `[CODE: FIX]`: General bugfix. `Tests/` immutable. Modifies product code in `TARGET:` only.
     *   `[CODE: REFACTOR]`: Interface refactor. `Tests/` and `Mocks/` permitted in `TARGET:`. Enforces **Assertion Non-Decrease Gate** and structural closure in `VERIFY:` (e.g. `<test_cmd> && ! grep -rn "<Deprecated_Symbol>" Sources/`).
     *   `[CODE: EXPAND]` / `[CODE: MIGRATE]` / `[CODE: CONTRACT]`: Phased large refactoring progression.
+*   **Forbidden Shortcuts (Symptom Masking Ban)**: Mandatory `FORBIDDEN_SHORTCUTS:` field. Pre-emptively bans hacky workarounds (e.g. thread sleeps / `asyncAfter`, swallowing errors via `try?`, converting non-optional to optional, deleting assertions).
 *   **Hot Preemption & Live Feedback**: Injected at line 1 via `scripts/reorder_queue.sh`. Pre-existing tasks for other modules yield line 1 and resume after.
     *   *Known Fix*: Inject single-seam `[CODE]` directly at line 1.
     *   *Unknown Bug*: Inject **solitary** `[DIAGNOSTIC]` task only.
@@ -68,7 +70,7 @@ All skills reside in `.agents/skills/` (and `.skills/`). Reference by exact dire
     *   *False Red-Light Prevention*: In `[DIAGNOSTIC]`, repro test must compile cleanly (`Build PASS` / 0 syntax errors) and fail strictly on assertion (`Test FAIL`). Syntax/compiler errors or missing symbols are strictly Invalid Repros (Cheating/Rejection). Modifying product code (`Sources/`, `src/`) is strictly forbidden during diagnostics.
     *   *Test Immutability & Assertion Non-Decrease*: In `[CODE: FIX]`, modifying or weakening assertions in existing repro tests is strictly forbidden. In `[CODE: REFACTOR]`, `Tests/` may be updated only when in `TARGET:`, and total assertion count post-commit must be `>=` pre-commit (`XCTAssert`, `#expect`, `assert`, `expect(`, `self.assert`).
     *   *Proof of Negative for `[DEAD_END]`*: Declaring `[DEAD_END]` requires tangible proof of negative (isolated unit test passing or runtime log snippet proving suspect module is innocent while global symptom persists). Speculative exclusions = Task Failure.
-    *   *5-Line Code Probe*: Verify line claims in `SUMMARY.md` (`File#L<N>`) using `scripts/probe_line.sh <File>#L<N>` (or `sed -n '<N-3>,<N+3>p' <File>`). Misaligned line references trigger immediate credit demotion to 1 Star.
+    *   *Interface Skeleton & 10-Line Code Probe*: Worker must append pure declaration skeletons and 10-line context slices (`scripts/extract_skeleton.sh <File>#L<N>`) to `SUMMARY.md`. Planner verifies line claims using `scripts/probe_line.sh <File>#L<N> 10`. Misaligned line references trigger immediate credit demotion to 1 Star.
 *   **Compiler Probe & Scope Blocked Escape Hatch**:
     *   *Compiler Probe in `[RESEARCH]`*: In addition to `grep`, Worker is authorized to temporarily modify interface signatures and execute `build` to capture 100% of affected call-sites from compiler diagnostics into `SUMMARY.md`. Mandatory `git restore .` immediately after.
     *   *`[SCOPE_BLOCKED]` No-Fault Escalation*: If compiler errors hit downstream files outside declared `TARGET:`, Worker MUST NOT touch unlisted files. Emit `STATUS: SCOPE_BLOCKED (Need Target: <File>#L<Line>)`. Sentinel/Planner wakes up to expand `TARGET:` or decompose; **zero star deduction** in `granularity-profile.json`.
@@ -98,7 +100,8 @@ All skills reside in `.agents/skills/` (and `.skills/`). Reference by exact dire
 *   **Inter-AI Language**: All artifacts (`tasks.txt`, logs, commits) MUST be **English**. (Terminal A chat can be Chinese).
 *   **Rapid Acceptance & Anti-Rubber-Stamp**: 
     *   Worker prepends `<= 15 lines` to `progress.log`. Daemon stamps machine-certified `[MECHANICAL_AUDIT]` at line 1. Report Executive Summaries in `.reports/<issue-slug>/` `<= 30 lines`.
-    *   **Fast-Track (Green Light, <= 5s)**: Permitted ONLY if line 1 has `[MECHANICAL_AUDIT] Status: PASS | Verify_Exit: 0 | Whitelist: PASS | Tree: CLEAN` AND Worker reports `Attempts: 1 | Confidence: HIGH`. Merge immediately via `git merge --ff-only feature/worker-frontier`.
+    *   **Double-Funnel Mechanical Audit**: `worker.sh` mechanically re-runs verification, checks Anti-Idle (`Tests_Run >= 1`), runs whole-module regression tests, and records `Diff: <diff_stat>`.
+    *   **Fast-Track (Green Light, <= 5s)**: Permitted ONLY if line 1 has `[MECHANICAL_AUDIT] Status: PASS | Verify_Exit: 0 | Tests_Run: >=1 | Whitelist: PASS | Tree: CLEAN` AND Worker reports `Attempts: 1 | Confidence: HIGH`. Merge immediately via `git merge --ff-only feature/worker-frontier`.
     *   **Deep Audit Required (Yellow Light)**: Mandatory IF `[MECHANICAL_AUDIT]` is missing/failed, `Attempts > 1`, `Confidence < 1.0`, line claim requires verification (`scripts/probe_line.sh`), or critical architectural seam. Run `git show --stat` or targeted test.
     *   **Planner Prohibitions**: Never run bare `git log`, unbounded `git diff`, or `git log -p` in Terminal A.
 *   **Forbidden Commands**: `git push`, `git reset --hard` (except script rollback), `git clean -f`, `sudo`, `apt/yum`.
