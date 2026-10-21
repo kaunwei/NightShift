@@ -32,7 +32,7 @@ Planner sizes and sequences tickets based on verified seams, leaving execution r
 - **Cold-Start**: Dispatch `[CODE]` directly if targets are known (<= 2 files, leaf fix). Dispatch `[RESEARCH]` (`VERIFY: REPORT_ONLY`) on Task 1 when seams or callers are unknown.
 - **Continuous Slices**: Chain `[CODE]` tasks directly along the verified seam.
 - **Distant Seam Audit**: When referencing older modules or if memory is uncertain, verify via `git grep -n "<symbol>" <path>` or `git log -n 1 -- <path>` instead of reading files or guessing.
-- **Discrepancy Invalidation**: Codebase contradiction drops confidence to zero $\rightarrow$ dispatch `[RESEARCH]` or trigger Clean Pivot. Never stack speculative fixes.
+- **Discrepancy Invalidation**: Disk contradiction drops confidence to zero $\rightarrow$ dispatch `[RESEARCH]` or trigger Clean Pivot. Never stack speculative fixes.
 
 ### 2. The 100% Boundary Gate
 - **Known Seam (100% confirmed, <= 2 files, leaf fix, or active slice)**: Dispatch `[CODE]` directly.

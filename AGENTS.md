@@ -46,7 +46,7 @@ Operational guardrails for autonomous dual-terminal execution. Zero context bloa
   - *Cold-Start*: Dispatch `[CODE]` directly if targets are known (<= 2 files, leaf fix). Dispatch `[RESEARCH]` (`VERIFY: REPORT_ONLY`) on Task 1 when seams or callers are unknown.
   - *Continuous Slices*: Chain `[CODE]` tasks directly along the verified seam.
   - *Distant Seam Audit*: When referencing older modules or if memory is uncertain, verify via `git grep -n "<symbol>" <path>` or `git log -n 1 -- <path>` instead of reading files or guessing.
-  - *Discrepancy Invalidation*: Codebase contradiction drops confidence to zero $\rightarrow$ dispatch `[RESEARCH]` or trigger Clean Pivot. Never stack speculative fixes.
+  - *Discrepancy Invalidation*: Disk contradiction drops confidence to zero $\rightarrow$ dispatch `[RESEARCH]` or trigger Clean Pivot. Never stack speculative fixes.
 - **Progression**: Top-down (L1 -> L2 -> L3 Diagnostic -> Code). Planner uses Matt's foundations (`/domain-modeling`, `/codebase-design`, `/tdd`, `/diagnosing-bugs`) to compose tickets; at Level 3 (Micro), Planner provides exact TDD blueprints (Red contract -> Green contract -> Seam boundary) so Worker's `/tdd` executes without guesswork.
 
 ## 4. Honest Treaty, Verification Gates & Escalation
@@ -60,7 +60,7 @@ Operational guardrails for autonomous dual-terminal execution. Zero context bloa
 - **Dedicated Mechanical Audits by Archetype**:
   `worker.sh` evaluates tasks via decoupled gates to eliminate shell-quoting accidents:
   - `[CODE]`: Test suite exit 0, Anti-Idle (`Tests_Run >= 1`), whitelist check, blast radius limits.
-  - `[RESEARCH]`: Artifact Integrity (non-empty `SUMMARY.md` with markdown headings), Clean Tree (zero uncommitted/modified product code), Pointer Validity (sampled `<File>#L<N>` verified in repo).
+  - `[RESEARCH]`: Artifact Integrity (non-empty `SUMMARY.md` with markdown headings), Clean Tree (zero uncommitted/modified product code), Pointer Validity (sampled `<File>#L<N>` verified on disk).
   - `[DIAGNOSTIC]`: Production code lock, clean build, repro failure strictly on test assertion.
 - **Scope & Compiler Probes**:
   - *Compiler Probe*: In `[RESEARCH]`, Worker may temporarily alter signatures and run `build` to capture 100% of affected call-sites into `SUMMARY.md`, followed by mandatory `git restore .`.
