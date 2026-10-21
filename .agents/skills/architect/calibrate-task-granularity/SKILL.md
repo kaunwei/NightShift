@@ -26,19 +26,20 @@ When authoring `ACTION:` for Level 3 tickets, Planner MUST follow Matt's `/tdd` 
 
 ## 2. Dispatch SOP: [CODE] vs [RESEARCH] (100% Boundary Rule)
 
-Before drafting tickets, verify ground truth physically. Never trust task memory from 5–10 steps ago; never clutter git with tracking tags.
+Before drafting tickets, adhere to demand-driven verification. Never guess in the dark; never clutter git with tracking tags.
 
-### Physical Ground-Truth Audit (Anti-Hallucination Gate)
-Cross-check candidate seams against disk using two targeted, zero-context commands:
-1. **Current Existence**: Run `git grep -n "<symbol>" <path>` or `test -f <path>`. What is not on disk does not exist.
-2. **Last Action**: Run `git log -n 1 -- <path>` (or `-S "<symbol>"`). Cross-check commit metadata (`Task:`, `Scope:`, `Verification:`) against Planner intent. All tasks were dispatched by Planner; the commit confirms whether reality matches intent.
-3. **Discrepancy Invalidation**: Contradiction drops confidence to zero. Invalidate memory immediately and dispatch `[RESEARCH]` (`VERIFY: REPORT_ONLY`). Never guess in the dark, and never read whole files in Terminal A.
+### 1. Active Slice vs. Demand-Driven Audit
+- **Active Slice (Continuous Progression)**: Trust working memory for contiguous tasks within the current module/feature. Dispatch `[CODE]` directly with zero intermediate research or audits.
+- **Revisit / Cross-Seam Audit**: Only when referencing older modules or crossing boundaries, run a 1-line physical check (< 20 tokens) instead of reading files or relying on stale memory:
+  1. **Current Existence**: `git grep -n "<symbol>" <path>` or `test -f <path>`.
+  2. **Last Action**: `git log -n 1 -- <path>` (or `-S "<symbol>"`).
+- **Discrepancy Invalidation**: Dispatch `[RESEARCH]` (`VERIFY: REPORT_ONLY`) ONLY when disk contradicts memory or callers are genuinely unknown. Never guess in Terminal A.
 
-### The 100% Boundary Gate
-- **Known Seam (100% of affected files confirmed, <= 2 files, leaf fix)**: Dispatch `[CODE]` directly. Zero research latency.
+### 2. The 100% Boundary Gate
+- **Known Seam (100% of affected files confirmed, <= 2 files, leaf fix, or active slice)**: Dispatch `[CODE]` directly. Zero research latency.
 - **Unknown Boundary (unknown callers, interface refactors, cross-module seams)**: Dispatch `[RESEARCH]` first (`VERIFY: REPORT_ONLY`). Let Worker probe call-sites.
 
-### Hierarchical Scoping
+### 3. Hierarchical Scoping
 - **Level 1 (Macro / Intent)**: Scope by directory or subsystem seam (`TARGET: Sources/Audio/`). Never guess individual leaf files without research.
 - **Level 2/3 (Meso / Micro)**: Scope by explicit file list verified via compiler probes in `SUMMARY.md`.
 
