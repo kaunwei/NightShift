@@ -365,15 +365,48 @@ validate_post_flight() {
     return 1
   fi
 
-  # 2. Check target whitelist
+  local committed_files
+  committed_files=$(git -C "$WORK_DIR" diff-tree --no-commit-id --name-only -r HEAD 2>/dev/null || true)
+
+  # 2. [Anti-Cheating Mech 1] Diagnostic Product-Code Lock
+  # Modifying product code in [DIAGNOSTIC] is strictly forbidden.
+  if echo "$task_title $task_constraints" | grep -iqE "\[DIAGNOSTIC\]"; then
+    local committed_prod_files
+    committed_prod_files=$(echo "$committed_files" | grep -iE '^(Sources|src|app|lib)/' || true)
+    if [ -n "$committed_prod_files" ]; then
+      echo "[WORKER_GUARD] ❌ Diagnostic Violation! Product code modified during [DIAGNOSTIC] task:"
+      echo "$committed_prod_files"
+      GUARD_ERROR="Diagnostic Violation: Modifying production code in [DIAGNOSTIC] is strictly forbidden. Only tests and .reports/ allowed."
+      return 4
+    fi
+  fi
+
+  # 3. [Anti-Cheating Mech 2] Test Immutability Gate in [CODE] tasks
+  # Worker must not modify tests during [CODE] fixes unless tests are declared in TARGET.
+  if ! echo "$task_title $task_constraints" | grep -iqE "\[DIAGNOSTIC\]|\[RESEARCH\]"; then
+    local committed_test_files
+    committed_test_files=$(echo "$committed_files" | grep -iE '(^tests/|^Tests/|Test\.[a-z]+$|_test\.[a-z]+$)' || true)
+    if [ -n "$committed_test_files" ]; then
+      if ! echo "$task_target" | grep -iqE "(tests/|Tests/|test)" && ! echo "$task_constraints" | grep -iqE "test refactor approved"; then
+        echo "[WORKER_GUARD] ❌ Test Immutability Violation! Test files modified during [CODE] fix without explicit TARGET authorization:"
+        echo "$committed_test_files"
+        GUARD_ERROR="Test Immutability Violation: Modified test files without authorization in TARGET ($committed_test_files)."
+        return 5
+      fi
+    fi
+  fi
+
+  # 4. Check target whitelist
   if [ -n "$task_target" ]; then
-    # Check if multi-interface refactor or unrestricted is approved
-    if echo "$task_constraints $task_title" | grep -iqE "multi-interface|unrestricted|\[REFACTOR\]|\[DIAGNOSTIC\]|\[RESEARCH\]"; then
+    # Unrestricted bypass only if explicitly stated
+    if echo "$task_constraints" | grep -iqE "unrestricted"; then
+      return 0
+    fi
+    # Diagnostics/research bypass whitelist if they only touched tests/reports (already guarded above)
+    if echo "$task_title $task_constraints" | grep -iqE "\[DIAGNOSTIC\]|\[RESEARCH\]"; then
       return 0
     fi
 
-    local committed_files
-    committed_files=$(git -C "$WORK_DIR" diff-tree --no-commit-id --name-only -r HEAD 2>/dev/null || true)
     if [ -n "$committed_files" ]; then
       local target_tokens
       target_tokens=$(echo "$task_target" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]')
@@ -398,6 +431,13 @@ validate_post_flight() {
             break
           fi
         done <<< "$target_tokens"
+
+        if [ $matched -eq 0 ]; then
+          # Check if multi-interface refactor is approved in constraints
+          if echo "$task_constraints" | grep -iqE "multi-interface"; then
+            matched=1
+          fi
+        fi
 
         if [ $matched -eq 0 ]; then
           echo "[WORKER_GUARD] ❌ Target Whitelist Violation! File '$f' is not declared in TARGET ($task_target)."
@@ -544,7 +584,11 @@ MANDATORY EXECUTION RULES:
    - STRICT PROHIBITION: Never modify unlisted files (e.g. dummy main.swift or configs) just to satisfy compiler errors! If unlisted dependencies are missing, STOP immediately and emit [NEED_DECOMPOSITION].
    - All tests and modified files MUST be staged and committed cleanly. Working tree must be 100% clean after commit.
 3. NO SUDO: Under NO circumstances run sudo, apt, or global system commands.
-4. BUILD & VERIFY: Run the appropriate build and test commands (e.g. ${TASK_VERIFY:-build and test}).
+4. BUILD & VERIFY (ANTI-CHEATING GATES):
+   - For [CODE] tasks: Verification must 100% PASS. Test Immutability Lock: Modifying or weakening assertions in existing repro tests is strictly forbidden (Cheating). Modify product code in TARGET only.
+   - For [DIAGNOSTIC] tasks: False Red-Light Prevention: Repro test must compile cleanly (Build PASS / 0 syntax errors) and fail strictly on assertion (Test FAIL). Compilation errors or missing symbols are INVALID repros. Modifying production code (Sources/, src/, etc.) is strictly forbidden.
+   - Scientific [DEAD_END]: Declaring [DEAD_END] requires Proof of Negative (passing isolated unit test or runtime log proving suspect module is innocent while global symptom persists). Unsubstantiated claims are rejected as task failure.
+   - Run the appropriate build and test commands (e.g. ${TASK_VERIFY:-build and test}).
 5. RETRY LIMIT: Max 3 repair attempts. If unable to pass after 3 fixes, stop immediately and record [BLOCKED].
 6. UNIFIED CONVENTIONAL COMMIT (STRICT STYLE):
    On 100% verification pass, stage modified files and commit using this clean two-part Conventional Commit format:
@@ -680,15 +724,44 @@ BLOCK_EOF
     GUARD_ERROR=""
     validate_post_flight "$TASK_ID" "$TASK_TARGET" "$TASK_CONSTRAINTS" "$TASK_TITLE"
     GUARD_STATUS=$?
+
+    MECH_VERIFY_EXIT=0
+    if [ $GUARD_STATUS -eq 0 ] && [ -n "$TASK_VERIFY" ]; then
+      # Run Mechanical Verification Audit (Mechanism 3)
+      if echo "$TASK_TITLE $TASK_CONSTRAINTS" | grep -iqE "\[DIAGNOSTIC\]"; then
+        echo "[WORKER_GUARD] 🔍 Executing Mechanical Audit ([DIAGNOSTIC]): $TASK_VERIFY"
+        (
+          cd "$WORK_DIR" && \
+          export PORT="$WORKER_PORT" && \
+          export TEST_PORT="$WORKER_PORT" && \
+          run_with_timeout 180 bash -c "$TASK_VERIFY"
+        ) >/dev/null 2>&1 || true
+      else
+        echo "[WORKER_GUARD] 🔍 Executing Mechanical Audit ([CODE]): $TASK_VERIFY"
+        (
+          cd "$WORK_DIR" && \
+          export PORT="$WORKER_PORT" && \
+          export TEST_PORT="$WORKER_PORT" && \
+          run_with_timeout 180 bash -c "$TASK_VERIFY"
+        ) >/dev/null 2>&1
+        MECH_VERIFY_EXIT=$?
+        if [ $MECH_VERIFY_EXIT -ne 0 ]; then
+          GUARD_STATUS=6
+          GUARD_ERROR="Mechanical Verification Failed: '$TASK_VERIFY' returned exit code $MECH_VERIFY_EXIT (Expected 0)."
+        fi
+      fi
+    fi
+
     if [ $GUARD_STATUS -ne 0 ]; then
       echo "[$(date '+%Y-%m-%d %H:%M:%S')] 🛑 [GUARD REJECTION] Post-flight validation failed: $GUARD_ERROR"
       isolate_and_rollback_dirty_tree "$TASK_ID"
       BLOCKED_SUMMARY=$(cat <<BLOCK_EOF
+[MECHANICAL_AUDIT] Status: FAIL | Verify_Exit: $MECH_VERIFY_EXIT | Whitelist: VIOLATION | Tree: DIRTY
 ================================================================================
 [BLOCKED] $TASK_ID: Guard Validation Failed
 Time: $(date '+%Y-%m-%d %H:%M:%S') | Status: GUARD_VIOLATION
 Failure Reason: $GUARD_ERROR
-Action Needed for Human: Declare target in TARGET, add 'CONSTRAINTS: Multi-interface refactor approved', or split task.
+Action Needed for Human: Inspect error and check target whitelist or immutability rules.
 ================================================================================
 BLOCK_EOF
 )
@@ -696,6 +769,14 @@ BLOCK_EOF
       echo "[$(date '+%Y-%m-%d %H:%M:%S')] [FAILED] $TASK_TITLE [GUARD_VIOLATION]" >> "$TASKS_DONE_FILE"
       update_status "BLOCKED" "$TASK_TITLE (GUARD VIOLATION)" "$DURATION" "$CURRENT_IDX" "$TOTAL_COUNT" "$((REMAINING_COUNT - 1))" "${PERCENT_START}%" "$BAR_START"
     else
+      # Extract actual attempts count from output or progress.log
+      DETECTED_ATTEMPTS=$(grep -oE 'Attempts:[[:space:]]*[0-9]+' "$CMD_OUTPUT_TMP" 2>/dev/null | head -n 1 | awk '{print $2}' || true)
+      [ -z "$DETECTED_ATTEMPTS" ] && DETECTED_ATTEMPTS=$(grep -oE 'Attempts:[[:space:]]*[0-9]+' "$PROGRESS_FILE" 2>/dev/null | head -n 1 | awk '{print $2}' || true)
+      [ -z "$DETECTED_ATTEMPTS" ] && DETECTED_ATTEMPTS="1"
+
+      # Prepend machine audit stamp to progress.log (Anti-Cheating Mech 3)
+      prepend_progress_log "[MECHANICAL_AUDIT] Status: PASS | Verify_Exit: 0 | Whitelist: PASS | Tree: CLEAN | Attempts: $DETECTED_ATTEMPTS"
+
       # Success
       if [ "$WORKER_ISOLATION" = "1" ] || [ "$WORKER_ISOLATION" = "true" ]; then
         publish_preview_artifact "$TASK_ID" "$TASK_TITLE"

@@ -15,7 +15,8 @@ Truthfully record execution steps, retry attempts, and confidence scores into `p
    - `HIGH`: Tests passed 100%, 0 warnings, standard conventions.
    - `MEDIUM`: Tests passed, but required 1-2 retries to align fixtures/linkers.
    - `LOW`: Tests passed, but code feels brittle or edge cases remain unverified.
-5. **No Guessing**: For contradictory specs or ambiguous interfaces, emit `[NEED_GUIDANCE]` immediately.
+5. **No Guessing**: For contradictory specs or ambiguous interfaces, emit `[NEED_DECOMPOSITION]` or `[NEED_GUIDANCE]` immediately.
+6. **Mechanical Verification Alignment**: Daemon mechanically audits tests and stamps `[MECHANICAL_AUDIT]` above this entry. Falsifying `Confidence` or `Attempts` triggers immediate cheating rejection.
 
 ## Log Entry Template (<= 15 lines)
 

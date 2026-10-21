@@ -49,7 +49,11 @@ while true; do
 
   # Check for completion (queue is empty and worker is in IDLE or STOPPED state)
   if [ "$REMAINING_TASKS" -eq 0 ] && { [ "$STATE" = "IDLE" ] || [ "$STATE" = "STOPPED" ]; }; then
-    echo "[SENTINEL_COMPLETED] All tasks completed successfully in ${ELAPSED}s."
+    if grep -q "\[MECHANICAL_AUDIT\] Status: PASS" "$PROGRESS_FILE" 2>/dev/null; then
+      echo "[SENTINEL_COMPLETED] All tasks completed successfully in ${ELAPSED}s. Mechanical Audit: PASS."
+    else
+      echo "[SENTINEL_COMPLETED] All tasks completed in ${ELAPSED}s. Note: Top progress.log lacks passing MECHANICAL_AUDIT."
+    fi
     exit 0
   fi
 

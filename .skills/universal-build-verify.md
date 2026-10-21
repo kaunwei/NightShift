@@ -17,15 +17,19 @@ MANDATORY execution protocol for Background Worker (Terminal B) when processing 
     *   *Deliberate Refactors*: Large-scale multi-interface refactors must be declared in `TARGET` or marked `CONSTRAINTS: Multi-interface refactor approved`.
     *   *No Silent Compile-Fix Edits*: Never touch unlisted files (e.g. creating dummy `main.swift` or modifying configs) just to satisfy compilers. If an unlisted dependency is missing, STOP and emit `[NEED_DECOMPOSITION]`.
     *   `[DIAGNOSTIC] / [RESEARCH]` tasks have full authority to trace across all layers (UI -> OS).
+*   **Test Immutability Gate**: During `[CODE]` bugfix tasks, modifying or weakening assertions in existing repro tests is strictly forbidden (Cheating). Worker can only touch product files declared in `TARGET:`. Test files cannot be altered unless explicitly declared in `TARGET:`.
 
 ## 2. Execution Archetypes
 *   **[CODE] / [REFACTOR]**: Follow Red-Green-Refactor TDD. Implement -> Unit Test -> GUI Smoke Check (if applicable).
 *   **[RESEARCH] / [BENCHMARK]**: Gather facts/metrics -> Format into Markdown/CSV -> Output to `.reports/<issue-slug>/` (or `docs/research/` if permanent).
 *   **[DIAGNOSTIC]**: Isolate root cause with minimal failing tests or exact error traces. Output to `.reports/<issue-slug>/<phase>.md` and update `SUMMARY.md`. **Reject pure textual speculation.**
+    *   *Valid Red-Light Rule*: Repro tests MUST compile cleanly (`Build PASS` / 0 syntax errors) and fail strictly on assertion (`Test FAIL`). Compilation failures or missing symbols are Invalid Repros.
+    *   *Production Code Lock*: Strictly forbidden from modifying production code (`Sources/`, `src/`, etc.) during diagnostics. Only tests and `.reports/` may be touched.
 
 ## 3. Honest Treaty (Anti-Hallucination)
 *   **Zero-Guessing**: If legacy code/logs are obscure, state ONLY verified facts/paths. Label all interpretations as `Hypothesis`.
 *   **Evidence Gate**: Never claim success without verifiable proof (test pass output, raw log snippets, or exact file line pointers).
+*   **Proof of Negative for [DEAD_END]**: Declaring `[DEAD_END]` requires empirical proof of negative (isolated unit test passing or runtime log snippet proving the suspect module functions correctly while symptom persists). Unsubstantiated exclusions are treated as task failure.
 
 ## 4. Retry Limits & Clean Resets
 *   **Max 3 Attempts**:
@@ -38,6 +42,7 @@ MANDATORY execution protocol for Background Worker (Terminal B) when processing 
 ## 5. Protocol & Evidence Logging (Token-Lean)
 
 *   **Log Limits**: `progress.log` entries `<= 15 lines`. Report Executive Summaries in `.reports/<issue-slug>/` `<= 30 lines`. No verbose prose.
+*   **Mechanical Audit Stamp**: `worker.sh` mechanically re-runs verification and stamps `[MECHANICAL_AUDIT] Status: PASS | Verify_Exit: 0 | Whitelist: PASS | Tree: CLEAN | Attempts: <N>` directly at line 1 of `progress.log`. Planner Fast-Track requires this stamp.
 *   **Auto-Commit Standard (English ONLY)**:
     ```bash
     git commit -m "<type>(<scope>): <concise action <= 60 chars> (<task_id>)" -m "<1-3 summary bullets>

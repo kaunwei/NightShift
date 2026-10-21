@@ -15,7 +15,7 @@ Audit worker execution trace from `progress.log` and update subsystem capability
 | ⭐⭐⭐⭐ | **4 Stars** | Passed in 2 attempts (1 self-healed retry), green tests. | Maintain current Level (1 or 2). |
 | ⭐⭐⭐ | **3 Stars** | Passed on 3rd attempt (2 retries needed). | Demote subsequent tasks in this module to Level 2. |
 | ⭐⭐ | **2 Stars** | Raised `[NEED_GUIDANCE]` or `[NEED_DECOMPOSITION]`. | Demote to Level 2/3, provide guidance. |
-| ⭐ | **1 Star** | Blocked after 3 retries, timed out, or crashed. | Demote to Level 3. Re-architect with user. |
+| ⭐ | **1 Star** | Blocked after 3 retries, timed out, crashed, or caught by anti-cheating guard (tampering with tests, invalid repro false red-light, or line probe mismatch). | Demote to Level 3. Re-architect with user. |
 
 ## Process
 

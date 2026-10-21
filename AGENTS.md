@@ -60,6 +60,11 @@ All skills reside in `.agents/skills/` (and `.skills/`). Reference by exact dire
 ## 4. Honest Treaty & Escalation
 
 *   **Zero-Guessing**: Worker MUST provide verifiable evidence (test outputs/stack traces) for diagnostics. Vague reports are invalid.
+*   **Anti-Cheating & Verification Gates**:
+    *   *False Red-Light Prevention*: In `[DIAGNOSTIC]`, repro test must compile cleanly (`Build PASS` / 0 syntax errors) and fail strictly on assertion (`Test FAIL`). Syntax/compiler errors or missing symbols are strictly Invalid Repros (Cheating/Rejection). Modifying product code (`Sources/`, `src/`) is strictly forbidden during diagnostics.
+    *   *Test Immutability Gate*: In `[CODE]` fixes, modifying or weakening assertions in existing repro tests is strictly forbidden. Tests are immutable unless explicitly declared in `TARGET:` or flagged `CONSTRAINTS: Test refactor approved`.
+    *   *Proof of Negative for `[DEAD_END]`*: Declaring `[DEAD_END]` requires tangible proof of negative (isolated unit test passing or runtime log snippet proving suspect module is innocent while global symptom persists). Speculative exclusions = Task Failure.
+    *   *5-Line Code Probe*: Verify line claims in `SUMMARY.md` (`File#L<N>`) using `scripts/probe_line.sh <File>#L<N>` (or `sed -n '<N-3>,<N+3>p' <File>`). Misaligned line references trigger immediate credit demotion to 1 Star.
 *   **Single-Seam vs. Full-Spectrum**:
     *   *Seam Scope*: A seam is not 1 file; it covers all cohesive objects, interfaces, protocols, and tests supporting the slice.
     *   *Multi-Interface & Refactor Exception*: Legitimate cross-interface tasks or broad refactors must be declared in `TARGET: <path1>, <path2>, <dir>/` (Declare to Authorize) or flagged in `CONSTRAINTS: Multi-interface refactor approved`. Undeclared cross-subsystem tasks are rejected with `[NEED_DECOMPOSITION]`.
@@ -82,8 +87,9 @@ All skills reside in `.agents/skills/` (and `.skills/`). Reference by exact dire
 
 *   **Inter-AI Language**: All artifacts (`tasks.txt`, logs, commits) MUST be **English**. (Terminal A chat can be Chinese).
 *   **Rapid Acceptance & Anti-Rubber-Stamp**: 
-    *   Worker prepends `<= 15 lines` to `progress.log`. Planner reads `head -n 15 progress.log`. Report Executive Summaries in `.reports/<issue-slug>/` `<= 30 lines`. 
-    *   **Deep Audit Required** (`git show --stat`, targeted test) IF `Attempts > 1`, `Confidence < 1.0`, or critical architectural seam.
+    *   Worker prepends `<= 15 lines` to `progress.log`. Daemon stamps machine-certified `[MECHANICAL_AUDIT]` at line 1. Report Executive Summaries in `.reports/<issue-slug>/` `<= 30 lines`.
+    *   **Fast-Track (Green Light, <= 5s)**: Permitted ONLY if line 1 has `[MECHANICAL_AUDIT] Status: PASS | Verify_Exit: 0 | Whitelist: PASS | Tree: CLEAN` AND Worker reports `Attempts: 1 | Confidence: HIGH`. Merge immediately via `git merge --ff-only feature/worker-frontier`.
+    *   **Deep Audit Required (Yellow Light)**: Mandatory IF `[MECHANICAL_AUDIT]` is missing/failed, `Attempts > 1`, `Confidence < 1.0`, line claim requires verification (`scripts/probe_line.sh`), or critical architectural seam. Run `git show --stat` or targeted test.
     *   **Planner Prohibitions**: Never run bare `git log`, unbounded `git diff`, or `git log -p` in Terminal A.
 *   **Forbidden Commands**: `git push`, `git reset --hard` (except script rollback), `git clean -f`, `sudo`, `apt/yum`.
 *   **Git Commit Standard (Mandatory for A & B)**:
