@@ -26,15 +26,19 @@ When authoring `ACTION:` for Level 3 tickets, Planner MUST follow Matt's `/tdd` 
 
 ## 2. Dispatch SOP: [CODE] vs [RESEARCH] (100% Boundary Rule)
 
-Before drafting tickets, Planner evaluates whether to research or code:
-1. **Ground Truth Baseline**: Check `git log -n 1` for the latest verified frontier and verification command. Hold zero unverified memory.
+Before drafting tickets, Planner evaluates whether to research or code without relying on unverified memory or creating Git tags:
+
+1. **Two-Step Ground Truth Cross-Check (Anti-Hallucination Gate)**:
+   Tasks are dispatched by Planner, but memory drifts over 5-10 tasks. Instead of guessing or reading large files:
+   - **Physical Existence ("現在有沒有")**: Confirm symbol or file exists on disk via fast, zero-bloat commands (`git grep -n "<symbol>" <path>` or `test -f <path>`).
+   - **Last-Touch Action ("上一動")**: Check the last commit touching that specific seam via `git log -n 1 -- <path>` (or `git log -n 1 -S "<symbol>"`). Cross-reference commit metadata (`Task: <id>`, `Scope: <files>`, `Verification: <cmd>`) against Planner's task memory.
+   - **Discrepancy Invalidation**: If disk state or git metadata contradicts Planner's impression, purge memory immediately, treat the seam as 0% known, and dispatch `[RESEARCH]` (`VERIFY: REPORT_ONLY`).
 2. **The 100% Boundary Gate**:
    - **Known Seam (100% of affected files known, <= 2 files, or leaf bugfix)**: Dispatch `[CODE]` directly. Zero research latency.
    - **Unknown Boundary (unknown callers, interface refactoring, cross-module seams)**: Dispatch `[RESEARCH]` with `VERIFY: REPORT_ONLY`. Never guess dependencies or read whole codebases in Terminal A.
 3. **Hierarchical Scoping**:
    - *Level 1 (Macro / Unresearched)*: Scope by directory or subsystem seam (`TARGET: Sources/Audio/`). Do not guess individual files in the dark.
    - *Level 2/3 (Meso/Micro / Researched)*: Scope by exact files captured in `SUMMARY.md` from compiler probes.
-4. **Discrepancy Purge**: If any past log or note contradicts code on disk, purge the stale note immediately and re-anchor via `[RESEARCH]`.
 
 ## 3. Multi-Interface & Refactor Authorization Gates
 

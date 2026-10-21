@@ -42,10 +42,13 @@ Operational guardrails for autonomous dual-terminal execution. Zero context bloa
   - `[RESEARCH]`: Topology & seam discovery. Product code strictly read-only. Produces `.reports/<slug>/SUMMARY.md`. `VERIFY:` defaults to automatic artifact/cleanliness audit or `REPORT_ONLY`.
 - **Mandatory `FORBIDDEN_SHORTCUTS:`**: Explicitly ban hacks (thread sleeps / `asyncAfter`, error swallowing via `try?`/empty catch, turning non-optional into optional, deleting assertions).
 - **Hot Preemption**: Inject at line 1 via `scripts/reorder_queue.sh`. Known fix = single-seam `[CODE]`; Unknown bug = solitary `[DIAGNOSTIC]`. Never pipeline speculative `[CODE]` tasks behind an unverified diagnostic.
-- **Planner Dispatch SOP (100% Boundary Gate)**: Consult `git log -n 1` for ground truth verification command. Hold zero unverified implementation memory.
-  - *`[CODE]` Direct*: Dispatch directly if 100% of affected files/seams are known (<= 2 files, leaf fix, or prior probe). Scope Level 1 by directory seam (`TARGET: Sources/Audio/`), Level 2 by explicit files.
+- **Planner Dispatch SOP (Zero Unverified Memory & No Tags)**:
+  - *Ground-Truth Cross-Check*: Never rely on unverified memory from 5-10 tasks ago; never add tracking tags. Tasks were issued by Planner, so cross-check impressions against Git via 2 physical checks:
+    1. **Existence ("現在有沒有")**: `git grep -n "<symbol>" <path>` or `test -f <path>` to confirm physical reality on disk.
+    2. **Last-Touch ("上一動")**: `git log -n 1 -- <path>` (or `-S "<symbol>"`) to inspect the last action on that specific seam. Cross-reference commit metadata (`Task:`, `Scope:`, `Verification:`) against Planner's impression.
+  - *Discrepancy Invalidation*: If git or disk contradicts Planner's impression, immediately invalidate memory, treat boundary as unknown, and dispatch `[RESEARCH]` (`VERIFY: REPORT_ONLY`). Never guess or read entire files in Terminal A.
+  - *`[CODE]` Direct*: Dispatch directly ONLY if 100% of affected files/seams are verified on disk (<= 2 files, leaf fix, or prior probe). Scope Level 1 by directory seam (`TARGET: Sources/Audio/`), Level 2 by explicit files.
   - *`[RESEARCH]` First*: If callers are unknown, interfaces change, or scope is uncertain, dispatch `[RESEARCH]` (`VERIFY: REPORT_ONLY`). Never guess dependencies or read whole codebases in Terminal A.
-  - *Discrepancy Purge*: If any prior log or note contradicts disk reality, purge the stale note immediately and re-anchor via `[RESEARCH]`.
 - **Progression**: Top-down (L1 -> L2 -> L3 Diagnostic -> Code). Planner uses Matt's foundations (`/domain-modeling`, `/codebase-design`, `/tdd`, `/diagnosing-bugs`) to compose tickets; at Level 3 (Micro), Planner provides exact TDD blueprints (Red contract -> Green contract -> Seam boundary) so Worker's `/tdd` executes without guesswork.
 
 ## 4. Honest Treaty, Verification Gates & Escalation
