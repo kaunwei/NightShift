@@ -29,12 +29,12 @@ When authoring `ACTION:` for Level 3 tickets, Planner MUST follow Matt's `/tdd` 
 Before drafting tickets, adhere to demand-driven verification. Never guess in the dark; never clutter git with tracking tags.
 
 ### 1. Seam Discovery & Demand-Driven Audit
-- **Cold-Start Seam Discovery**: A fresh agent has zero memory. If the user prompt explicitly specifies target files (<= 2 files, leaf fix), dispatch `[CODE]` directly. Otherwise, seams are 0% known: dispatch `[RESEARCH]` (`VERIFY: REPORT_ONLY`) on Task 1 to discover callers and topology without reading whole files in Terminal A.
-- **Active Slice (Continuous Progression)**: Trust working memory for contiguous tasks within the current module/feature. Dispatch `[CODE]` directly with zero intermediate research.
+- **Cold-Start Seam Discovery**: If user prompt explicitly specifies target files (<= 2 files, leaf fix), dispatch `[CODE]` directly. Otherwise, candidate seams are unverified: dispatch `[RESEARCH]` (`VERIFY: REPORT_ONLY`) on Task 1 to capture topology in `SUMMARY.md`.
+- **Contiguous Slice Progression**: Anchor sequential tasks strictly to verified test assertions and commit diffs of preceding tasks, never ungrounded mental impressions. Keep `TARGET:` locked to seams verified in `SUMMARY.md`.
 - **Revisit / Cross-Seam Audit**: When referencing older modules or crossing boundaries, run a targeted physical check instead of reading files or relying on stale memory:
   1. **Current Existence**: `git grep -n "<symbol>" <path>` or `test -f <path>`.
   2. **Last Action**: `git log -n 1 -- <path>` (or `-S "<symbol>"`).
-- **Discrepancy Invalidation**: Dispatch `[RESEARCH]` (`VERIFY: REPORT_ONLY`) ONLY when disk contradicts memory or callers are genuinely unknown. Never guess in Terminal A.
+- **Discrepancy Invalidation**: Disk contradiction or test divergence drops confidence to zero $\rightarrow$ discard assumptions, trigger Clean Pivot or dispatch `[RESEARCH]`. Never guess in Terminal A.
 
 ### 2. The 100% Boundary Gate
 - **Known Seam (100% of affected files confirmed, <= 2 files, leaf fix, or active slice)**: Dispatch `[CODE]` directly. Zero research latency.
