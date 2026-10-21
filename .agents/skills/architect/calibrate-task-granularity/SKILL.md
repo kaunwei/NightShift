@@ -29,7 +29,7 @@ When authoring `ACTION:` for Level 3 tickets, Planner MUST follow Matt's `/tdd` 
 Before drafting tickets, adhere to demand-driven verification. Never guess in the dark; never clutter git with tracking tags.
 
 ### 1. Seam Discovery & Demand-Driven Audit
-- **Cold-Start & Known Seams**: A new agent does NOT mechanically dispatch `[RESEARCH]`. If target files are known (<= 2 files, leaf fix, explicit user instruction), dispatch `[CODE]` directly. Dispatch `[RESEARCH]` only when callers or affected files are unknown.
+- **Cold-Start Seam Discovery**: A fresh agent has zero memory. If the user prompt explicitly specifies target files (<= 2 files, leaf fix), dispatch `[CODE]` directly. Otherwise, seams are 0% known: dispatch `[RESEARCH]` (`VERIFY: REPORT_ONLY`) on Task 1 to discover callers and topology without reading whole files in Terminal A.
 - **Active Slice (Continuous Progression)**: Trust working memory for contiguous tasks within the current module/feature. Dispatch `[CODE]` directly with zero intermediate research.
 - **Revisit / Cross-Seam Audit**: When referencing older modules or crossing boundaries, run a targeted physical check instead of reading files or relying on stale memory:
   1. **Current Existence**: `git grep -n "<symbol>" <path>` or `test -f <path>`.
