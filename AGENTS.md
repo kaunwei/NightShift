@@ -42,13 +42,11 @@ Operational guardrails for autonomous dual-terminal execution. Zero context bloa
   - `[RESEARCH]`: Topology & seam discovery. Product code strictly read-only. Produces `.reports/<slug>/SUMMARY.md`. `VERIFY:` defaults to automatic artifact/cleanliness audit or `REPORT_ONLY`.
 - **Mandatory `FORBIDDEN_SHORTCUTS:`**: Explicitly ban hacks (thread sleeps / `asyncAfter`, error swallowing via `try?`/empty catch, turning non-optional into optional, deleting assertions).
 - **Hot Preemption**: Inject at line 1 via `scripts/reorder_queue.sh`. Known fix = single-seam `[CODE]`; Unknown bug = solitary `[DIAGNOSTIC]`. Never pipeline speculative `[CODE]` tasks behind an unverified diagnostic.
-- **Planner Dispatch SOP (Demand-Driven Verification)**:
-  - *Cold-Start Seam Discovery*: If user prompt explicitly specifies target files (<= 2 files, leaf fix), dispatch `[CODE]` directly. Otherwise, dispatch `[RESEARCH]` (`VERIFY: REPORT_ONLY`) on Task 1 to capture topology into `SUMMARY.md` without reading files in Terminal A.
-  - *Contiguous Slice Progression*: Consume `progress.log` audit directly—zero git commands or research needed between contiguous tasks. Anchor sequential tasks strictly to preceding test assertions; keep `TARGET:` locked to seams verified in `SUMMARY.md`.
-  - *Revisit / Cross-Seam Audit*: When referencing older modules outside the active slice:
-    1. **Current Existence**: `git grep -n "<symbol>" <path>` (or `test -f <path>`).
-    2. **Last Action**: `git log -n 1 -- <path>` (or `-S "<symbol>"`).
-  - *Discrepancy Invalidation*: Disk contradiction or test divergence drops confidence to zero $\rightarrow$ discard assumptions and dispatch `[RESEARCH]` (or trigger Clean Pivot). Never stack speculative fixes.
+- **Planner Dispatch SOP**:
+  - *Cold-Start*: Dispatch `[CODE]` directly if targets are known (<= 2 files, leaf fix). Dispatch `[RESEARCH]` (`VERIFY: REPORT_ONLY`) on Task 1 when seams or callers are unknown.
+  - *Continuous Slices*: Chain `[CODE]` tasks directly along the verified seam.
+  - *Distant Seam Audit*: When referencing older modules or if memory is uncertain, verify via `git grep -n "<symbol>" <path>` or `git log -n 1 -- <path>` instead of reading files or guessing.
+  - *Discrepancy Invalidation*: Disk contradiction drops confidence to zero $\rightarrow$ dispatch `[RESEARCH]` or trigger Clean Pivot. Never stack speculative fixes.
 - **Progression**: Top-down (L1 -> L2 -> L3 Diagnostic -> Code). Planner uses Matt's foundations (`/domain-modeling`, `/codebase-design`, `/tdd`, `/diagnosing-bugs`) to compose tickets; at Level 3 (Micro), Planner provides exact TDD blueprints (Red contract -> Green contract -> Seam boundary) so Worker's `/tdd` executes without guesswork.
 
 ## 4. Honest Treaty, Verification Gates & Escalation
