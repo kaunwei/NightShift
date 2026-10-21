@@ -1,116 +1,89 @@
-# Agent Rules & Treaties (24h Unattended Framework)
+# Agent Rules & Treaties (NightShift 24h Framework)
 
-Strict operational guardrails for AI. Emphasize zero-context bloat and physical isolation.
+Operational guardrails for autonomous dual-terminal execution. Zero context bloat; strict physical isolation.
 
-## 1. Dual-Terminal Firewall & Skills
+## 1. Dual-Terminal Firewall
 
-| Terminal | Role & Mission | Active Skills | Strict Prohibitions (NEVER DO) |
+| Terminal | Role & Mission | Active Skills | Strict Prohibitions |
 | :--- | :--- | :--- | :--- |
-| **A (Planner)** | Architecture, task decomposition, audit. | `/domain-modeling`, `/calibrate-task-granularity`, `/handle-worker-guidance`, `/score-worker-performance`, `/watch-worker-queue`, `/code-review` | No direct coding/debugging. No chat sleep/polling loops. No use of Worker skills. |
-| **B (Worker)** | Unattended TDD execution, atomic commits. | `/universal-build-verify`, `/record-attempt-trace`, `/manage-worker-notes` | No architectural changes. No entering chat loops. |
+| **A (Planner)** | Architecture, decomposition, audit. | `/domain-modeling`, `/calibrate-task-granularity`, `/handle-worker-guidance`, `/score-worker-performance`, `/watch-worker-queue`, `/code-review` | No direct coding/debugging. No chat sleep/polling loops. No worker skills. |
+| **B (Worker)** | Unattended TDD, atomic commits. | `/universal-build-verify`, `/record-attempt-trace`, `/manage-worker-notes` | No architectural changes. No interactive chat loops. |
 
-*   **Planner Sovereign Intervention & Clean Pivot Privilege:**
-    1. Worker blocks on a Level 3 (Micro) task after 3 retries.
-    2. Worker hallucinates diagnostics or fails to isolate root cause after 2-3 attempts.
-    3. **Clean Pivot Privilege (架構斷捨離特權)**: If fixing side-effects from a previous ticket requires >2 patch tickets or triggers `[SCOPE_BLOCKED]` with unexpected coupling, Planner MUST NOT stack patch-on-patch. Planner has sovereign privilege to rollback (`git reset --hard nightshift-session-base`) and re-issue a unified vertical-slice ticket or Expand-Migrate-Contract plan.
-    4. Explicit user mandate. (Log root cause in `.worker.notes.md` and `docs/agents/granularity-profile.json`).
+**Planner Sovereign Intervention Triggers**:
+1. Worker blocks on Level 3 (Micro) after 3 retries.
+2. Worker hallucinates diagnostics or fails root cause after 2-3 attempts.
+3. **Clean Pivot Privilege**: If fixing side-effects requires >2 patch tickets or triggers `[SCOPE_BLOCKED]` with unexpected coupling, rollback (`git reset --hard nightshift-session-base`) and re-issue a unified vertical-slice ticket or Expand-Migrate-Contract plan. Never stack patch-on-patch.
+4. Explicit user mandate. (Log root cause in `.worker.notes.md` and `docs/agents/granularity-profile.json`).
 
-### Skill Catalog & Locations
+### Skill Catalog (`.agents/skills/` & `.skills/`)
+- **Architect**: `/calibrate-task-granularity` (`.agents/skills/architect/calibrate-task-granularity/`), `/handle-worker-guidance` (`.agents/skills/architect/handle-worker-guidance/`), `/score-worker-performance` (`.agents/skills/architect/score-worker-performance/`), `/watch-worker-queue` (`.agents/skills/architect/watch-worker-queue/`).
+- **Worker**: `/universal-build-verify` (`.skills/universal-build-verify.md`), `/record-attempt-trace` (`.agents/skills/worker/record-attempt-trace/`), `/manage-worker-notes` (`.agents/skills/worker/manage-worker-notes/`).
+- **Foundations**: `/tdd`, `/codebase-design`, `/domain-modeling`, `/diagnosing-bugs`, `/git-guardrails`, `/code-review` (`.agents/skills/engineering/`).
 
-All skills reside in `.agents/skills/` (and `.skills/`). Reference by exact directory:
+## 2. Execution Modes (`.worker.env`)
 
-| Realm | Skill | Path | Trigger & Purpose |
-| :--- | :--- | :--- | :--- |
-| **Architect** | `/calibrate-task-granularity` | `.agents/skills/architect/calibrate-task-granularity/` | Size tasks (L1-3) & check 4 multi-interface gates. |
-| | `/handle-worker-guidance` | `.agents/skills/architect/handle-worker-guidance/` | Resolve `[NEED_GUIDANCE]` & `[NEED_DECOMPOSITION]`. |
-| | `/score-worker-performance` | `.agents/skills/architect/score-worker-performance/` | Audit `progress.log` & score 1-5 stars in profile. |
-| | `/watch-worker-queue` | `.agents/skills/architect/watch-worker-queue/` | Sentinel subagent for zero-token batch wakeup. |
-| **Worker** | `/universal-build-verify` | `.skills/universal-build-verify.md` | Mandatory execution SOP: TDD, retry limits, clean tree. |
-| | `/record-attempt-trace` | `.agents/skills/worker/record-attempt-trace/` | Append <=15 line attempt traces to `progress.log`. |
-| | `/manage-worker-notes` | `.agents/skills/worker/manage-worker-notes/` | Cache compiler flags & repo quirks in `.worker.notes.md`. |
-| **Foundations** | `/tdd`, `/codebase-design` | `.agents/skills/engineering/` | Test-driven development & deep module seam design. |
-| | `/domain-modeling` | `.agents/skills/engineering/domain-modeling/` | Ubiquitous terminology, `GLOSSARY.md`, ADR records. |
-| | `/diagnosing-bugs` | `.agents/skills/engineering/diagnosing-bugs/` | Tight feedback loops & root cause isolation. |
-| | `/git-guardrails`, `/code-review` | `.agents/skills/engineering/` | Destructive command safety & spec/standard review. |
-
-## 2. Environment & Execution Mode (`.worker.env`)
-
-*   **Mode 1 (`WORKER_ISOLATION=1`, Default)**: 
-    *   Worker runs in `.worker-tree` (branch `feature/worker-frontier`). Prevents compiler file locks (`ETXTBSY`).
-    *   Symlinks `node_modules`/`.venv`; uses port offsets (e.g., `PORT=3001`) to prevent conflicts.
-    *   Verified milestones drop to `.preview/` with `version.json` for live human testing.
-    *   Planner merges via `git merge --ff-only` upon completion.
-*   **Mode 2 (`WORKER_ISOLATION=0`)**: In-place execution for fixed-port/singleton-hardware projects only.
+- **Mode 1 (`WORKER_ISOLATION=1`, Default)**: Isolated `.worker-tree` (`feature/worker-frontier`). Symlinks dependencies (`node_modules`, `.venv`), uses port offsets (`PORT=3001`), stages verified milestones to `.preview/` with `version.json`. Merged via `git merge --ff-only`. Prevents compiler locks (`ETXTBSY`).
+- **Mode 2 (`WORKER_ISOLATION=0`)**: Direct in-place execution for fixed-port or singleton hardware only.
 
 ## 3. Task Queue (`tasks.txt`) & Granularity
 
-**Schema:** `TASK-XXX | LEVEL: 1-3 | [AFTER: <id>] | TARGET: <paths> | ACTION: <logic> | VERIFY: <test_cmd> | FORBIDDEN_SHORTCUTS: <hacks> | CONSTRAINTS: <limits>`
+**Schema**: `TASK-XXX | LEVEL: 1-3 | [AFTER: <id>] | TARGET: <paths> | ACTION: <logic> | VERIFY: <test_cmd> | FORBIDDEN_SHORTCUTS: <hacks> | CONSTRAINTS: <limits>`
 
-| Level | Granularity | Planner Instruction Style (No Arbitrary File Caps) | Blast Radius Limits |
+| Level | Mode & Granularity | Instruction Density | Blast Radius (Deletions) |
 | :---: | :--- | :--- | :--- |
-| **1** | Macro (5⭐) | **Intent-Driven**: High-level goal & acceptance intent. Declare all slice targets in `TARGET:`. | Deletion unlimited (bounded by `TARGET:`). |
-| **2** | Meso (3-4⭐) | **Structural Specification**: Explicit target files, function signatures, and error boundaries. | Deletion <= 150 lines. |
-| **3** | Micro (1-2⭐) | **Blueprint Mode**: Zero-ambiguity type signature diffs & step-by-step pseudocode in `ACTION:`. | Deletion <= 40 lines. |
+| **1** | **Macro (5⭐)** | High-level acceptance intent. Declare all slice targets in `TARGET:`. | Unlimited (bounded by `TARGET:`) |
+| **2** | **Meso (3-4⭐)** | Structural: explicit target files, function signatures, error boundaries. | <= 150 lines |
+| **3** | **Micro (1-2⭐)** | Blueprint: zero-ambiguity type signature diffs & step-by-step pseudocode. | <= 40 lines |
 
-*   **Task Archetypes & Refactoring**:
-    *   `[CODE: FIX]`: General bugfix. `Tests/` immutable. Modifies product code in `TARGET:` only.
-    *   `[CODE: REFACTOR]`: Interface refactor. `Tests/` and `Mocks/` permitted in `TARGET:`. Enforces **Assertion Non-Decrease Gate** and structural closure in `VERIFY:` (e.g. `<test_cmd> && ! grep -rn "<Deprecated_Symbol>" Sources/`).
-    *   `[CODE: EXPAND]` / `[CODE: MIGRATE]` / `[CODE: CONTRACT]`: Phased large refactoring progression.
-*   **Forbidden Shortcuts (Symptom Masking Ban)**: Mandatory `FORBIDDEN_SHORTCUTS:` field. Pre-emptively bans hacky workarounds (e.g. thread sleeps / `asyncAfter`, swallowing errors via `try?`, converting non-optional to optional, deleting assertions).
-*   **Hot Preemption & Live Feedback**: Injected at line 1 via `scripts/reorder_queue.sh`. Pre-existing tasks for other modules yield line 1 and resume after.
-    *   *Known Fix*: Inject single-seam `[CODE]` directly at line 1.
-    *   *Unknown Bug*: Inject **solitary** `[DIAGNOSTIC]` task only.
-    *   *No Speculative Pipelining*: NEVER queue speculative `[CODE]` tasks behind an unverified `[DIAGNOSTIC]`. Wait for verified evidence before allocating implementation tickets.
-*   **Progression**: Always explore top-down (L1 -> L2 -> L3 Diagnostic) before writing Code tickets.
+- **Task Archetypes**:
+  - `[CODE: FIX]`: Bugfix. Modifies `TARGET:` product code only. `Tests/` strictly immutable.
+  - `[CODE: REFACTOR]`: Interface refactor. `Tests/` and `Mocks/` permitted in `TARGET:`. Enforces **Assertion Non-Decrease Gate** and structural closure in `VERIFY:` (e.g. `<test_cmd> && ! grep -rn "<Deprecated_Symbol>" Sources/`).
+  - `[CODE: EXPAND]` / `[CODE: MIGRATE]` / `[CODE: CONTRACT]`: Phased large refactoring progression.
+- **Mandatory `FORBIDDEN_SHORTCUTS:`**: Explicitly ban hacks (thread sleeps / `asyncAfter`, error swallowing via `try?`/empty catch, turning non-optional into optional, deleting assertions).
+- **Hot Preemption**: Inject at line 1 via `scripts/reorder_queue.sh`. Known fix = single-seam `[CODE]`; Unknown bug = solitary `[DIAGNOSTIC]`. Never pipeline speculative `[CODE]` tasks behind an unverified diagnostic.
+- **Progression**: Top-down (L1 -> L2 -> L3 Diagnostic -> Code). Planner uses Matt's foundations (`/domain-modeling`, `/codebase-design`, `/tdd`, `/diagnosing-bugs`) to compose tickets; at Level 3 (Micro), Planner provides exact TDD blueprints (Red contract -> Green contract -> Seam boundary) so Worker's `/tdd` executes without guesswork.
 
-## 4. Honest Treaty & Escalation
+## 4. Honest Treaty, Verification Gates & Escalation
 
-*   **Zero-Guessing**: Worker MUST provide verifiable evidence (test outputs/stack traces) for diagnostics. Vague reports are invalid.
-*   **Anti-Cheating & Verification Gates**:
-    *   *False Red-Light Prevention*: In `[DIAGNOSTIC]`, repro test must compile cleanly (`Build PASS` / 0 syntax errors) and fail strictly on assertion (`Test FAIL`). Syntax/compiler errors or missing symbols are strictly Invalid Repros (Cheating/Rejection). Modifying product code (`Sources/`, `src/`) is strictly forbidden during diagnostics.
-    *   *Test Immutability & Assertion Non-Decrease*: In `[CODE: FIX]`, modifying or weakening assertions in existing repro tests is strictly forbidden. In `[CODE: REFACTOR]`, `Tests/` may be updated only when in `TARGET:`, and total assertion count post-commit must be `>=` pre-commit (`XCTAssert`, `#expect`, `assert`, `expect(`, `self.assert`).
-    *   *Proof of Negative for `[DEAD_END]`*: Declaring `[DEAD_END]` requires tangible proof of negative (isolated unit test passing or runtime log snippet proving suspect module is innocent while global symptom persists). Speculative exclusions = Task Failure.
-    *   *Interface Skeleton & 10-Line Code Probe*: Worker must append pure declaration skeletons and 10-line context slices (`scripts/extract_skeleton.sh <File>#L<N>`) to `SUMMARY.md`. Planner verifies line claims using `scripts/probe_line.sh <File>#L<N> 10`. Misaligned line references trigger immediate credit demotion to 1 Star.
-*   **Compiler Probe & Scope Blocked Escape Hatch**:
-    *   *Compiler Probe in `[RESEARCH]`*: In addition to `grep`, Worker is authorized to temporarily modify interface signatures and execute `build` to capture 100% of affected call-sites from compiler diagnostics into `SUMMARY.md`. Mandatory `git restore .` immediately after.
-    *   *`[SCOPE_BLOCKED]` No-Fault Escalation*: If compiler errors hit downstream files outside declared `TARGET:`, Worker MUST NOT touch unlisted files. Emit `STATUS: SCOPE_BLOCKED (Need Target: <File>#L<Line>)`. Sentinel/Planner wakes up to expand `TARGET:` or decompose; **zero star deduction** in `granularity-profile.json`.
-*   **Single-Seam vs. Full-Spectrum**:
-    *   *Seam Scope*: A seam is not 1 file; it covers all cohesive objects, interfaces, protocols, and tests supporting the slice.
-    *   *Multi-Interface & Refactor Exception*: Legitimate cross-interface tasks or broad refactors must be declared in `TARGET: <path1>, <path2>, <dir>/` (Declare to Authorize) or flagged in `CONSTRAINTS: Multi-interface refactor approved`. Undeclared cross-subsystem tasks are rejected with `[SCOPE_BLOCKED]` or `[NEED_DECOMPOSITION]`.
-    *   *Planner Authorization Gates (Must satisfy all 4 to approve multi-interface/refactor)*:
-        1. *Inseparability*: Splitting into smaller tasks would cause intermediate commit build/test failure.
-        2. *Vertical Slice*: Only cohesive protocol -> impl -> test; zero horizontal sprawl across decoupled systems.
-        3. *Profile Credit*: Target module has >= 4.5 star rating in `docs/agents/granularity-profile.json` (unrated/low-credit modules restricted to single unit).
-        4. *Topology Proof*: Refactors require a prior verified `[DIAGNOSTIC]` or `[RESEARCH]` topology report in `.reports/<issue-slug>/`.
-    *   *Planner Cross-Module Refactor Strategy (Dual-Track)*:
-        - *Track A: Atomic Vertical-Slice (Small/Medium: <= 5 files & >= 3 stars)*: Single `[CODE: REFACTOR]` ticket with Interface, implementations, call-sites, and tests in `TARGET:`.
-        - *Track B: Expand-Migrate-Contract (Large-Scale: > 5 files or 1-star module)*: Decompose into 3 green-to-green phases (`[CODE: EXPAND]`, `[CODE: MIGRATE]`, `[CODE: CONTRACT]`). Create checkpoint `git tag -f nightshift-refactor-base` before Task 1.
-    *   *No Silent Compile-Fix Edits*: Never modify unlisted files (e.g. dummy main.swift or configs) just to satisfy compilers. Emit `[SCOPE_BLOCKED]` instead.
-    *   *Diagnostic Scope*: `[DIAGNOSTIC]` traces across all layers (UI -> OS) without seam limits.
-*   **Ephemeral Diagnostic Dossier Lifecycle**:
-    *   *Zero Git Pollution*: Diagnostic reports are transient forensic evidence, NEVER committed or merged to `main`. Output to Git-ignored `.reports/<issue-slug>/`.
-    *   *Multi-Stage Isolation*: Output to `01-macro.md`, `02-meso.md`, `03-micro.md`, and `SUMMARY.md`. Independent files prevent late-stage hallucinations from corrupting verified early facts.
-    *   *Invalidation & Ground Truth*: Mark flawed hypotheses as `[DEAD_END]`. When Planner intervenes: extract verified facts into `SUMMARY.md`, log traps in `.worker.notes.md`.
-    *   *Resolution-Driven Archival*: When the issue's `[CODE]` fix passes and merges, `.reports/<issue-slug>/` is archived to `.reports/.archive/`.
-*   **Clean Tree Gate**: Tasks must leave `git status --porcelain` 100% clean after commit. Ghost tests or uncommitted files trigger task failure.
-*   **Escalation Path**: Worker gets max 3 retries per task (with `git restore` cleanups). If blocked, demote granularity (L1->L2->L3).
+- **Zero-Guessing**: Verifiable evidence (test outputs/stack traces) required. Label interpretations as `Hypothesis`.
+- **Anti-Cheating Verification Gates**:
+  1. *False Red-Light Prevention*: In `[DIAGNOSTIC]`, repro test must compile cleanly (`Build PASS`, 0 syntax errors) and fail strictly on assertion (`Test FAIL`). Modifying product code (`Sources/`, `src/`) during diagnostics is strictly forbidden.
+  2. *Test Immutability & Assertion Non-Decrease*: Tests are read-only in `[CODE: FIX]`. In `[CODE: REFACTOR]`, total assertion count post-commit must be `>=` pre-commit (`XCTAssert`, `#expect`, `assert`, `expect(`, `self.assert`).
+  3. *Proof of Negative for `[DEAD_END]`*: Tangible proof required (isolated passing unit test or log snippet proving module health). Speculative exclusions = task failure.
+  4. *Interface Skeleton & 10-Line Probe*: Worker appends declaration skeletons and 10-line slices (`scripts/extract_skeleton.sh <File>#L<N>`) to `SUMMARY.md`. Planner verifies with `scripts/probe_line.sh <File>#L<N> 10`. Line mismatches demote credit to 1 Star.
+- **Scope & Compiler Probes**:
+  - *Compiler Probe*: In `[RESEARCH]`, Worker may temporarily alter signatures and run `build` to capture 100% of affected call-sites into `SUMMARY.md`, followed by mandatory `git restore .`.
+  - *`[SCOPE_BLOCKED]` No-Fault Exit*: When compiler errors hit downstream files outside `TARGET:`, never touch unlisted files. Emit `STATUS: SCOPE_BLOCKED (Need Target: <File>#L<Line>)`. Planner expands `TARGET:` or decomposes; zero star deduction in `granularity-profile.json`.
+  - *No Silent Compile-Fix Edits*: Never touch unlisted files (e.g. dummy configs/main.swift) to silence compilers.
+- **Multi-Interface & Refactoring Gates**:
+  - Seam covers cohesive objects, interfaces, and tests for the slice. Multi-interface tasks require explicit declaration in `TARGET:` or `CONSTRAINTS: Multi-interface refactor approved`.
+  - *4 Planner Authorization Gates*: (1) Inseparability (split breaks intermediate builds); (2) Vertical Slice (protocol -> impl -> test, no horizontal sprawl); (3) Profile Credit (>=4.5 stars); (4) Topology Proof (prior verified `[DIAGNOSTIC]` or `[RESEARCH]` in `.reports/`).
+  - *Dual-Track Strategy*:
+    - **Track A (Vertical-Slice)**: Small/Medium (<=5 files & >=3 stars). Single `[CODE: REFACTOR]` ticket.
+    - **Track B (Expand-Migrate-Contract)**: Large-Scale (>5 files or 1-star module). Checkpoint `git tag -f nightshift-refactor-base`. 3 green-to-green phases: `[CODE: EXPAND]`, `[CODE: MIGRATE]`, `[CODE: CONTRACT]`.
+- **Ephemeral Diagnostic Dossier Lifecycle**:
+  - Ephemeral forensic evidence lives in git-ignored `.reports/<issue-slug>/` (`01-macro.md`, `02-meso.md`, `03-micro.md`, `SUMMARY.md`). Never commit or merge to `main`.
+  - Archive to `.reports/.archive/` upon successful fix and merge.
+- **Clean Tree Gate & Escalation**:
+  - `git status --porcelain` must be 100% clean after commit.
+  - Worker allowed max 3 retries (with `git restore` cleanups). If blocked, demote granularity (L1->L2->L3).
 
-## 5. Protocol, Context Protection & Git Guardrails
+## 5. Protocol, Acceptance & Git Guardrails
 
-*   **Inter-AI Language**: All artifacts (`tasks.txt`, logs, commits) MUST be **English**. (Terminal A chat can be Chinese).
-*   **Rapid Acceptance & Anti-Rubber-Stamp**: 
-    *   Worker prepends `<= 15 lines` to `progress.log`. Daemon stamps machine-certified `[MECHANICAL_AUDIT]` at line 1. Report Executive Summaries in `.reports/<issue-slug>/` `<= 30 lines`.
-    *   **Double-Funnel Mechanical Audit**: `worker.sh` mechanically re-runs verification, checks Anti-Idle (`Tests_Run >= 1`), runs whole-module regression tests, and records `Diff: <diff_stat>`.
-    *   **Fast-Track (Green Light, <= 5s)**: Permitted ONLY if line 1 has `[MECHANICAL_AUDIT] Status: PASS | Verify_Exit: 0 | Tests_Run: >=1 | Whitelist: PASS | Tree: CLEAN` AND Worker reports `Attempts: 1 | Confidence: HIGH`. Merge immediately via `git merge --ff-only feature/worker-frontier`.
-    *   **Deep Audit Required (Yellow Light)**: Mandatory IF `[MECHANICAL_AUDIT]` is missing/failed, `Attempts > 1`, `Confidence < 1.0`, line claim requires verification (`scripts/probe_line.sh`), or critical architectural seam. Run `git show --stat` or targeted test.
-    *   **Planner Prohibitions**: Never run bare `git log`, unbounded `git diff`, or `git log -p` in Terminal A.
-*   **Forbidden Commands**: `git push`, `git reset --hard` (except script rollback), `git clean -f`, `sudo`, `apt/yum`.
-*   **Git Commit Standard (Mandatory for A & B)**:
-    ```bash
-    git commit -m "<type>(<scope>): <concise action <= 60 chars> (<task_id>)" -m "<1-3 summary bullet points>
+- **Language**: English for all artifacts (`tasks.txt`, logs, commits). (Terminal A chat may be Chinese).
+- **Rapid Acceptance & Anti-Rubber-Stamp**:
+  - Worker logs <=15 lines in `progress.log`; reports in `.reports/<issue-slug>/` <=30 lines.
+  - **Double-Funnel Mechanical Audit**: `worker.sh` mechanically validates tests, anti-idle (`Tests_Run >= 1`), regression checks, and stamps `[MECHANICAL_AUDIT]` at line 1.
+  - **Fast-Track (Green Light, <= 5s)**: Permitted ONLY if line 1 has `[MECHANICAL_AUDIT] Status: PASS | Verify_Exit: 0 | Tests_Run: >=1 | Whitelist: PASS | Tree: CLEAN` AND Worker reports `Attempts: 1 | Confidence: HIGH`. Merge immediately via `git merge --ff-only feature/worker-frontier`.
+  - **Deep Audit (Yellow Light)**: Mandatory if mechanical audit failed/missing, `Attempts > 1`, `Confidence < 1.0`, line claim needs probe, or critical seam. Inspect via `git show --stat` or targeted tests.
+  - **Planner Prohibitions**: Never run bare `git log`, unbounded `git diff`, or `git log -p`.
+- **Forbidden Commands**: `git push`, `git reset --hard` (except script rollback), `git clean -f`, `sudo`, `apt/yum`.
+- **Conventional Git Commit Standard**:
+  ```bash
+  git commit -m "<type>(<scope>): <concise action <= 60 chars> (<task_id>)" -m "<1-3 summary bullet points>
 
-    Task: <task_id> (<granularity_level>)
-    Scope: <target_files>
-    Verification: <test command> (<measurable result>)
-    Attempts: <attempts> | Confidence: <score>"
-    ```
+  Task: <task_id> (<granularity_level>)
+  Scope: <target_files>
+  Verification: <test command> (<measurable result>)
+  Attempts: <attempts> | Confidence: <score>"
+  ```
