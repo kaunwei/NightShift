@@ -67,9 +67,14 @@ All skills reside in `.agents/skills/` (and `.skills/`). Reference by exact dire
         1. *Inseparability*: Splitting into smaller tasks would cause intermediate commit build/test failure.
         2. *Vertical Slice*: Only cohesive protocol -> impl -> test; zero horizontal sprawl across decoupled systems.
         3. *Profile Credit*: Target module has >= 4.5 star rating in `docs/agents/granularity-profile.json` (unrated/low-credit modules restricted to single unit).
-        4. *Topology Proof*: Refactors require a prior verified `[DIAGNOSTIC]` or `[RESEARCH]` topology report in `docs/reports/`.
+        4. *Topology Proof*: Refactors require a prior verified `[DIAGNOSTIC]` or `[RESEARCH]` topology report in `.reports/<issue-slug>/`.
     *   *No Silent Compile-Fix Edits*: Never modify unlisted files (e.g. dummy main.swift or configs) just to satisfy compilers. Emit `[NEED_DECOMPOSITION]` instead.
     *   *Diagnostic Scope*: `[DIAGNOSTIC]` traces across all layers (UI -> OS) without seam limits.
+*   **Ephemeral Diagnostic Dossier Lifecycle**:
+    *   *Zero Git Pollution*: Diagnostic reports are transient forensic evidence, NEVER committed or merged to `main`. Output to Git-ignored `.reports/<issue-slug>/`.
+    *   *Multi-Stage Isolation*: Output to `01-macro.md`, `02-meso.md`, `03-micro.md`, and `SUMMARY.md`. Independent files prevent late-stage hallucinations from corrupting verified early facts.
+    *   *Invalidation & Ground Truth*: Mark flawed hypotheses as `[DEAD_END]`. When Planner intervenes: extract verified facts into `SUMMARY.md`, log traps in `.worker.notes.md`.
+    *   *Resolution-Driven Archival*: When the issue's `[CODE]` fix passes and merges, `.reports/<issue-slug>/` is archived to `.reports/.archive/`.
 *   **Clean Tree Gate**: Tasks must leave `git status --porcelain` 100% clean after commit. Ghost tests or uncommitted files trigger task failure.
 *   **Escalation Path**: Worker gets max 3 retries per task (with `git restore` cleanups). If blocked, demote granularity (L1->L2->L3).
 
@@ -77,7 +82,7 @@ All skills reside in `.agents/skills/` (and `.skills/`). Reference by exact dire
 
 *   **Inter-AI Language**: All artifacts (`tasks.txt`, logs, commits) MUST be **English**. (Terminal A chat can be Chinese).
 *   **Rapid Acceptance & Anti-Rubber-Stamp**: 
-    *   Worker prepends `<= 15 lines` to `progress.log`. Planner reads `head -n 15 progress.log`. 
+    *   Worker prepends `<= 15 lines` to `progress.log`. Planner reads `head -n 15 progress.log`. Report Executive Summaries in `.reports/<issue-slug>/` `<= 30 lines`. 
     *   **Deep Audit Required** (`git show --stat`, targeted test) IF `Attempts > 1`, `Confidence < 1.0`, or critical architectural seam.
     *   **Planner Prohibitions**: Never run bare `git log`, unbounded `git diff`, or `git log -p` in Terminal A.
 *   **Forbidden Commands**: `git push`, `git reset --hard` (except script rollback), `git clean -f`, `sudo`, `apt/yum`.

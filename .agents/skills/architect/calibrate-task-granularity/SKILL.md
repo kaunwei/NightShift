@@ -22,7 +22,7 @@ Planner MUST NOT approve multi-interface targets or `[REFACTOR]` tasks without s
 1. **Inseparability**: Splitting would cause intermediate commit build/test failures.
 2. **Vertical Slice**: Cohesive protocol -> implementation -> test only; no horizontal sprawl across decoupled systems.
 3. **Profile Credit**: Target module has >= 4.5 stars in `docs/agents/granularity-profile.json`. Unrated or low-credit modules are restricted to Level 2/3 single units.
-4. **Topology Proof**: Broad refactors require a prior verified `[DIAGNOSTIC]` or `[RESEARCH]` topology report in `docs/reports/`.
+4. **Topology Proof**: Broad refactors require a prior verified `[DIAGNOSTIC]` or `[RESEARCH]` topology report in `.reports/<issue-slug>/`.
 
 ## 3. Dynamic Sizing Protocol
 

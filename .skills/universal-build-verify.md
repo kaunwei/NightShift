@@ -20,8 +20,8 @@ MANDATORY execution protocol for Background Worker (Terminal B) when processing 
 
 ## 2. Execution Archetypes
 *   **[CODE] / [REFACTOR]**: Follow Red-Green-Refactor TDD. Implement -> Unit Test -> GUI Smoke Check (if applicable).
-*   **[RESEARCH] / [BENCHMARK]**: Gather facts/metrics -> Format into Markdown/CSV -> Output to `docs/research/` or `docs/reports/`.
-*   **[DIAGNOSTIC]**: Create minimal failing tests or exact error traces. **Reject pure textual speculation.**
+*   **[RESEARCH] / [BENCHMARK]**: Gather facts/metrics -> Format into Markdown/CSV -> Output to `.reports/<issue-slug>/` (or `docs/research/` if permanent).
+*   **[DIAGNOSTIC]**: Isolate root cause with minimal failing tests or exact error traces. Output to `.reports/<issue-slug>/<phase>.md` and update `SUMMARY.md`. **Reject pure textual speculation.**
 
 ## 3. Honest Treaty (Anti-Hallucination)
 *   **Zero-Guessing**: If legacy code/logs are obscure, state ONLY verified facts/paths. Label all interpretations as `Hypothesis`.
@@ -37,7 +37,7 @@ MANDATORY execution protocol for Background Worker (Terminal B) when processing 
 
 ## 5. Protocol & Evidence Logging (Token-Lean)
 
-*   **Log Limits**: `progress.log` entries `<= 15 lines`. Report Executive Summaries `<= 30 lines`. No verbose prose.
+*   **Log Limits**: `progress.log` entries `<= 15 lines`. Report Executive Summaries in `.reports/<issue-slug>/` `<= 30 lines`. No verbose prose.
 *   **Auto-Commit Standard (English ONLY)**:
     ```bash
     git commit -m "<type>(<scope>): <concise action <= 60 chars> (<task_id>)" -m "<1-3 summary bullets>

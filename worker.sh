@@ -168,6 +168,10 @@ ensure_worker_tree() {
   # Mirror heavy dependency caches
   [ -d "$SCRIPT_DIR/node_modules" ] && [ ! -e "$target_dir/node_modules" ] && ln -sf "$SCRIPT_DIR/node_modules" "$target_dir/node_modules" 2>/dev/null || true
   [ -d "$SCRIPT_DIR/.venv" ] && [ ! -e "$target_dir/.venv" ] && ln -sf "$SCRIPT_DIR/.venv" "$target_dir/.venv" 2>/dev/null || true
+
+  # Share untracked ephemeral reports directory
+  mkdir -p "$SCRIPT_DIR/.reports/.archive"
+  [ ! -e "$target_dir/.reports" ] && ln -sf "$SCRIPT_DIR/.reports" "$target_dir/.reports" 2>/dev/null || true
 }
 
 publish_preview_artifact() {
@@ -377,7 +381,7 @@ validate_post_flight() {
       while IFS= read -r f; do
         [ -z "$f" ] && continue
         case "$f" in
-          progress.log|tasks.txt|tasks.done|worker.status|.gitignore|.worker.notes.md|docs/reports/*)
+          progress.log|tasks.txt|tasks.done|worker.status|.gitignore|.worker.notes.md|.reports/*|docs/reports/*)
             continue
             ;;
         esac
@@ -412,6 +416,7 @@ validate_post_flight() {
 # Startup Initialization
 # ------------------------------------------------------------------------------
 touch "$TASKS_FILE" "$TASKS_DONE_FILE" "$PROGRESS_FILE"
+mkdir -p "$SCRIPT_DIR/.reports/.archive"
 ensure_worker_tree
 
 echo "=============================================================================="
