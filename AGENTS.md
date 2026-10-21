@@ -43,10 +43,10 @@ Operational guardrails for autonomous dual-terminal execution. Zero context bloa
 - **Mandatory `FORBIDDEN_SHORTCUTS:`**: Explicitly ban hacks (thread sleeps / `asyncAfter`, error swallowing via `try?`/empty catch, turning non-optional into optional, deleting assertions).
 - **Hot Preemption**: Inject at line 1 via `scripts/reorder_queue.sh`. Known fix = single-seam `[CODE]`; Unknown bug = solitary `[DIAGNOSTIC]`. Never pipeline speculative `[CODE]` tasks behind an unverified diagnostic.
 - **Planner Dispatch SOP (Zero-Memory, No-Tag)**:
-  - *Physical Cross-Check*: Never trust memory from 5-10 tasks ago; never add tracking tags. Cross-check against disk via 2 commands:
-    1. **Existence (現在有沒有)**: `git grep -n "<symbol>" <path>` (or `test -f <path>`).
-    2. **Last-Touch (上一動)**: `git log -n 1 -- <path>` (or `-S "<symbol>"`). Cross-reference commit metadata (`Task:`, `Scope:`, `Verification:`) with Planner impression.
-  - *Discrepancy Invalidation*: Contradiction = 0% confidence. Invalidate memory immediately and dispatch `[RESEARCH]` (`VERIFY: REPORT_ONLY`). Never guess or read whole files in Terminal A.
+  - *Physical Ground-Truth Audit*: Never trust memory from 5–10 tasks ago; never add tracking tags. Cross-check against disk via 2 targeted commands:
+    1. **Current Existence**: `git grep -n "<symbol>" <path>` (or `test -f <path>`).
+    2. **Last Action**: `git log -n 1 -- <path>` (or `-S "<symbol>"`). Cross-reference commit metadata (`Task:`, `Scope:`, `Verification:`) with Planner intent.
+  - *Discrepancy Invalidation*: Contradiction drops confidence to zero. Invalidate memory immediately and dispatch `[RESEARCH]` (`VERIFY: REPORT_ONLY`). Never guess or read whole files in Terminal A.
   - *`[CODE]` Direct*: 100% files/seams verified on disk (<= 2 files, leaf fix). Scope L1 by directory seam (`TARGET: Sources/Audio/`), L2 by explicit files.
   - *`[RESEARCH]` First*: Unknown callers, interface changes, or uncertain scope $\rightarrow$ dispatch `[RESEARCH]`.
 - **Progression**: Top-down (L1 -> L2 -> L3 Diagnostic -> Code). Planner uses Matt's foundations (`/domain-modeling`, `/codebase-design`, `/tdd`, `/diagnosing-bugs`) to compose tickets; at Level 3 (Micro), Planner provides exact TDD blueprints (Red contract -> Green contract -> Seam boundary) so Worker's `/tdd` executes without guesswork.

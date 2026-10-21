@@ -26,18 +26,21 @@ When authoring `ACTION:` for Level 3 tickets, Planner MUST follow Matt's `/tdd` 
 
 ## 2. Dispatch SOP: [CODE] vs [RESEARCH] (100% Boundary Rule)
 
-Before drafting tickets, Planner cross-checks ground truth without tags or unverified memory:
+Before drafting tickets, verify ground truth physically. Never trust task memory from 5–10 steps ago; never clutter git with tracking tags.
 
-1. **Two-Step Physical Cross-Check (Anti-Hallucination Gate)**:
-   - **Existence (現在有沒有)**: `git grep -n "<symbol>" <path>` or `test -f <path>` to confirm existence on disk.
-   - **Last-Touch (上一動)**: `git log -n 1 -- <path>` (or `-S "<symbol>"`). Cross-reference commit metadata (`Task:`, `Scope:`, `Verification:`) with Planner impression.
-   - **Discrepancy Invalidation**: Contradiction = 0% confidence. Invalidate memory immediately and dispatch `[RESEARCH]` (`VERIFY: REPORT_ONLY`). Never guess or read whole files in Terminal A.
-2. **The 100% Boundary Gate**:
-   - **Known Seam (100% known, <= 2 files, leaf fix)**: Dispatch `[CODE]` directly.
-   - **Unknown Boundary (unknown callers, interface refactor, cross-module seams)**: Dispatch `[RESEARCH]` (`VERIFY: REPORT_ONLY`).
-3. **Hierarchical Scoping**:
-   - *Level 1 (Macro / Unresearched)*: Scope by directory seam (`TARGET: Sources/Audio/`).
-   - *Level 2/3 (Meso/Micro / Researched)*: Scope by exact files captured in `SUMMARY.md`.
+### Physical Ground-Truth Audit (Anti-Hallucination Gate)
+Cross-check candidate seams against disk using two targeted, zero-context commands:
+1. **Current Existence**: Run `git grep -n "<symbol>" <path>` or `test -f <path>`. What is not on disk does not exist.
+2. **Last Action**: Run `git log -n 1 -- <path>` (or `-S "<symbol>"`). Cross-check commit metadata (`Task:`, `Scope:`, `Verification:`) against Planner intent. All tasks were dispatched by Planner; the commit confirms whether reality matches intent.
+3. **Discrepancy Invalidation**: Contradiction drops confidence to zero. Invalidate memory immediately and dispatch `[RESEARCH]` (`VERIFY: REPORT_ONLY`). Never guess in the dark, and never read whole files in Terminal A.
+
+### The 100% Boundary Gate
+- **Known Seam (100% of affected files confirmed, <= 2 files, leaf fix)**: Dispatch `[CODE]` directly. Zero research latency.
+- **Unknown Boundary (unknown callers, interface refactors, cross-module seams)**: Dispatch `[RESEARCH]` first (`VERIFY: REPORT_ONLY`). Let Worker probe call-sites.
+
+### Hierarchical Scoping
+- **Level 1 (Macro / Intent)**: Scope by directory or subsystem seam (`TARGET: Sources/Audio/`). Never guess individual leaf files without research.
+- **Level 2/3 (Meso / Micro)**: Scope by explicit file list verified via compiler probes in `SUMMARY.md`.
 
 ## 3. Multi-Interface & Refactor Authorization Gates
 
