@@ -835,7 +835,7 @@ BLOCK_EOF
           if [ -n "$TASK_TARGET" ] && [ -f "$WORK_DIR/$TASK_TARGET" ]; then
             report_path="$WORK_DIR/$TASK_TARGET"
           else
-            report_path=$(find "$WORK_DIR/.reports" -name "SUMMARY.md" 2>/dev/null | head -n 1 || true)
+            report_path=$(find -L "$WORK_DIR/.reports" -name "SUMMARY.md" 2>/dev/null | head -n 1 || true)
             if [ -z "$report_path" ]; then
               report_path=$(find "$WORK_DIR/docs/research" -name "*.md" 2>/dev/null | head -n 1 || true)
             fi
