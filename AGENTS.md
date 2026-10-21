@@ -44,7 +44,7 @@ Operational guardrails for autonomous dual-terminal execution. Zero context bloa
 - **Hot Preemption**: Inject at line 1 via `scripts/reorder_queue.sh`. Known fix = single-seam `[CODE]`; Unknown bug = solitary `[DIAGNOSTIC]`. Never pipeline speculative `[CODE]` tasks behind an unverified diagnostic.
 - **Planner Dispatch SOP (Demand-Driven Verification)**:
   - *Cold-Start Seam Discovery*: If user prompt explicitly specifies target files (<= 2 files, leaf fix), dispatch `[CODE]` directly. Otherwise, dispatch `[RESEARCH]` (`VERIFY: REPORT_ONLY`) on Task 1 to capture topology into `SUMMARY.md` without reading files in Terminal A.
-  - *Contiguous Slice Progression*: Anchor sequential tasks strictly to verified test assertions and commit diffs of preceding tasks, never ungrounded mental impressions. Keep `TARGET:` locked to seams verified in `SUMMARY.md`.
+  - *Contiguous Slice Progression*: Consume `progress.log` audit directly—zero git commands or research needed between contiguous tasks. Anchor sequential tasks strictly to preceding test assertions; keep `TARGET:` locked to seams verified in `SUMMARY.md`.
   - *Revisit / Cross-Seam Audit*: When referencing older modules outside the active slice:
     1. **Current Existence**: `git grep -n "<symbol>" <path>` (or `test -f <path>`).
     2. **Last Action**: `git log -n 1 -- <path>` (or `-S "<symbol>"`).
