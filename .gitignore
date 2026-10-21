@@ -12,6 +12,8 @@ tasks.txt.lock/
 
 # Build & Environment Artifacts
 build/
+.build/
+.swiftpm/
 .venv/
 venv/
 __pycache__/
