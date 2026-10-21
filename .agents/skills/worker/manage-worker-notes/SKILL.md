@@ -13,4 +13,8 @@ Maintain a local cheat sheet (`.worker.notes.md`) to preserve project-specific b
 ## When to Update `.worker.notes.md`
 - When you discover a non-obvious repository quirk (e.g., hidden env vars, custom build targets).
 - When an unexpected linker dependency or header ordering is required.
-- Append a concise 1-2 line tip under the relevant section. Keep the file compact (< 50 lines).
+- Append a concise 1-2 line tip under the relevant section. Keep the file compact (< 30 lines).
+
+## Strict Invariants
+- Strictly limited to compiler flags and toolchain quirks.
+- NEVER record architectural lore, task history, or framework workarounds. If any note contradicts disk reality, purge it immediately.

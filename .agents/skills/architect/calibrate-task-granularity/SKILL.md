@@ -24,7 +24,19 @@ When authoring `ACTION:` for Level 3 tickets, Planner MUST follow Matt's `/tdd` 
 3. **Deep Module Boundary**: Anchor tests and contracts to deep public seams (`/codebase-design`). Never test ephemeral private helpers or leak implementation details.
 4. **Tight Loop Verification**: `VERIFY:` must specify a fast, deterministic, single-command target (e.g. `pytest tests/test_foo.py -k test_bar`).
 
-## 2. Multi-Interface & Refactor Authorization Gates
+## 2. Dispatch SOP: [CODE] vs [RESEARCH] (100% Boundary Rule)
+
+Before drafting tickets, Planner evaluates whether to research or code:
+1. **Ground Truth Baseline**: Check `git log -n 1` for the latest verified frontier and verification command. Hold zero unverified memory.
+2. **The 100% Boundary Gate**:
+   - **Known Seam (100% of affected files known, <= 2 files, or leaf bugfix)**: Dispatch `[CODE]` directly. Zero research latency.
+   - **Unknown Boundary (unknown callers, interface refactoring, cross-module seams)**: Dispatch `[RESEARCH]` with `VERIFY: REPORT_ONLY`. Never guess dependencies or read whole codebases in Terminal A.
+3. **Hierarchical Scoping**:
+   - *Level 1 (Macro / Unresearched)*: Scope by directory or subsystem seam (`TARGET: Sources/Audio/`). Do not guess individual files in the dark.
+   - *Level 2/3 (Meso/Micro / Researched)*: Scope by exact files captured in `SUMMARY.md` from compiler probes.
+4. **Discrepancy Purge**: If any past log or note contradicts code on disk, purge the stale note immediately and re-anchor via `[RESEARCH]`.
+
+## 3. Multi-Interface & Refactor Authorization Gates
 
 Planner MUST NOT approve multi-interface targets or `[REFACTOR]` tickets without satisfying all 4 gates:
 1. **Inseparability**: Splitting breaks intermediate commit builds/tests.
@@ -32,7 +44,7 @@ Planner MUST NOT approve multi-interface targets or `[REFACTOR]` tickets without
 3. **Profile Credit**: Target module has >= 4.5 stars in `docs/agents/granularity-profile.json`. For lower-credit modules, Planner must use Level 3 Blueprint Mode.
 4. **Topology Proof**: Prior verified `[DIAGNOSTIC]` or `[RESEARCH]` report in `.reports/<issue-slug>/`.
 
-## 3. Dynamic Sizing & Ticket Formatting Protocol
+## 4. Dynamic Sizing & Ticket Formatting Protocol
 
 1. **Read Profile**: Check `docs/agents/granularity-profile.json` for module rating.
 2. **Blast Radius Limits**:
@@ -46,7 +58,7 @@ Planner MUST NOT approve multi-interface targets or `[REFACTOR]` tickets without
 4. **Clean Pivot Privilege**: If fixing side-effects requires >2 patch tickets or triggers `[SCOPE_BLOCKED]` with unexpected coupling, rollback to `nightshift-session-base` and re-issue a unified vertical slice or Expand-Migrate-Contract plan. Never stack patch-on-patch.
 5. **Post-Task Calibration**: Run `/score-worker-performance` after reading `progress.log`.
 
-## 4. Cross-Module Refactoring Strategies (Dual-Track)
+## 5. Cross-Module Refactoring Strategies (Dual-Track)
 
 - **Track A: Atomic Vertical-Slice (Small/Medium: <= 5 files & >= 3 stars)**:
   - Single `[CODE: REFACTOR]` ticket with interface, implementations, and tests in `TARGET:`.
