@@ -1,27 +1,3 @@
 # ==============================================================================
 # Progress Log (Newest Entries Prepended at the Top)
 # ==============================================================================
-- [PASS] TASK-006 | LEVEL: 1 | TARGET: src/calc.py, tests/test_calc.py | ATTEMPTS: 1 | CONFIDENCE: 1.0
-  Summary: Added cube method `cube(x)` returning x cubed and unit tests covering positive, zero, negative, and float numbers.
-  Verification: python3 -m unittest discover tests -> 9 tests passed (100%).
-
-- [PASS] TASK-005 | LEVEL: 1 | TARGET: src/calc.py, tests/test_calc.py | ATTEMPTS: 1 | CONFIDENCE: 1.0
-  Summary: Added square_root method `square_root(x)` raising ValueError on negative x and unit tests.
-  Verification: python3 -m unittest discover tests -> 8 tests passed (100%).
-
-- [PASS] TASK-004 | LEVEL: 1 | TARGET: src/calc.py, tests/test_calc.py | ATTEMPTS: 1 | CONFIDENCE: 1.0
-  Summary: Added percentage method `percentage(value, total)` raising ValueError on zero total and unit tests.
-  Verification: python3 -m unittest discover tests -> 7 tests passed (100%).
-
-- [PASS] TASK-003 | LEVEL: 1 | TARGET: src/calc.py, tests/test_calc.py | ATTEMPTS: 1 | CONFIDENCE: 1.0
-  Summary: Added modulo method `modulo(a, b)` raising ValueError on zero divisor and unit tests.
-  Verification: python3 -m unittest discover tests -> 6 tests passed (100%).
-
-- [PASS] TASK-002 | LEVEL: 1 | TARGET: src/calc.py, tests/test_calc.py | ATTEMPTS: 1 | CONFIDENCE: 1.0
-  Summary: Added power method `power(base, exponent)` and unit tests covering positive/zero/fractional/negative exponents.
-  Verification: python3 -m unittest discover tests -> 5 tests passed (100%).
-
-- [PASS] TASK-001 | LEVEL: 1 | TARGET: src/calc.py, tests/test_calc.py | ATTEMPTS: 1 | CONFIDENCE: 1.0
-  Summary: Implemented Calculator class and comprehensive unittest suite.
-  Verification: python3 -m unittest tests/test_calc.py -> 4 tests OK.
-

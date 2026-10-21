@@ -12,8 +12,8 @@ A plug-and-play, dual-terminal decoupled AI development framework designed for 2
 │  • Human + High-IQ AI (Gemini / Claude).                               │
 │  • Discuss requirements, groom domain models & tracer-bullet tasks.    │
 │  • Decompose goals into single-line atomic English contracts.          │
+│  • Level 1~3 granularity aligned with Matt Pocock's TDD blueprints.    │
 │  • Inspects progress.log (<=15 lines) for zero token pollution.        │
-│  • [Early-Access] Guides Human with native preview commands (.preview/)│
 │  • [Acceptance] Auto-merges verified frontier into main upon wake-up.  │
 └───────────────────────────────────┬────────────────────────────────────┘
                                     │ (FIFO tasks.txt)
@@ -24,7 +24,7 @@ A plug-and-play, dual-terminal decoupled AI development framework designed for 2
 │    Stages verified snapshots to .preview/ drop-box on task PASS.       │
 │  • Mode 2 (WORKER_ISOLATION=0): Direct in-place single-tree execution. │
 │  • Headless stateless CLI per task (agy --mode accept-edits).          │
-│  • Enforces .skills/universal-build-verify.md (TDD + Smoke tests).     │
+│  • Decoupled Mechanical Audits: [CODE], [RESEARCH], [DIAGNOSTIC].      │
 │  • Max 3 repair attempts -> auto rollback on failure.                  │
 │  • Auto Conventional Commit & prepends <=15 lines to progress.log.     │
 └────────────────────────────────────────────────────────────────────────┘
@@ -39,37 +39,43 @@ A plug-and-play, dual-terminal decoupled AI development framework designed for 2
    - The worker executes inside `.worker-tree` on branch `feature/worker-frontier`.
    - Human's workspace remains 100% stable; IDE files never flicker; compiler/linker locks (`ETXTBSY`) are eliminated.
    - Automatically mirrors untracked configs (`.env`, `.worker.env`) and symlinks heavy dependencies (`node_modules`, `.venv`) with zero disk bloat.
-   - Protects against network port collisions (`PORT=3001`) and test database contamination.
-2. **Immutable Early-Access Drop-box (`.preview/`)**:
-   - As soon as a task passes verification (e.g. 3 of 10 tasks), Worker stages an immutable snapshot/binary with `version.json`.
-   - Human can try out the latest build immediately without compiling and without modifying git branches.
-3. **Single-Tree In-Place Mode (`WORKER_ISOLATION=0`)**:
-   - Zero-overhead fallback for projects locked to fixed ports (e.g. port 22) or singleton hardware resources.
-4. **Live Human-in-the-Loop Feedback & Dynamic Rescheduling**:
-   - Human tests intermediate milestones in `.preview/` while Worker continues executing.
-   - Planner dynamically injects `[HOTFIX]` tasks to line 1 of `tasks.txt` via atomic directory locks (`scripts/reorder_queue.sh`).
-5. **Zero-Intervention Auto-Merge**:
-   - When all tasks complete, Sentinel Subagent wakes Planner.
-   - Planner performs final acceptance and automatically runs `git merge --ff-only feature/worker-frontier` into `main`. No manual human git commands needed.
+   - Prevents network port collisions (`PORT=3001`) and test database contamination.
+2. **Decoupled Multi-Archetype Mechanical Audits**:
+   - `[CODE]`: Deterministic test suite pass, Anti-Idle (`Tests_Run >= 1`), target whitelist, blast radius limits, assertion non-decrease.
+   - `[RESEARCH]`: Artifact integrity check, Clean Tree (zero uncommitted/modified product code), pointer validity probe.
+   - `[DIAGNOSTIC]`: Product code lock, clean build, repro failure strictly on test assertion.
+3. **Immutable Early-Access Drop-box (`.preview/`)**:
+   - As soon as a task passes verification, Worker stages an immutable snapshot/binary with `version.json`.
+   - Human can test intermediate builds immediately without compilation and without branch switching.
+4. **Single-Tree In-Place Mode (`WORKER_ISOLATION=0`)**:
+   - Zero-overhead fallback for projects locked to fixed ports or singleton hardware resources.
+5. **Atomic Hot Preemption & Dynamic Rescheduling**:
+   - Planner dynamically injects urgent `[CODE]` or `[DIAGNOSTIC]` tasks to line 1 of `tasks.txt` via atomic locks (`scripts/reorder_queue.sh`).
+6. **Zero-Token Sentinel Auto-Merge**:
+   - When queue empties, Sentinel Subagent (`scripts/watch_worker.sh`) wakes Planner without chat polling loops.
+   - Planner performs acceptance and automatically runs `git merge --ff-only feature/worker-frontier` into `main`.
 
 ---
 
 ## File Structure
 
-- **`worker.sh`**: Core background daemon supporting isolation modes, POSIX queue locking, and timeout watchdogs.
-- **`.worker.env`**: Mandatory active environment configuration (co-located with `worker.sh`).
+- **`worker.sh`**: Core background daemon supporting isolation modes, POSIX queue locking, and mechanical audit funnels.
 - **`.worker.env.example`**: Configuration template with model parameters, OS detection, and isolation toggle.
 - **`.skills/universal-build-verify.md`**: Universal SOP for background workers (security guardrails, TDD, auto-commit).
 - **`AGENTS.md` / `GEMINI.md`**: Master agent rules, Conventional Commit standards, and dynamic granularity ladders.
-- **`docs/SPEC.md`**: Detailed architectural specification of the dual-terminal and isolation protocols.
-- **`docs/PORTING_GUIDE.md`**: Autonomous AI porting guide for adopting this framework into other projects.
-- **`scripts/status.sh`**: Real-time non-blocking visual dashboard of worker state, queue, and preview status.
-- **`scripts/watch_worker.sh`**: Zero-token blocking waiter for Sentinel Subagents.
-- **`scripts/reorder_queue.sh`**: Atomic queue reordering and hot preemption tool.
+- **`.worker.notes.md`**: Shared repository quirks and compiler flags cheat sheet across stateless runs.
 - **`tasks.txt`**: FIFO task queue (single-line atomic English contracts).
-- **`tasks.done`**: Completed task history log.
 - **`progress.log`**: Latest verification reports (newest prepended at top, <=15 lines per task).
-- **`worker.status`**: Real-time worker heartbeat JSON.
+- **`scripts/`**:
+  - **`status.sh`**: Real-time non-blocking visual dashboard of worker state, queue, and preview status.
+  - **`watch_worker.sh`**: Zero-token blocking waiter for Sentinel Subagents.
+  - **`reorder_queue.sh`**: Atomic queue reordering and hot preemption tool.
+  - **`extract_skeleton.sh`**: Signature skeleton and context slice extractor for dossier reports.
+  - **`probe_line.sh`**: Precise line-level code auditor.
+- **`docs/`**:
+  - **`SPEC.md`**: Architectural specification of the dual-terminal and isolation protocols.
+  - **`PORTING_GUIDE.md`**: Autonomous AI porting guide for adopting this framework into other projects.
+  - **`agents/`**: Domain models, triage labels, and granularity profiles.
 
 ---
 
@@ -96,12 +102,6 @@ Open a separate terminal window or tmux session and run:
 Inspect live progress without disturbing the worker:
 ```bash
 ./scripts/status.sh
-```
-When intermediate milestones pass, Planner will provide the exact native command to preview the `.preview/` drop-box:
-```bash
-# Example: run the verified preview binary/script directly (0 compilation, 0 merge)
-./.preview/<app>            # for compiled binaries
-python3 .preview/src/<app>  # for script applications
 ```
 
 ### 5. Emergency Pause / Resume

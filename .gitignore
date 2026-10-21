@@ -9,6 +9,8 @@ PAUSE
 tasks.txt.lock/
 .worker-tree/
 .preview/
+tasks.done
+tasks.done.*
 
 # Build & Environment Artifacts
 build/
