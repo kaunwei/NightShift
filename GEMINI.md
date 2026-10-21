@@ -6,14 +6,31 @@ Strict operational guardrails for AI. Emphasize zero-context bloat and physical 
 
 | Terminal | Role & Mission | Active Skills | Strict Prohibitions (NEVER DO) |
 | :--- | :--- | :--- | :--- |
-| **A (Planner)** | Architecture, task decomposition, audit. | `/domain-modeling`, `/calibrate-task-granularity`, `/watch-worker-queue`, `/code-review` | No direct coding/debugging. No chat sleep/polling loops. No use of Worker skills. |
+| **A (Planner)** | Architecture, task decomposition, audit. | `/domain-modeling`, `/calibrate-task-granularity`, `/handle-worker-guidance`, `/score-worker-performance`, `/watch-worker-queue`, `/code-review` | No direct coding/debugging. No chat sleep/polling loops. No use of Worker skills. |
 | **B (Worker)** | Unattended TDD execution, atomic commits. | `/universal-build-verify`, `/record-attempt-trace`, `/manage-worker-notes` | No architectural changes. No entering chat loops. |
 
-*   **Engineering Foundations**: Both terminals follow Matt Pocock skills (`/tdd`, `/codebase-design`, `/domain-modeling`, `/diagnosing-bugs`, `/git-guardrails`).
 *   **Planner Sovereign Intervention (Only step in if):**
     1. Worker blocks on a Level 3 (Micro) task after 3 retries.
     2. Worker hallucinates diagnostics or fails to isolate root cause after 2-3 attempts.
     3. Explicit user mandate. (Log root cause in `.worker.notes.md` and `docs/agents/granularity-profile.json`).
+
+### Skill Catalog & Locations
+
+All skills reside in `.agents/skills/` (and `.skills/`). Reference by exact directory:
+
+| Realm | Skill | Path | Trigger & Purpose |
+| :--- | :--- | :--- | :--- |
+| **Architect** | `/calibrate-task-granularity` | `.agents/skills/architect/calibrate-task-granularity/` | Size tasks (L1-3) & check 4 multi-interface gates. |
+| | `/handle-worker-guidance` | `.agents/skills/architect/handle-worker-guidance/` | Resolve `[NEED_GUIDANCE]` & `[NEED_DECOMPOSITION]`. |
+| | `/score-worker-performance` | `.agents/skills/architect/score-worker-performance/` | Audit `progress.log` & score 1-5 stars in profile. |
+| | `/watch-worker-queue` | `.agents/skills/architect/watch-worker-queue/` | Sentinel subagent for zero-token batch wakeup. |
+| **Worker** | `/universal-build-verify` | `.skills/universal-build-verify.md` | Mandatory execution SOP: TDD, retry limits, clean tree. |
+| | `/record-attempt-trace` | `.agents/skills/worker/record-attempt-trace/` | Append <=15 line attempt traces to `progress.log`. |
+| | `/manage-worker-notes` | `.agents/skills/worker/manage-worker-notes/` | Cache compiler flags & repo quirks in `.worker.notes.md`. |
+| **Foundations** | `/tdd`, `/codebase-design` | `.agents/skills/engineering/` | Test-driven development & deep module seam design. |
+| | `/domain-modeling` | `.agents/skills/engineering/domain-modeling/` | Ubiquitous terminology, `GLOSSARY.md`, ADR records. |
+| | `/diagnosing-bugs` | `.agents/skills/engineering/diagnosing-bugs/` | Tight feedback loops & root cause isolation. |
+| | `/git-guardrails`, `/code-review` | `.agents/skills/engineering/` | Destructive command safety & spec/standard review. |
 
 ## 2. Environment & Execution Mode (`.worker.env`)
 
