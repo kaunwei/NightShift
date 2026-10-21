@@ -5,23 +5,18 @@ description: "Deploy a lightweight Sentinel Subagent to monitor the Terminal B w
 
 # Watch Worker Queue
 
-Deploy a lightweight Sentinel Subagent to monitor background execution and trigger proactive wakeup upon completion.
-
-## When to Use
-- After writing batch tasks to `tasks.txt`.
-- When unattended event-driven notification is required.
-- **NEVER use `sleep` or polling loops in chat.**
+Deploy a lightweight Sentinel Subagent to monitor background worker execution and wake Planner upon completion without chat polling loops.
 
 ## Protocol
 
 ```
-[Planner] Writes tasks to tasks.txt -> Deploys Queue Sentinel -> Yields control immediately.
+[Planner] Enqueue tasks -> Deploy Queue Sentinel -> Yield control immediately.
    │
 [Sentinel Subagent]
-   • Runs: `bash scripts/watch_worker.sh 3600` (zero LLM token consumption while waiting).
+   • Runs: `bash scripts/watch_worker.sh 3600` (zero token consumption while waiting).
    • On script exit: reads `head -n 15 progress.log` and notifies Planner.
    │
-[Event Wakeup] -> Planner awakes and delivers acceptance report to Human.
+[Event Wakeup] -> Planner awakes and executes final acceptance.
 ```
 
 ## Invocation Payload
@@ -38,9 +33,9 @@ Deploy a lightweight Sentinel Subagent to monitor background execution and trigg
 }
 ```
 
-## Acceptance & Merge Protocol
+## Acceptance & Merge
 
 When Sentinel wakes Planner:
-1. **Verify**: Planner reads `head -n 15 progress.log` and validates test status.
-2. **Auto-Merge (`WORKER_ISOLATION=1`)**: Run `git merge --ff-only feature/worker-frontier` into `main`. Zero manual human git commands needed.
-3. **In-Place Mode (`WORKER_ISOLATION=0`)**: Commits already on `main`. Deliver final status report.
+1. **Verify**: Check `head -n 15 progress.log` for passing `[MECHANICAL_AUDIT]`.
+2. **Auto-Merge (`WORKER_ISOLATION=1`)**: Run `git merge --ff-only feature/worker-frontier` into `main`. Zero manual git operations needed.
+3. **In-Place Mode (`WORKER_ISOLATION=0`)**: Commits already on `main`; present final summary to human.

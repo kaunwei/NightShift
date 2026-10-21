@@ -5,7 +5,7 @@ description: "Score worker execution performance (1 to 5 stars) from progress.lo
 
 # Score Worker Performance
 
-Audit worker execution trace from `progress.log` and update subsystem capability memory in `docs/agents/granularity-profile.json`.
+Audit worker execution traces from `progress.log` and update module capability ratings in `docs/agents/granularity-profile.json`.
 
 ## Scoring Rubric
 
@@ -15,10 +15,10 @@ Audit worker execution trace from `progress.log` and update subsystem capability
 | ⭐⭐⭐⭐ | **4 Stars** | Passed in 2 attempts (1 self-healed retry), green tests. | Maintain current Level (1 or 2). |
 | ⭐⭐⭐ | **3 Stars** | Passed on 3rd attempt (2 retries needed). | Demote subsequent tasks in this module to Level 2. |
 | ⭐⭐ | **2 Stars** | Raised `[NEED_GUIDANCE]` or `[NEED_DECOMPOSITION]`. | Demote to Level 2/3, provide guidance. |
-| ⭐ | **1 Star** | Blocked after 3 retries, timed out, crashed, or caught by anti-cheating guard (tampering with tests, invalid repro false red-light, or line probe mismatch). | Demote to Level 3. Re-architect with user. |
+| ⭐ | **1 Star** | Blocked after 3 retries, timed out, crashed, or caught by anti-cheating guard. | Demote to Level 3. Re-architect with user. |
 
 > [!NOTE]
-> **No-Fault Exemption (`[SCOPE_BLOCKED]`)**: When Worker halts honestly upon discovering compiler errors in downstream files outside declared `TARGET:`, this is boundary compliance, NOT a task failure. Do NOT deduct rating stars in `granularity-profile.json` (maintain current score and escalate to Planner to expand `TARGET:` or decompose into Expand-Migrate-Contract).
+> **No-Fault Exemption (`[SCOPE_BLOCKED]`)**: When Worker halts honestly upon discovering compiler errors in downstream files outside declared `TARGET:`, this is boundary compliance, NOT a failure. Do NOT deduct stars in `granularity-profile.json`.
 
 ## Process
 
