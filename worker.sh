@@ -530,7 +530,14 @@ while true; do
   fi
 
   # Peek at the first non-empty, non-comment line in tasks.txt
-  RAW_TASK=$(grep -v '^[[:space:]]*#' "$TASKS_FILE" 2>/dev/null | grep -v '^[[:space:]]*$' | head -n 1 || true)
+  RAW_TASK_MATCH=$(grep -n -v '^[[:space:]]*#' "$TASKS_FILE" 2>/dev/null | grep -v '^[0-9]*:[[:space:]]*$' | head -n 1 || true)
+  if [ -n "$RAW_TASK_MATCH" ]; then
+    RAW_TASK_LINE_NO="${RAW_TASK_MATCH%%:*}"
+    RAW_TASK="${RAW_TASK_MATCH#*:}"
+  else
+    RAW_TASK_LINE_NO=""
+    RAW_TASK=""
+  fi
 
   DONE_COUNT=$(grep -v '^[[:space:]]*#' "$TASKS_DONE_FILE" 2>/dev/null | grep -v '^[[:space:]]*$' | wc -l | tr -dc '0-9')
   [ -z "$DONE_COUNT" ] && DONE_COUNT=0
@@ -587,10 +594,14 @@ while true; do
   done
 
   TEMP_TASKS=$(mktemp)
-  awk -v task="$RAW_TASK" '
-    !found && $0 == task { found=1; next }
-    { print }
-  ' "$TASKS_FILE" > "$TEMP_TASKS"
+  if [ -n "${RAW_TASK_LINE_NO:-}" ]; then
+    awk -v ln="$RAW_TASK_LINE_NO" 'NR != ln' "$TASKS_FILE" > "$TEMP_TASKS"
+  else
+    awk -v task="$RAW_TASK" '
+      !found && $0 == task { found=1; next }
+      { print }
+    ' "$TASKS_FILE" > "$TEMP_TASKS"
+  fi
   mv "$TEMP_TASKS" "$TASKS_FILE"
   rmdir "$LOCK_DIR" 2>/dev/null || true
 
