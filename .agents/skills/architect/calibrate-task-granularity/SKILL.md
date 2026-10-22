@@ -24,23 +24,35 @@ When authoring `ACTION:` for Level 3 tickets, Planner MUST follow Matt's `/tdd` 
 3. **Deep Module Boundary**: Anchor tests and contracts to deep public seams (`/codebase-design`). Never test ephemeral private helpers or leak implementation details.
 4. **Tight Loop Verification**: `VERIFY:` must specify a fast, deterministic, single-command target (e.g. `pytest tests/test_foo.py -k test_bar`).
 
-## 2. Dispatch SOP: [CODE] vs [RESEARCH] (100% Boundary Rule)
+## 2. Dispatch SOP & Matt Pocock Engineering Pipeline
 
-Planner sizes and sequences tickets based on verified seams, leaving execution rhythm to intelligent judgment:
+Planner serves as the authoritative orchestrator, driving requirements through Matt Pocock's complete engineering loop with dynamic human alignment:
 
-### 1. Seam Discovery & Slicing
-- **Cold-Start**: Dispatch `[CODE]` directly if targets are known (<= 2 files, leaf fix). Dispatch `[RESEARCH]` (`VERIFY: REPORT_ONLY`) on Task 1 when seams or callers are unknown.
+### 1. Matt Pocock Development Loop
+1. **Domain Alignment (`/domain-modeling`)**: When new domain concepts or business rules emerge, consult and update `GLOSSARY.md` and ADRs. Maintain ubiquitous language across tests and tickets.
+2. **Seam & Depth Design (`/codebase-design`)**: Design deep modules (simple public interface, hidden internal complexity). Anchor testing to public seams; never expose private helpers.
+3. **Seam Discovery (Two-Tier Probe)**:
+   - **Tier 1 (Instant Audit)**: Planner runs targeted 1-line physical checks (`git grep -n "<symbol>" <path>` or `git log -n 1 -- <path>`) within the workspace (including valid sibling references in `ADDITIONAL_DIRS`). Sub-second, zero context bloat.
+   - **Tier 2 (Deep Background Probe)**: For unknown callers, multi-file topology, or complex refactors, dispatch `[RESEARCH]` (`VERIFY: REPORT_ONLY`) to Terminal B. Worker runs compiler/AST probes and outputs `.reports/<slug>/SUMMARY.md`.
+4. **TDD Blueprinting (`/tdd`)**: Structure tasks strictly into Red contract (failing test) $\rightarrow$ Green contract (minimal implementation) $\rightarrow$ Seam boundary verification.
+5. **Execution & Fast-Track Review (`/code-review`)**: Background Worker executes autonomously; Planner fast-tracks mechanical audit passes or runs deep reviews on critical seams.
+
+### 2. Dynamic Gating & Alignment Protocol
+- **Fast-Path (<= 2 files, leaf fix, known seam)**: Execute autonomously and write `tasks.txt` directly. Zero intermediate conversation.
+- **Gated Path (Large feature / unknown seam)**:
+  1. Dispatch `[RESEARCH]` on Task 1 to discover topology.
+  2. Once `SUMMARY.md` is ready, pause and present the **Matt Ticket Spec** to the human:
+     - **Pre-agreed Public Seam**: The exact interface boundary under test.
+     - **Domain Terms**: Any glossary or ADR additions.
+     - **Ticket Breakdown**: Numbered list of `TASK-XXX` entries (`TARGET:`, `ACTION:`, `VERIFY:`).
+     - **Confirmation Prompt**: *"Does this seam and TDD blueprint match your expectations?"*
+  3. Upon human confirmation, write tickets into `tasks.txt` for background worker execution.
+
+### 3. Slicing & Boundary Rules
 - **Continuous Slices**: Chain `[CODE]` tasks directly along the verified seam.
-- **Distant Seam Audit**: When referencing older modules or if memory is uncertain, verify via `git grep -n "<symbol>" <path>` or `git log -n 1 -- <path>` instead of reading files or guessing.
+- **Distant Seam Audit**: When referencing older modules outside the active slice, verify via Tier 1 check instead of guessing.
 - **Discrepancy Invalidation**: Disk contradiction drops confidence to zero $\rightarrow$ dispatch `[RESEARCH]` or trigger Clean Pivot. Never stack speculative fixes.
-
-### 2. The 100% Boundary Gate
-- **Known Seam (100% confirmed, <= 2 files, leaf fix, or active slice)**: Dispatch `[CODE]` directly.
-- **Unknown Boundary (unknown callers, interface refactors, cross-module seams)**: Dispatch `[RESEARCH]` first (`VERIFY: REPORT_ONLY`).
-
-### 3. Hierarchical Scoping
-- **Level 1 (Macro / Intent)**: Scope by directory or subsystem seam (`TARGET: Sources/Audio/`).
-- **Level 2/3 (Meso / Micro)**: Scope by explicit file list verified via compiler probes in `SUMMARY.md`.
+- **Hierarchical Scoping**: Scope Level 1 by directory seam (`TARGET: Sources/Audio/`), Level 2/3 by explicit files from `SUMMARY.md`.
 
 ## 3. Multi-Interface & Refactor Authorization Gates
 
