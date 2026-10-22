@@ -114,6 +114,7 @@ AI_MODEL="${AI_MODEL:-gemini-3.8-flash-low}"
 AI_EFFORT="${AI_EFFORT:-low}"
 AGY_MODE="${AGY_MODE:-accept-edits}"
 TASK_TIMEOUT="${TASK_TIMEOUT:-1800}"
+TASK_MAX_STEPS=1
 POLL_INTERVAL="${POLL_INTERVAL:-5}"
 USE_SANDBOX="${USE_SANDBOX:-0}"
 RUN_ONCE="${RUN_ONCE:-0}"
@@ -627,6 +628,7 @@ while true; do
   TASK_CONSTRAINTS=$(echo "$RAW_TASK" | sed -n 's/.*CONSTRAINTS:[[:space:]]*\([^|]*\).*/\1/p' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' || echo "")
   TASK_BASE_SHA=$(git -C "$WORK_DIR" rev-parse HEAD 2>/dev/null || echo "HEAD~1")
   START_TIME=$(date +%s)
+  TASK_MAX_STEPS=1
 
   if echo "$TASK_TITLE $TASK_CONSTRAINTS" | grep -iqE "\[RESEARCH\]"; then
     archive_active_reports
@@ -726,6 +728,34 @@ PROMPT_EOF
         "${EXTRA_CLI_ARGS[@]}"
     ) 2>&1 | tee "$CMD_OUTPUT_TMP"
     EXIT_CODE="${PIPESTATUS[0]}"
+
+    # Hardcoded 1-Continuation Allowance (TASK_MAX_STEPS=1):
+    # If the initial session hit the CLI step limit right before finishing (leaving uncommitted edits in worktree),
+    # allow at most 1 continuation pass to verify and commit. Requiring more indicates over-scoped task allocation.
+    CONTINUATION_COUNT=0
+    while [ "$EXIT_CODE" -eq 0 ] && [ "$CONTINUATION_COUNT" -lt "$TASK_MAX_STEPS" ]; do
+      CURRENT_HEAD_SHA=$(git -C "$WORK_DIR" rev-parse HEAD 2>/dev/null || echo "")
+      DIRTY_WORKTREE=$(git -C "$WORK_DIR" status --porcelain 2>/dev/null | grep -vE "(progress\.log|tasks\.txt|tasks\.done|worker\..*\.status|\.preview|\.worker\..*|\.reports/|\.reports)" || true)
+      if [ "$CURRENT_HEAD_SHA" = "$TASK_BASE_SHA" ] && [ -n "$DIRTY_WORKTREE" ]; then
+        CONTINUATION_COUNT=$(( CONTINUATION_COUNT + 1 ))
+        echo "[WORKER] ⏩ In-progress edits detected after CLI step limit (Continuation $CONTINUATION_COUNT/$TASK_MAX_STEPS). Resuming to verify and commit..."
+        CONTINUE_TMP=$(mktemp)
+        (
+          cd "$WORK_DIR" && \
+          export PORT="$WORKER_PORT" && \
+          export TEST_PORT="$WORKER_PORT" && \
+          run_with_timeout "$TASK_TIMEOUT" agy -p "Continue $TASK_ID from the current modified working tree (final continuation $CONTINUATION_COUNT/$TASK_MAX_STEPS). Inspect git diff, complete any remaining edits, run verification (${TASK_VERIFY:-build and test}), prepend $PROGRESS_FILE, and commit." \
+            --dangerously-skip-permissions \
+            --model "$AI_MODEL" \
+            "${EXTRA_CLI_ARGS[@]}"
+        ) 2>&1 | tee "$CONTINUE_TMP"
+        EXIT_CODE="${PIPESTATUS[0]}"
+        cat "$CONTINUE_TMP" >> "$CMD_OUTPUT_TMP"
+        rm -f "$CONTINUE_TMP"
+      else
+        break
+      fi
+    done
   else
     echo "[WORKER] Launching $AI_CLI (WorkDir: $WORK_DIR)..."
     (
