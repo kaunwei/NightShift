@@ -14,11 +14,10 @@ description: "Orchestrate the 24h unattended workflow: domain modeling, /explore
 - **Deep Seams**: Follow [`codebase-design`](../engineering/codebase-design/SKILL.md) (and [`grilling`](../productivity/grilling/SKILL.md) when requirements are ambiguous) to design narrow public interfaces hiding deep implementations. Anchor tests strictly to public seams; never test private helpers.
 
 ### Block 2: Seam Exploration (`/explore`)
-Follow [`explore`](../explore/SKILL.md) to verify paths and caller topology before planning:
-- **Known Seams (`<= 2` files, leaf fix, explicit user target)**: Fast-path direct dispatch.
-- **Unknown Seams (new features, wide refactors, unfamiliar callers)**: Dispatch Tier 2 `[RESEARCH]` via [`explore`](../explore/SKILL.md) to produce `.reports/<slug>/SUMMARY.md`.
-- **Distant Module Revisit**: Run Tier 1 instant probe (`git grep -n`, `git log -n 1 -- <path>`).
-- **Discrepancy Invalidation**: If disk contradicts memory, run [`explore`](../explore/SKILL.md) or trigger **Clean Pivot**.
+Follow [`explore`](../explore/SKILL.md) to verify paths and caller topology before planning (never call `read_file` on product/test source code in Terminal A):
+- **Default (Tier 2 `[RESEARCH]`)**: Dispatch a `[RESEARCH]` ticket to `tasks.txt` + Queue Sentinel to produce `.reports/<slug>/SUMMARY.md` (stamped with `<!-- REPORT_META: Task=<id> | Commit=<sha> -->`).
+- **Known Leaf Target (`<= 2` files, explicit `<path>#L<line>`)**: Verify via Tier 1 shell probes (`git grep -n`, `git log -n 1 --oneline`, `scripts/extract_skeleton.sh`) and fast-path dispatch.
+- **Stale Report & Discrepancy Invalidation**: Read only `.reports/<current-slug>/SUMMARY.md` matching `HEAD` (never `.reports/.archive/`; `worker.sh` auto-archives reports after `[CODE]` commits). If disk contradicts report/memory, re-run [`explore`](../explore/SKILL.md) or trigger **Clean Pivot**.
 
 ### Block 3: Granularity Ladder & TDD Blueprints
 Follow [`tdd`](../engineering/tdd/SKILL.md) and size instruction density from `docs/agents/granularity-profile.json`:
@@ -98,7 +97,7 @@ Approve multi-interface targets or `[CODE: REFACTOR]` tickets only when all 4 ga
 
 ## 5. Hard Guardrails (Terminal A)
 
-- **Duty Firewall**: Never edit product/test files in Terminal A (except L3 Sovereign Intervention after 3 worker failures, repeated worker diagnostic hallucination, or explicit user mandate).
+- **Duty & `read_file` Firewall**: Never edit or `read_file` product/test source files (`src/`, `include/`, `lib/`, `Sources/`, `tests/`, `firmware/`) in Terminal A (except L3 Sovereign Intervention after 3 worker failures, repeated worker diagnostic hallucination, or explicit user mandate). Use `read_file` strictly on `.reports/<current-slug>/SUMMARY.md`, `progress.log`, `tasks.txt`, `.worker.notes.md`, `GLOSSARY.md`, `docs/`, and skill files.
 - **Language**: Write all `tasks.txt` entries, logs, and commits strictly in English.
-- **Context Explosion Guard**: Use `git log -n 1 --stat`, `git show --stat <commit>`, `git log --oneline -n 20`, `git diff --stat <commit>`, or `scripts/probe_line.sh <file>#L<line>`. Never run bare `git log`, unbounded `git diff`, or `git log -p`.
+- **Context Explosion Guard**: Use `git log -n 1 --stat`, `git show --stat <commit>`, `git log --oneline -n 20`, `git diff --stat <commit>`, `scripts/extract_skeleton.sh <file>#L<line>`, or `scripts/probe_line.sh <file>#L<line>`. Never run bare `git log`, unbounded `git diff`, or `git log -p`.
 - **Forbidden Commands**: Never run `git push`, `git clean -f`/`-fd`, unauthorized `git reset --hard` (only for **Clean Pivot**), `sudo`, or host package managers (`apt`, `yum`, `brew`).

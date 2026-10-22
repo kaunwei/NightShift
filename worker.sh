@@ -174,6 +174,19 @@ ensure_worker_tree() {
   [ ! -e "$target_dir/.reports" ] && ln -sf "$SCRIPT_DIR/.reports" "$target_dir/.reports" 2>/dev/null || true
 }
 
+archive_active_reports() {
+  mkdir -p "$SCRIPT_DIR/.reports/.archive"
+  local ts
+  ts=$(date '+%Y%m%d-%H%M%S')
+  for entry in "$SCRIPT_DIR/.reports"/*; do
+    [ ! -e "$entry" ] && continue
+    local base
+    base=$(basename "$entry")
+    [ "$base" = ".archive" ] && continue
+    mv "$entry" "$SCRIPT_DIR/.reports/.archive/${ts}-${base}" 2>/dev/null || true
+  done
+}
+
 publish_preview_artifact() {
   local task_id="$1"
   local task_title="$2"
@@ -614,6 +627,10 @@ while true; do
   TASK_CONSTRAINTS=$(echo "$RAW_TASK" | sed -n 's/.*CONSTRAINTS:[[:space:]]*\([^|]*\).*/\1/p' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' || echo "")
   TASK_BASE_SHA=$(git -C "$WORK_DIR" rev-parse HEAD 2>/dev/null || echo "HEAD~1")
   START_TIME=$(date +%s)
+
+  if echo "$TASK_TITLE $TASK_CONSTRAINTS" | grep -iqE "\[RESEARCH\]"; then
+    archive_active_reports
+  fi
   
   echo ""
   echo "=============================================================================="
@@ -854,6 +871,14 @@ BLOCK_EOF
               GUARD_STATUS=11
               GUARD_ERROR="Research Artifact Invalid: Report '$report_path' lacks standard markdown headings."
             else
+              if ! head -n 1 "$report_path" 2>/dev/null | grep -q "REPORT_META:"; then
+                local r_sha r_tmp
+                r_sha=$(git -C "$WORK_DIR" rev-parse --short HEAD 2>/dev/null || echo "HEAD")
+                r_tmp=$(mktemp)
+                echo "<!-- REPORT_META: Task=$TASK_ID | Commit=$r_sha | Time=$(date -u '+%Y-%m-%dT%H:%M:%SZ') -->" > "$r_tmp"
+                cat "$report_path" >> "$r_tmp"
+                mv "$r_tmp" "$report_path"
+              fi
               echo "[WORKER_GUARD] ✅ Artifact verified: $report_path ($(wc -c < "$report_path" | tr -dc '0-9') bytes)"
 
               # 3. Gate 4: Pointer Validity Probe
@@ -966,6 +991,9 @@ BLOCK_EOF
       prepend_progress_log "[MECHANICAL_AUDIT] Status: PASS | Verify_Exit: 0 | Tests_Run: >=1 | Whitelist: PASS | Tree: CLEAN | Diff: $DIFF_STAT | Attempts: $DETECTED_ATTEMPTS"
 
       # Success
+      if ! echo "$TASK_TITLE $TASK_CONSTRAINTS" | grep -iqE "\[(RESEARCH|DIAGNOSTIC)\]"; then
+        archive_active_reports
+      fi
       if [ "$WORKER_ISOLATION" = "1" ] || [ "$WORKER_ISOLATION" = "true" ]; then
         publish_preview_artifact "$TASK_ID" "$TASK_TITLE"
       fi
