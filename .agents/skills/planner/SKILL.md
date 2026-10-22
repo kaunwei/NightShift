@@ -141,6 +141,18 @@ Planner MUST NOT approve multi-interface targets or `[REFACTOR]` tickets without
   - `.worker.notes.md`: Worker autonomously maintains and consults repository quirks and compiler flags across stateless runs (`/manage-worker-notes`).
 - **Clean Pivot Privilege**: If fixing side-effects requires >2 patch tickets or triggers `[SCOPE_BLOCKED]`, rollback (`git reset --hard nightshift-session-base`) and re-issue a unified vertical slice. Never stack patch-on-patch.
 
+#### On-the-Fly Human Preview & Live Testing (`.preview/` Drop-Box)
+While the worker daemon is executing in background, the human can test intermediate builds on-the-fly without disturbing the worker or switching git branches:
+1. **Zero-Flicker Dual Worktree (`WORKER_ISOLATION=1`)**: Human works in `main` (workspace root); Worker executes in `.worker-tree` on branch `feature/worker-frontier`. IDE files never flicker, and compiler file locks (`ETXTBSY`) are eliminated.
+2. **Immutable Drop-Box Staging**: On every task PASS, `worker.sh` automatically stages verified code and compiled binaries (`bin/`, `dist/`, `build/`) into `.preview/` with `.preview/version.json`.
+3. **Live Testing without Checkout**: Human tests code or executes binaries directly from `.preview/` (e.g. `./.preview/bin/app`) while the worker daemon continues running subsequent tasks.
+4. **Port Offsetting**: Worker uses `PORT=3001` (`TEST_PORT=3001`), preventing port collision (`EADDRINUSE`) with human's dev server (`PORT=3000`).
+5. **On-the-Fly Steering Options**:
+   - **Continue**: If preview looks good, let worker finish the queue.
+   - **Tweak / Refine**: Tell Planner in Terminal A $\rightarrow$ Planner injects an adjusted ticket via `scripts/reorder_queue.sh`.
+   - **Safe Hold**: Run `touch PAUSE` to hold worker after its current task finishes.
+   - **Reject / Pivot**: If direction is flawed, trigger Clean Pivot (`git reset --hard nightshift-session-base`) to discard the wrong path cleanly. Never stack patch-on-patch.
+
 ---
 
 ### Block 6: Double-Funnel Acceptance & Auto-Scoring
