@@ -10,7 +10,7 @@ Integrate the NightShift 24-hour unattended dual-terminal workflow into any targ
 ## Non-Destructive Invariants
 
 1. **Zero Production Mutation**: Never modify application source code, entrypoints, or existing build scripts (`main.*`, `Makefile`, `Dockerfile`).
-2. **Append-Only Instructions**: Never overwrite existing project guidelines (`AGENTS.md`, `CLAUDE.md`, `README.md`). Append only.
+2. **Zero Context Pollution**: Never modify or pollute existing project instruction files (`AGENTS.md`, `CLAUDE.md`, `README.md`). The framework is 100% skills-driven.
 3. **Decoupled Harness**: Operates as an external sidecar harness. Native developer commands remain completely unaffected.
 
 ## Process
@@ -24,41 +24,24 @@ Identify project ecosystem to determine build/test commands:
 - **Go**: `go.mod` (`go build ./...` / `go test ./...`)
 - **Swift**: `Package.swift` (`swift build` / `swift test`)
 
-### 2. Copy Core Assets
-Deploy unattended harness assets into repository:
-- `worker.sh` -> Repo root (`chmod +x worker.sh`).
-- `.worker.env.example` -> Repo root.
-- `.worker.env` -> Initialize from `.worker.env.example` (mandatory, co-located with `worker.sh`).
-- `scripts/` -> `status.sh`, `watch_worker.sh`, `reorder_queue.sh`, `extract_skeleton.sh`, `probe_line.sh` (`chmod +x`).
-- `.skills/universal-build-verify.md` -> Target project execution SOP.
-- `tasks.txt`, `tasks.done`, `progress.log`, `.worker.notes.md` -> Initialize if missing.
+### 2. Run Master Copy Installer (`install.sh`)
+Execute `./install.sh <target_project_path>`. The installer handles:
+- Copying `worker.sh` and helper scripts (`scripts/`).
+- Initializing `.worker.env` (from `.worker.env.example`) co-located with `worker.sh`.
+- Deploying the complete skills catalog (`.skills/universal-build-verify.md` and `.agents/skills/*`).
+- Initializing non-destructive state files (`tasks.txt`, `.worker.notes.md`, `docs/agents/granularity-profile.json`).
+- Automatically protecting `.gitignore` with worker runtime entries.
 
 ### 3. Adapt `.skills/universal-build-verify.md`
-Update the build and test commands in `.skills/universal-build-verify.md` to match the detected ecosystem.
+Update the build and test commands in `<target>/.skills/universal-build-verify.md` to match the detected ecosystem.
 
-### 4. Non-Destructive Rules Merge
-Append the dual-terminal treaty to the end of `AGENTS.md` (or `CLAUDE.md` / `GEMINI.md`):
-- Firewall: Terminal A (Planner) vs Terminal B (Worker).
-- Worktree Isolation: Mode 1 (`WORKER_ISOLATION=1`, `.worker-tree`) vs Mode 2 (In-Place).
-- Granularity Ladder: Level 1 (Macro), Level 2 (Meso), Level 3 (Micro) with blast radius caps.
-- Strict Conventional Commit and double-funnel mechanical audit requirements.
+### 4. Pure Skills Execution (Zero Rules Merging)
+NightShift relies purely on skills (`/planner`, `/explore`, and `.skills/universal-build-verify.md`).
+There is **no need to merge or edit `AGENTS.md` or `CLAUDE.md`**.
+- **Terminal A (Interactive Architect & Planner)**: Invokes `/planner` and `/explore` to groom specs into single-line atomic contracts in `tasks.txt`.
+- **Terminal B (Background Worker Daemon)**: Runs `./worker.sh` headlessly, reading `.skills/universal-build-verify.md` and Matt's implementation suite per task.
 
-### 5. Append-Only `.gitignore`
-Append worker runtime artifacts to `.gitignore`:
-```gitignore
-# 24h Unattended Worker Artifacts
-.worker.env
-worker*.status
-.worker*.log
-.worker*.pid
-PAUSE
-.worker-tree/
-.preview/
-.reports/
-tasks.txt.lock/
-```
-
-### 6. Verify Setup
+### 5. Verify Setup
 1. Validate script syntax:
    ```bash
    bash -n worker.sh scripts/*.sh

@@ -11,8 +11,8 @@ When porting this framework into an existing project:
 1. **NEVER modify or overwrite existing application code or entrypoints**:
    - Do NOT rewrite or inject code into their existing `main.py`, `index.ts`, `app.js`, `Dockerfile`, `Makefile`, etc.
    - Do NOT replace or alter their package management files (`package.json`, `Cargo.toml`, `requirements.txt`).
-2. **NEVER overwrite existing project instructions or rules**:
-   - If the project already has `AGENTS.md`, `CLAUDE.md`, or `README.md`, **DO NOT overwrite**. Use **append-only** integration.
+2. **NEVER modify or pollute existing project instructions or rules**:
+   - The framework is 100% skills-driven (`.agents/skills/planner`, `.agents/skills/explore`, `.skills/universal-build-verify.md`). Existing `AGENTS.md`, `CLAUDE.md`, or `README.md` in the target repository remain completely untouched with **zero rules merging required**.
 3. **Preserve Native Developer Ergonomics**:
    - The framework lives alongside the project as a decoupled harness (`worker.sh`, `.skills/`, `.worker.env`, `tasks.txt`).
    - Human developers and CI/CD pipelines continue using their native commands (`npm start`, `cargo test`, `pytest`, `docker compose up`) without any disruption.
@@ -43,23 +43,30 @@ A common bottleneck in software teams is that every time code is updated, collab
 
 ---
 
-## 3. Migration Asset Checklist
+## 3. Migration Asset Checklist & Automatic Installer
 
-The following framework files must be copied into the target repository root:
+The framework is packaged for zero-touch deployment via `install.sh`. Running:
+```bash
+./install.sh /path/to/target-project
+```
+deploys the complete Pure Skills-Driven architecture non-destructively:
 
 | Asset Path | Permissions | Purpose |
 | :--- | :---: | :--- |
+| `install.sh` | `chmod +x` | Master copy installer (deploys scripts, skills, state files, and protects `.gitignore`). |
 | `worker.sh` | `chmod +x` | Background daemon (supports isolation modes, zero-arg execution). |
 | `.worker.env.example` | Read-only template | Config template with OS detection, model flags, and `WORKER_ISOLATION`. |
-| `.worker.env` | Config file | Active config initialized from `.worker.env.example` in the **same directory as `worker.sh`**. |
-| `scripts/status.sh` | `chmod +x` | Real-time visual dashboard of worker state, queue, and preview status. |
-| `scripts/watch_worker.sh` | `chmod +x` | Sentinel subagent waiter script for non-blocking Terminal A wakeup. |
-| `scripts/reorder_queue.sh` | `chmod +x` | Atomic POSIX-locked task queue reordering & hot preemption tool. |
+| `.worker.env` | Config file | Active config initialized from `.worker.env.example` in target root. |
+| `scripts/` | `chmod +x` | Helper suite: `status.sh`, `watch_worker.sh`, `reorder_queue.sh`, `extract_skeleton.sh`, `probe_line.sh`. |
 | `.skills/universal-build-verify.md` | Instruction | Worker build & test verification skill. |
+| `.agents/skills/planner/` | Skill | Master engineering orchestrator (`/planner`). |
+| `.agents/skills/explore/` | Skill | Two-tier seam explorer (`/explore`). |
+| `.agents/skills/` (subdirs) | Skills | Supporting skills (`architect/`, `worker/`, `engineering/`, `productivity/`, `misc/`). |
 | `.worker.notes.md` | Dynamic memory | Worker lessons learned, build quirks, and compiler flags. |
 | `tasks.txt` | FIFO Queue | Task queue initialized with schema header. |
 | `tasks.done` | Completed list | List of successfully executed tasks. |
 | `progress.log` | Progress journal | Append-only execution log (strictly <= 15 lines per task). |
+| `docs/agents/` | Metadata | Granularity profiles and triage labels. |
 | `.worker-tree/` | Ignored directory | Persistent worker sandbox (auto-created if `WORKER_ISOLATION=1`). |
 | `.preview/` | Ignored directory | Immutable early-access drop-box (auto-staged on task PASS). |
 
@@ -75,106 +82,42 @@ Analyze the target workspace without modifying anything:
    - Rust: Check `Cargo.toml` -> Build: `cargo build`, Test: `cargo test`
    - Node / TS: Check `package.json` -> Build: `npm run build`, Test: `npm test`
    - Go: Check `go.mod` -> Test: `go test ./...`
-2. **Existing Rules**: Check for existing `AGENTS.md`, `GEMINI.md`, or `CLAUDE.md`.
+   - Swift: Check `Package.swift` -> Test: `swift test`
 
-### Step 4.2: Copy Assets & Initialize Config
-1. Copy all assets from the Migration Asset Checklist (Section 3).
-2. Set execute permissions:
-   ```bash
-   chmod +x worker.sh scripts/status.sh scripts/watch_worker.sh scripts/reorder_queue.sh
-   ```
-3. Initialize `.worker.env` from `.worker.env.example`:
-   ```bash
-   cp .worker.env.example .worker.env
-   ```
-   *(Ensure `WORKER_ISOLATION=1` is set by default, or `0` for hardware-locked environments).*
+### Step 4.2: Execute Master Copy Installer (`install.sh`)
+From the NightShift repository root, execute:
+```bash
+./install.sh /path/to/target-project
+```
+The installer automatically and non-destructively:
+- Copies `worker.sh` and marks it executable (`chmod +x`).
+- Copies `.worker.env.example` and initializes `.worker.env` if not already present.
+- Deploys all `scripts/*.sh` tools with execution permissions.
+- Copies the pure skills catalog (`.skills/universal-build-verify.md` and `.agents/skills/*`).
+- Initializes runtime tracking files (`tasks.txt`, `.worker.notes.md`, `docs/agents/granularity-profile.json`) without overwriting existing files.
+- Appends required worker runtime entries (`.worker.env`, `worker*.status`, `*.log`, `*.pid`, `PAUSE`, `.worker-tree/`, `.preview/`, `.reports/`, `tasks.txt.lock/`, `tasks.done`) to the target's `.gitignore`.
+- Validates the bash syntax of all deployed scripts.
 
 ### Step 4.3: Adapt `.skills/universal-build-verify.md`
-Inspect `.skills/universal-build-verify.md`. Update **ONLY** Step 2.2 (Build) and Step 2.3 (Test) with the exact build and test commands discovered in Step 4.1.
+Inspect `<target-project>/.skills/universal-build-verify.md`.
+Update **ONLY** Step 2.2 (Build) and Step 2.3 (Test) with the exact build and test commands discovered in Step 4.1.
 
-### Step 4.4: Non-Destructive Merge into Agent Rules
-If the target repository already has `AGENTS.md`, `GEMINI.md`, or `CLAUDE.md`, **DO NOT overwrite**.
-Append the following section to the end of their file:
+### Step 4.4: Pure Skills Execution (Zero Rules Merging)
+Because NightShift is a **Pure Skills-Driven Architecture**, there is **zero need to merge into, edit, or touch existing `AGENTS.md`, `CLAUDE.md`, or `GEMINI.md` files**.
+- **Terminal A (Interactive Architect & Planner)**: Runs via the installed skills (`/planner`, `/explore`). Planner grooms requirements into atomic tracer-bullet tasks in `tasks.txt`.
+- **Terminal B (Background Worker Daemon)**: Launched via `./worker.sh`. Stateless, headless worker sessions receive the prompt pointing directly to `.skills/universal-build-verify.md` and Matt Pocock's implementation skills.
 
-```markdown
-## 24h Unattended Dual-Terminal Workflow
-
-This repository supports the 24-Hour Unattended Dual-Terminal AI Development Framework.
-
-### 0. Role Definition & Duty Boundary Firewall (雙角色極簡職責防線)
-- **Terminal A (Interactive Architect & Planner)**:
-  - High-level system architecture, domain modeling, requirement grooming, and task decomposition.
-  - **Default Reflex**: Discuss -> Decompose into atomic contracts in `tasks.txt` (`LEVEL: 1|2|3`, archetypes: `[CODE]`, `[DIAGNOSTIC]`, `[RESEARCH]`) -> Stop calling tools and yield control to Terminal B! Do NOT modify business code directly (`Sources/`, `src/`, `app/`, `lib/`, `tests/`) and do NOT run in-session diagnostic/debug loops.
-  - **Sovereign Exceptions**:
-    1. *Anti-Rubber-Stamp Audit*: Mandated deep inspection on `Attempts > 1`, `Confidence < 1.0`, or critical seams.
-    2. *Level 3 Implementation Escalation*: Intervene when a task was **already at Level 3 (Micro)** and Worker failed 3 retries, followed by a post-mortem allocation retro in `granularity-profile.json` and `.worker.notes.md`.
-    3. *Diagnostic Evasion & Bogus Report Intervention*: Intervene when Worker repeatedly produces vague/hallucinated reports or fails to isolate the issue after 2-3 retries without verifiable evidence. Planner directly isolates the root cause and logs quirks in `.worker.notes.md`.
-    4. *Explicit User Mandate*: User explicitly requests Planner to write or fix code directly.
-  - **Active Skills**: `/domain-modeling`, `/to-tickets`, `/calibrate-task-granularity`, `/watch-worker-queue`, `/code-review`.
-- **Terminal B (Background Worker Daemon)**:
-  - Headless unattended implementation, compilation, test execution, and atomic commits.
-  - Operates in `.worker-tree` (if `WORKER_ISOLATION=1`) or in-place (`WORKER_ISOLATION=0`). Follows `.skills/universal-build-verify.md`, max 3 retries, commits, and prepends <=15 lines to `progress.log`. Never changes architecture, never enters chat loops.
-
-### 1. Dual-Terminal Architecture & Dual-Track Offload
-- **Terminal A (Interactive Architect)**: Discuss requirements with human, groom specs into atomic tracer-bullet tasks, write to `tasks.txt`, and inspect `progress.log` for rapid acceptance.
-- **Terminal B (Background Worker)**: Runs `./worker.sh`. Stateless process per task, executes build, test, and auto-commits.
-- **Hot Preemption for Exploration**: Exploratory and diagnostic tasks have top priority and jump to line 1 of `tasks.txt` so Worker delivers verified facts quickly without bloating Terminal A's context. When Worker reaches the critical threshold (struggles or produces bogus reports), Planner steps in and inspects directly.
-- **Sentinel Waiter Subagent**: Subagents in Terminal A are restricted to non-blocking queue monitoring (`scripts/watch_worker.sh`).
-
-### 2. Dual-Worktree Isolation vs In-Place Execution Modes
-- **Mode 1: Dual-Worktree Isolation (`WORKER_ISOLATION=1`, Default)**:
-  - Maintains exactly TWO persistent worktrees (`main` and `.worker-tree`).
-  - Worker executes in `.worker-tree` on branch `feature/worker-frontier`.
-  - Immutable Drop-box (`.preview/`): stages verified snapshots on task PASS. Human previews early without compiling or merging.
-  - Auto-Merge on Completion: When tasks finish, Sentinel wakes Planner, who conducts acceptance and automatically runs `git merge --ff-only feature/worker-frontier` into `main` with zero manual human git intervention.
-- **Mode 2: Single-Tree In-Place (`WORKER_ISOLATION=0`)**:
-  - Used for fixed ports (e.g. port 22) or hardware-locked resources. Runs directly in project root.
-
-### 3. Strict Inter-AI English Protocol
-- All tasks in `tasks.txt`, summaries in `progress.log`, status in `worker.status`, and git commits MUST be in **strictly English**.
-
-### 4. Dynamic Granularity Ladder (tasks.txt)
-Single-line tracer-bullet format:
-`TASK-XXX | LEVEL: 1 | TARGET: <files> | ACTION: <concrete logic> | VERIFY: <test command> | CONSTRAINTS: <bounds>`
-- **Level 1 (Coarse)**: Public interface & test contract; worker decides internal implementation.
-- **Level 2 (Medium)**: Component/slice breakdown.
-- **Level 3 (Micro)**: Function-level surgical instructions.
-- **Escalation Ladder**: Level 1 Blocked -> Demote to Level 2 -> Demote to Level 3. If Level 3 still fails after 3 retries -> Planner sovereign intervention & retro.
-
-### 5. Safe Git Log Rules for Acceptance AI
-- Allowed: `git log -n 1 --stat`, `git show --stat <commit-hash>`, `git log --oneline -n 5`
-- Prohibited: Bare `git log`, `git log -p`, full `git diff` (prevents context explosion).
-```
-
-### Step 4.5: Safe `.gitignore` Append
-Append the following runtime artifacts to the target `.gitignore` without disturbing existing entries:
-```gitignore
-# 24h Unattended Worker Artifacts
-.worker.env
-worker*.status
-.worker*.log
-.worker*.pid
-PAUSE
-.scratch/
-tasks.txt.lock/
-.worker-tree/
-.preview/
-```
-
-### Step 4.6: Verification & Handover
-1. Run syntax checks:
+### Step 4.5: Verification & Dry-Run Test
+1. Run syntax validation in target repository:
    ```bash
-   bash -n worker.sh
-   bash -n scripts/status.sh
-   bash -n scripts/watch_worker.sh
-   bash -n scripts/reorder_queue.sh
+   bash -n worker.sh scripts/*.sh
    ```
-2. Test dry-run:
+2. Test empty-queue dry run:
    ```bash
    RUN_ONCE=1 ./worker.sh
    ```
-   Confirm that `.worker.env` is sourced, OS is auto-detected, and the script exits gracefully on empty queue.
+   Confirm that `.worker.env` is sourced, OS is auto-detected, and the script exits gracefully on empty queue (Exit 0).
 3. Hand over cleanly to the user:
-   - Provide zero-argument launch instruction: `./worker.sh` in Terminal B.
-   - Inform them how to check progress via `./scripts/status.sh` or `head -n 15 progress.log`.
-   - Point out that native project commands (`npm test`, `pytest`, etc.) remain 100% untouched.
+   - Terminal A: Plan and queue tasks using `/planner`.
+   - Terminal B: Run `./worker.sh` to begin autonomous background loop.
+   - Live Dashboard: Run `./scripts/status.sh` to monitor real-time worker progress and previews.
