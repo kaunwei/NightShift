@@ -5,7 +5,7 @@ worker*.status
 .worker*.pid
 PAUSE
 .scratch/
-.reports/
+.reports
 tasks.txt.lock/
 .worker-tree/
 .preview/

@@ -359,8 +359,8 @@ validate_post_flight() {
 
   # 1. Check clean working tree (Ghost files & uncommitted tests check)
   local dirty_files untracked_files
-  dirty_files=$(git -C "$WORK_DIR" status --porcelain 2>/dev/null | grep -vE "(progress\.log|tasks\.txt|tasks\.done|worker\..*\.status|\.preview)" || true)
-  untracked_files=$(git -C "$WORK_DIR" ls-files --others --exclude-standard 2>/dev/null | grep -vE "(progress\.log|tasks\.txt|tasks\.done|worker\..*\.status|\.preview|\.worker\..*)" || true)
+  dirty_files=$(git -C "$WORK_DIR" status --porcelain 2>/dev/null | grep -vE "(progress\.log|tasks\.txt|tasks\.done|worker\..*\.status|\.preview|\.reports)" || true)
+  untracked_files=$(git -C "$WORK_DIR" ls-files --others --exclude-standard 2>/dev/null | grep -vE "(progress\.log|tasks\.txt|tasks\.done|worker\..*\.status|\.preview|\.worker\..*|\.reports)" || true)
   if [ -n "$dirty_files" ] || [ -n "$untracked_files" ]; then
     echo "[WORKER_GUARD] ❌ Dirty tree / untracked files detected after task:"
     echo "$dirty_files"
@@ -822,7 +822,7 @@ BLOCK_EOF
         # 1. Gate 2: Clean Tree / Git Zero-Modification Gate
         # Ensure working tree has no uncommitted changes to product code or test files
         local research_dirty
-        research_dirty=$(git -C "$WORK_DIR" status --porcelain 2>/dev/null | grep -vE "(progress\.log|tasks\.txt|tasks\.done|worker\..*\.status|\.preview|\.worker\..*|\.reports/)" || true)
+        research_dirty=$(git -C "$WORK_DIR" status --porcelain 2>/dev/null | grep -vE "(progress\.log|tasks\.txt|tasks\.done|worker\..*\.status|\.preview|\.worker\..*|\.reports/|\.reports)" || true)
         if [ -n "$research_dirty" ]; then
           GUARD_STATUS=12
           GUARD_ERROR="Research Zero-Touch Violation: Uncommitted/modified files detected after research ($research_dirty)."
