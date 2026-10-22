@@ -43,17 +43,19 @@ A common bottleneck in software teams is that every time code is updated, collab
 
 ---
 
-## 3. Migration Asset Checklist & Automatic Installer
+## 3. Migration Asset Checklist & Automatic Installer / Updater
 
-The framework is packaged for zero-touch deployment via `install.sh`. Running:
+The framework is packaged for zero-touch deployment and safe upgrades via `install.sh` (or `update.sh`). Running:
 ```bash
 ./install.sh /path/to/target-project
+# or to update an existing deployment:
+./update.sh /path/to/target-project
 ```
-deploys the complete Pure Skills-Driven architecture non-destructively:
+deploys or upgrades the complete Pure Skills-Driven architecture non-destructively:
 
 | Asset Path | Permissions | Purpose |
 | :--- | :---: | :--- |
-| `install.sh` | `chmod +x` | Master copy installer (deploys scripts, skills, state files, and protects `.gitignore`). |
+| `install.sh` / `update.sh` | `chmod +x` | Unified installer & updater (deploys scripts, skills, state files, and protects `.gitignore` without duplication). |
 | `worker.sh` | `chmod +x` | Background daemon (supports isolation modes, zero-arg execution). |
 | `.worker.env.example` | Read-only template | Config template with OS detection, model flags, and `WORKER_ISOLATION`. |
 | `.worker.env` | Config file | Active config initialized from `.worker.env.example` in target root. |
@@ -84,18 +86,20 @@ Analyze the target workspace without modifying anything:
    - Go: Check `go.mod` -> Test: `go test ./...`
    - Swift: Check `Package.swift` -> Test: `swift test`
 
-### Step 4.2: Execute Master Copy Installer (`install.sh`)
+### Step 4.2: Execute Master Copy Installer / Updater (`install.sh`)
 From the NightShift repository root, execute:
 ```bash
 ./install.sh /path/to/target-project
+# or to update existing:
+./update.sh /path/to/target-project
 ```
-The installer automatically and non-destructively:
+The script automatically detects whether the target is a **Fresh Install** or an **Update**, and non-destructively:
 - Copies `worker.sh` and marks it executable (`chmod +x`).
-- Copies `.worker.env.example` and initializes `.worker.env` if not already present.
+- Copies `.worker.env.example` and initializes `.worker.env` (preserves existing `.worker.env`).
 - Deploys all `scripts/*.sh` tools with execution permissions.
 - Copies the pure skills catalog (`.skills/universal-build-verify.md` and `.agents/skills/*`).
-- Initializes runtime tracking files (`tasks.txt`, `.worker.notes.md`, `docs/agents/granularity-profile.json`) without overwriting existing files.
-- Appends required worker runtime entries (`.worker.env`, `worker*.status`, `*.log`, `*.pid`, `PAUSE`, `.worker-tree/`, `.preview/`, `.reports/`, `tasks.txt.lock/`, `tasks.done`) to the target's `.gitignore`.
+- Initializes runtime tracking files (`tasks.txt`, `tasks.done`, `progress.log`, `.worker.notes.md`, `docs/agents/granularity-profile.json`) without overwriting existing files.
+- Appends required worker runtime entries to `.gitignore` with strict idempotency (checks line existence and header to guarantee zero duplication).
 - Validates the bash syntax of all deployed scripts.
 
 ### Step 4.3: Adapt `.skills/universal-build-verify.md`

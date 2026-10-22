@@ -59,7 +59,7 @@ A plug-and-play, dual-terminal decoupled AI development framework designed for 2
 
 ## File Structure
 
-- **`install.sh`**: One-command non-destructive copy installer to deploy NightShift into any target project.
+- **`install.sh` / `update.sh`**: One-command non-destructive copy installer and updater to deploy or upgrade NightShift in any target project.
 - **`worker.sh`**: Core background daemon supporting isolation modes, POSIX queue locking, and mechanical audit funnels.
 - **`.worker.env.example`**: Configuration template with model parameters, OS detection, and isolation toggle.
 - **`.skills/universal-build-verify.md`**: Universal SOP for background workers (security guardrails, Matt implementation skills, TDD, auto-commit).
@@ -120,11 +120,14 @@ rm PAUSE
 ## Porting to Other Projects
 
 NightShift uses a **Pure Skills-Driven Architecture** with zero rules merging (`AGENTS.md` is never touched or required).
-To port NightShift into any target repository in seconds:
+To port NightShift into any target repository in seconds (or update an existing installation):
 
 ```bash
 ./install.sh /path/to/target-project
+# or to update an existing deployment:
+./update.sh /path/to/target-project
 ```
 
+The script automatically detects fresh install vs update, updates framework scripts and skills, safely preserves existing configs/tasks/notes, and ensures `.gitignore` has zero duplicate entries.
 Then adapt the build and test commands in `<target-project>/.skills/universal-build-verify.md`.
 For comprehensive details, see [docs/PORTING_GUIDE.md](docs/PORTING_GUIDE.md).

@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# NightShift Framework Installer & Porting Script
-# Clean, non-destructive copy installer for Pure Skills-Driven Architecture.
+# NightShift Framework Installer & Updater
+# Clean, non-destructive installer and updater for Pure Skills-Driven Architecture.
 # Usage: ./install.sh <target_repository_path>
+#    or: ./update.sh <target_repository_path>
 # ==============================================================================
 
 set -euo pipefail
@@ -12,12 +13,13 @@ TARGET_DIR="${1:-}"
 
 # Display banner
 echo "=============================================================================="
-echo "    NightShift: 24h Unattended Dual-Terminal AI Framework Installer"
+echo "    NightShift: 24h Unattended Dual-Terminal AI Framework"
 echo "=============================================================================="
 
 if [ -z "$TARGET_DIR" ]; then
   echo "Error: Target repository path is required."
   echo "Usage: $0 /path/to/target-project"
+  echo "  (Use '.' if you are running this from within the target repository)"
   exit 1
 fi
 
@@ -28,8 +30,23 @@ if [ ! -d "$TARGET_DIR" ]; then
   exit 1
 fi
 
-echo "Target Repository: $TARGET_DIR"
-echo "Source Repository: $SCRIPT_DIR"
+if [ "$TARGET_DIR" = "$SCRIPT_DIR" ]; then
+  echo "Notice: Target directory is the NightShift framework source itself ($SCRIPT_DIR)."
+  echo "Cannot install/update NightShift into its own source directory."
+  exit 0
+fi
+
+# Detect whether this is a fresh install or an update
+IS_UPDATE=0
+if [ -f "$TARGET_DIR/worker.sh" ] || [ -d "$TARGET_DIR/.agents/skills/planner" ]; then
+  IS_UPDATE=1
+  echo "Target Repository : $TARGET_DIR"
+  echo "Operation Mode    : UPDATE (Existing installation detected)"
+else
+  echo "Target Repository : $TARGET_DIR"
+  echo "Operation Mode    : FRESH INSTALL"
+fi
+echo "Source Repository : $SCRIPT_DIR"
 echo ""
 
 # ------------------------------------------------------------------------------
@@ -38,6 +55,11 @@ echo ""
 echo ">>> [1/5] Deploying core worker daemon & configuration..."
 cp -f "$SCRIPT_DIR/worker.sh" "$TARGET_DIR/worker.sh"
 chmod +x "$TARGET_DIR/worker.sh"
+if [ "$IS_UPDATE" -eq 1 ]; then
+  echo "  ✓ Updated worker.sh"
+else
+  echo "  ✓ Installed worker.sh"
+fi
 
 cp -f "$SCRIPT_DIR/.worker.env.example" "$TARGET_DIR/.worker.env.example"
 if [ ! -f "$TARGET_DIR/.worker.env" ]; then
@@ -99,6 +121,22 @@ else
   echo "  • Preserved existing tasks.txt"
 fi
 
+# tasks.done
+if [ ! -f "$TARGET_DIR/tasks.done" ]; then
+  touch "$TARGET_DIR/tasks.done"
+  echo "  ✓ Initialized tasks.done"
+else
+  echo "  • Preserved existing tasks.done"
+fi
+
+# progress.log
+if [ ! -f "$TARGET_DIR/progress.log" ]; then
+  touch "$TARGET_DIR/progress.log"
+  echo "  ✓ Initialized progress.log"
+else
+  echo "  • Preserved existing progress.log"
+fi
+
 # .worker.notes.md
 if [ ! -f "$TARGET_DIR/.worker.notes.md" ]; then
   cat <<'EOF' > "$TARGET_DIR/.worker.notes.md"
@@ -119,6 +157,8 @@ if [ ! -f "$TARGET_DIR/docs/agents/granularity-profile.json" ]; then
 }
 EOF
   echo "  ✓ Initialized docs/agents/granularity-profile.json"
+else
+  echo "  • Preserved existing docs/agents/granularity-profile.json"
 fi
 
 if [ -f "$SCRIPT_DIR/docs/agents/TRIAGE_LABELS.md" ]; then
@@ -127,7 +167,7 @@ if [ -f "$SCRIPT_DIR/docs/agents/TRIAGE_LABELS.md" ]; then
 fi
 
 # ------------------------------------------------------------------------------
-# 5. Non-Destructive .gitignore Protection
+# 5. Non-Destructive .gitignore Protection (Zero Duplication)
 # ------------------------------------------------------------------------------
 echo ">>> [5/5] Ensuring .gitignore protection..."
 GITIGNORE_FILE="$TARGET_DIR/.gitignore"
@@ -146,22 +186,39 @@ REQUIRED_IGNORES=(
   "tasks.done"
 )
 
-APPENDED_COUNT=0
+HEADER="# NightShift 24h Unattended Worker Artifacts"
+
+# Ensure existing .gitignore ends with a newline if non-empty
+if [ -s "$GITIGNORE_FILE" ]; then
+  LAST_CHAR=$(tail -c 1 "$GITIGNORE_FILE" 2>/dev/null || true)
+  if [ -n "$LAST_CHAR" ] && [ "$LAST_CHAR" != $'\n' ]; then
+    echo "" >> "$GITIGNORE_FILE"
+  fi
+fi
+
+# Find which required entries are actually missing
+MISSING_ENTRIES=()
 for entry in "${REQUIRED_IGNORES[@]}"; do
   if ! grep -qxF "$entry" "$GITIGNORE_FILE" 2>/dev/null; then
-    if [ $APPENDED_COUNT -eq 0 ]; then
-      echo "" >> "$GITIGNORE_FILE"
-      echo "# NightShift 24h Unattended Worker Artifacts" >> "$GITIGNORE_FILE"
-    fi
-    echo "$entry" >> "$GITIGNORE_FILE"
-    APPENDED_COUNT=$(( APPENDED_COUNT + 1 ))
+    MISSING_ENTRIES+=("$entry")
   fi
 done
 
-if [ $APPENDED_COUNT -gt 0 ]; then
-  echo "  ✓ Appended $APPENDED_COUNT worker artifact entries to .gitignore"
+if [ ${#MISSING_ENTRIES[@]} -gt 0 ]; then
+  # Only add header if it is not already in .gitignore
+  if ! grep -qxF "$HEADER" "$GITIGNORE_FILE" 2>/dev/null; then
+    if [ -s "$GITIGNORE_FILE" ]; then
+      echo "" >> "$GITIGNORE_FILE"
+    fi
+    echo "$HEADER" >> "$GITIGNORE_FILE"
+  fi
+
+  for entry in "${MISSING_ENTRIES[@]}"; do
+    echo "$entry" >> "$GITIGNORE_FILE"
+  done
+  echo "  ✓ Appended ${#MISSING_ENTRIES[@]} missing worker artifact entries to .gitignore (no duplicates)"
 else
-  echo "  • .gitignore is already up to date"
+  echo "  • .gitignore is already up to date (no changes needed)"
 fi
 
 # ------------------------------------------------------------------------------
@@ -174,7 +231,11 @@ echo "  ✓ All bash scripts pass syntax validation (Exit 0)"
 
 echo ""
 echo "=============================================================================="
-echo "  Installation Complete! (Pure Skills-Driven Architecture)"
+if [ "$IS_UPDATE" -eq 1 ]; then
+  echo "  Update Complete! (All scripts & skills updated; configs & state preserved)"
+else
+  echo "  Installation Complete! (Pure Skills-Driven Architecture)"
+fi
 echo "=============================================================================="
 echo "Quick Start in target repository:"
 echo "  1. Terminal A (Planner) : Use /planner or natural language to decompose tasks"
