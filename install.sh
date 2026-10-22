@@ -38,7 +38,7 @@ fi
 
 # Detect whether this is a fresh install or an update
 IS_UPDATE=0
-if [ -f "$TARGET_DIR/worker.sh" ] || [ -d "$TARGET_DIR/.agents/skills/planner" ]; then
+if [ -f "$TARGET_DIR/worker.sh" ] || [ -d "$TARGET_DIR/.agents/skills/nightshift" ] || [ -d "$TARGET_DIR/.agents/skills/planner" ]; then
   IS_UPDATE=1
   echo "Target Repository : $TARGET_DIR"
   echo "Operation Mode    : UPDATE (Existing installation detected)"
@@ -91,14 +91,20 @@ cp -f "$SCRIPT_DIR/.skills/universal-build-verify.md" "$TARGET_DIR/.skills/unive
 echo "  ✓ Deployed .skills/universal-build-verify.md"
 
 mkdir -p "$TARGET_DIR/.agents/skills"
-# Deploy top-level core skills: planner and explore
-cp -R "$SCRIPT_DIR/.agents/skills/planner" "$TARGET_DIR/.agents/skills/"
-echo "  ✓ Deployed .agents/skills/planner (Master Orchestrator)"
-cp -R "$SCRIPT_DIR/.agents/skills/explore" "$TARGET_DIR/.agents/skills/"
-echo "  ✓ Deployed .agents/skills/explore (Seam Explorer)"
+if [ -f "$SCRIPT_DIR/.agents/skills.json" ]; then
+  cp -f "$SCRIPT_DIR/.agents/skills.json" "$TARGET_DIR/.agents/skills.json"
+fi
 
-# Deploy supporting skill categories if present
-for category in architect worker engineering productivity misc; do
+# Clean up legacy paths if updating from older layout
+rm -rf "$TARGET_DIR/.agents/skills/architect" 2>/dev/null || true
+rm -rf "$TARGET_DIR/.agents/skills/worker" 2>/dev/null || true
+rm -rf "$TARGET_DIR/.agents/skills/planner" 2>/dev/null || true
+rm -rf "$TARGET_DIR/.agents/skills/explore" 2>/dev/null || true
+rm -rf "$TARGET_DIR/.agents/skills/productivity/configure-unattended-worker" 2>/dev/null || true
+rm -rf "$TARGET_DIR/.agents/skills/engineering/setup-unattended-workflow" 2>/dev/null || true
+
+# Deploy skill categories
+for category in nightshift engineering productivity misc in-progress; do
   if [ -d "$SCRIPT_DIR/.agents/skills/$category" ]; then
     mkdir -p "$TARGET_DIR/.agents/skills/$category"
     cp -R "$SCRIPT_DIR/.agents/skills/$category/"* "$TARGET_DIR/.agents/skills/$category/" 2>/dev/null || true

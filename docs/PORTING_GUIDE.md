@@ -12,7 +12,7 @@ When porting this framework into an existing project:
    - Do NOT rewrite or inject code into their existing `main.py`, `index.ts`, `app.js`, `Dockerfile`, `Makefile`, etc.
    - Do NOT replace or alter their package management files (`package.json`, `Cargo.toml`, `requirements.txt`).
 2. **NEVER modify or pollute existing project instructions or rules**:
-   - The framework is 100% skills-driven (`.agents/skills/planner`, `.agents/skills/explore`, `.skills/universal-build-verify.md`). Existing `AGENTS.md`, `CLAUDE.md`, or `README.md` in the target repository remain completely untouched with **zero rules merging required**.
+   - The framework is 100% skills-driven (`.agents/skills/nightshift/`, `.skills/universal-build-verify.md`). Existing `AGENTS.md`, `CLAUDE.md`, or `README.md` in the target repository remain completely untouched with **zero rules merging required**.
 3. **Preserve Native Developer Ergonomics**:
    - The framework lives alongside the project as a decoupled harness (`worker.sh`, `.skills/`, `.worker.env`, `tasks.txt`).
    - Human developers and CI/CD pipelines continue using their native commands (`npm start`, `cargo test`, `pytest`, `docker compose up`) without any disruption.
@@ -61,9 +61,8 @@ deploys or upgrades the complete Pure Skills-Driven architecture non-destructive
 | `.worker.env` | Config file | Active config initialized from `.worker.env.example` in target root. |
 | `scripts/` | `chmod +x` | Helper suite: `status.sh`, `watch_worker.sh`, `reorder_queue.sh`, `extract_skeleton.sh`, `probe_line.sh`. |
 | `.skills/universal-build-verify.md` | Instruction | Worker build & test verification skill. |
-| `.agents/skills/planner/` | Skill | Master engineering orchestrator (`/planner`). |
-| `.agents/skills/explore/` | Skill | Two-tier seam explorer (`/explore`). |
-| `.agents/skills/` (subdirs) | Skills | Supporting skills (`architect/`, `worker/`, `engineering/`, `productivity/`, `misc/`). |
+| `.agents/skills/nightshift/` | Skills | Unified NightShift skills suite (`planner`, `explore`, `watch-worker-queue`, `score-worker-performance`, `handle-worker-guidance`, `manage-worker-notes`, `record-attempt-trace`, `configure-unattended-worker`, `setup-unattended-workflow`). |
+| `.agents/skills/` (subdirs) | Skills | Supporting Matt Pocock skills (`engineering/`, `productivity/`, `misc/`). |
 | `.worker.notes.md` | Dynamic memory | Worker lessons learned, build quirks, and compiler flags. |
 | `tasks.txt` | FIFO Queue | Task queue initialized with schema header. |
 | `tasks.done` | Completed list | List of successfully executed tasks. |

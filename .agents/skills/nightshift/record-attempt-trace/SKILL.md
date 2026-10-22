@@ -7,9 +7,11 @@ description: "Guidelines for background worker to record transparent, honest exe
 
 Truthfully record execution steps, retry attempts, and confidence scores into `progress.log`.
 
-## Core Standards
+---
+
+## 1. Core Standards
 1. **Zero Concealment**: Record intermediate failures honestly in `Attempt Trace`. Never hide mistakes.
-2. **Strict Limit**: Entries MUST be `<= 15 lines`. High-signal bullet points only; zero discursive essays.
+2. **Strict Limit**: Entries MUST be `<= 15 lines`. High-signal bullet points only; zero discursive prose.
 3. **Pointers Over Prose**: Use exact file/line pointers (`src/module.py#L12-L30`).
 4. **Confidence Metrics**:
    - `HIGH`: Tests passed 100%, 0 warnings, standard conventions.
@@ -18,7 +20,9 @@ Truthfully record execution steps, retry attempts, and confidence scores into `p
 5. **No Guessing**: For contradictory specs or ambiguous interfaces, emit `[NEED_DECOMPOSITION]` or `[NEED_GUIDANCE]` immediately.
 6. **Mechanical Verification Alignment**: Daemon mechanically audits tests and stamps `[MECHANICAL_AUDIT]` above this entry. Falsifying `Confidence` or `Attempts` triggers immediate cheating rejection.
 
-## Log Entry Template (<= 15 lines)
+---
+
+## 2. Log Entry Template (<= 15 lines)
 
 ```text
 ================================================================================

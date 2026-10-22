@@ -7,19 +7,23 @@ description: "Deploy a lightweight Sentinel Subagent to monitor the Terminal B w
 
 Deploy a lightweight Sentinel Subagent to monitor background worker execution and wake Planner upon completion without chat polling loops.
 
-## Protocol
+---
+
+## 1. Protocol
 
 ```
-[Planner] Enqueue tasks -> Deploy Queue Sentinel -> Yield control immediately.
+[Planner] Enqueue tasks -> Deploy Sentinel Subagent -> Yield control immediately.
    │
 [Sentinel Subagent]
    • Runs: `bash scripts/watch_worker.sh 3600` (zero token consumption while waiting).
-   • On script exit: reads `head -n 15 progress.log` and notifies Planner.
+   • On script exit: inspects `head -n 15 progress.log` and notifies Planner.
    │
-[Event Wakeup] -> Planner awakes and executes final acceptance.
+[Event Wakeup] -> Planner wakes and executes final acceptance.
 ```
 
-## Invocation Payload
+---
+
+## 2. Invocation Payload
 
 ```json
 {
@@ -33,9 +37,11 @@ Deploy a lightweight Sentinel Subagent to monitor background worker execution an
 }
 ```
 
-## Acceptance & Merge
+---
+
+## 3. Acceptance & Merge
 
 When Sentinel wakes Planner:
 1. **Verify**: Check `head -n 15 progress.log` for passing `[MECHANICAL_AUDIT]`.
 2. **Auto-Merge (`WORKER_ISOLATION=1`)**: Run `git merge --ff-only feature/worker-frontier` into `main`. Zero manual git operations needed.
-3. **In-Place Mode (`WORKER_ISOLATION=0`)**: Commits already on `main`; present final summary to human.
+3. **In-Place Mode (`WORKER_ISOLATION=0`)**: Commits already on `main`; present concise summary to human.

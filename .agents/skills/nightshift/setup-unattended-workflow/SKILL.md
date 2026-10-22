@@ -5,15 +5,19 @@ description: "Non-destructive migration and setup skill to integrate the 24-hour
 
 # Setup Unattended Dual-Terminal Workflow
 
-Integrate the NightShift 24-hour unattended dual-terminal workflow into any target repository non-destructively without altering application logic or developer workflows.
+Deploy or update the NightShift 24-hour unattended dual-terminal workflow into any target repository non-destructively.
 
-## Non-Destructive Invariants
+---
+
+## 1. Non-Destructive Invariants
 
 1. **Zero Production Mutation**: Never modify application source code, entrypoints, or existing build scripts (`main.*`, `Makefile`, `Dockerfile`).
 2. **Zero Context Pollution**: Never modify or pollute existing project instruction files (`AGENTS.md`, `CLAUDE.md`, `README.md`). The framework is 100% skills-driven.
 3. **Decoupled Harness**: Operates as an external sidecar harness. Native developer commands remain completely unaffected.
 
-## Process
+---
+
+## 2. Process
 
 ### 1. Inspect Workspace
 Identify project ecosystem to determine build/test commands:
@@ -24,13 +28,13 @@ Identify project ecosystem to determine build/test commands:
 - **Go**: `go.mod` (`go build ./...` / `go test ./...`)
 - **Swift**: `Package.swift` (`swift build` / `swift test`)
 
-### 2. Run Master Copy Installer (`install.sh`)
-Execute `./install.sh <target_project_path>`. The installer handles:
+### 2. Run Master Copy Installer / Updater (`install.sh`)
+Execute `./install.sh <target_project_path>` (or `./update.sh <target_project_path>`). The installer handles:
 - Copying `worker.sh` and helper scripts (`scripts/`).
 - Initializing `.worker.env` (from `.worker.env.example`) co-located with `worker.sh`.
 - Deploying the complete skills catalog (`.skills/universal-build-verify.md` and `.agents/skills/*`).
-- Initializing non-destructive state files (`tasks.txt`, `.worker.notes.md`, `docs/agents/granularity-profile.json`).
-- Automatically protecting `.gitignore` with worker runtime entries.
+- Initializing non-destructive state files (`tasks.txt`, `tasks.done`, `progress.log`, `.worker.notes.md`, `docs/agents/granularity-profile.json`).
+- Protecting `.gitignore` with worker runtime entries with zero duplication.
 
 ### 3. Adapt `.skills/universal-build-verify.md`
 Update the build and test commands in `<target>/.skills/universal-build-verify.md` to match the detected ecosystem.

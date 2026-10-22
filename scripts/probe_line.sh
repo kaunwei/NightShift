@@ -15,7 +15,7 @@ CTX="${3:-10}"
 if [[ "$TARGET" =~ ^(.*)#L([0-9]+)$ ]]; then
   TARGET="${BASH_REMATCH[1]}"
   LINE="${BASH_REMATCH[2]}"
-  CTX="${2:-10}"
+  CTX="${2:-$CTX}"
 fi
 
 if [ -z "$TARGET" ] || [ -z "$LINE" ] || [ ! -f "$TARGET" ]; then

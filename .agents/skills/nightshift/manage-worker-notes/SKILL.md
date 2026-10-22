@@ -5,16 +5,22 @@ description: "How the background worker reads and maintains repository quirks, b
 
 # Manage Worker Notes
 
-Maintain a local cheat sheet (`.worker.notes.md`) to preserve project-specific build quirks, tool paths, and compiler flags across stateless runs.
+Maintain `.worker.notes.md` to preserve project-specific build quirks, tool paths, and compiler flags across stateless worker runs.
 
-## When to Consult `.worker.notes.md`
+---
+
+## 1. When to Consult `.worker.notes.md`
 - **Start of every task**: Check if `.worker.notes.md` exists. Follow project-specific flags and paths.
 
-## When to Update `.worker.notes.md`
-- When you discover a non-obvious repository quirk (e.g., hidden env vars, custom build targets).
+---
+
+## 2. When to Update `.worker.notes.md`
+- When discovering a non-obvious repository quirk (e.g., hidden env vars, custom build targets).
 - When an unexpected linker dependency or header ordering is required.
 - Append a concise 1-2 line tip under the relevant section. Keep the file compact (< 30 lines).
 
-## Strict Invariants
+---
+
+## 3. Strict Invariants
 - Strictly limited to compiler flags and toolchain quirks.
-- NEVER record architectural lore, task history, or framework workarounds. If any note contradicts disk reality, purge it immediately.
+- NEVER record architectural lore, task history, or speculative workarounds. If any note contradicts disk reality, purge it immediately.

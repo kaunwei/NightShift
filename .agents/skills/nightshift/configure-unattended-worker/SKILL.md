@@ -7,13 +7,17 @@ description: "Configure background worker environment (.worker.env, reference di
 
 Autonomously update worker parameters in `.worker.env` during Terminal A conversations without manual human shell editing.
 
-## Triggers
+---
+
+## 1. Triggers
 Activate when the user requests:
 - External reference repository (e.g. `/path/to/repo`).
 - Model switch (e.g. Claude 3.7, Gemini 3.8 Flash/Pro).
 - Sandbox, timeout, or execution mode changes.
 
-## Autonomous Actions
+---
+
+## 2. Autonomous Actions
 
 ### 1. External Reference Repositories
 1. Update `ADDITIONAL_DIRS` in `.worker.env` (co-located with `worker.sh`):

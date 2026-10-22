@@ -5,9 +5,11 @@ description: "Score worker execution performance (1 to 5 stars) from progress.lo
 
 # Score Worker Performance
 
-Audit worker execution traces from `progress.log` and update module capability ratings in `docs/agents/granularity-profile.json`.
+Audit worker execution traces from `progress.log` and calibrate module capability ratings in `docs/agents/granularity-profile.json`.
 
-## Scoring Rubric
+---
+
+## 1. Scoring Rubric
 
 | Score | Rating | Criteria | Granularity Action |
 | :---: | :--- | :--- | :--- |
@@ -20,9 +22,11 @@ Audit worker execution traces from `progress.log` and update module capability r
 > [!NOTE]
 > **No-Fault Exemption (`[SCOPE_BLOCKED]`)**: When Worker halts honestly upon discovering compiler errors in downstream files outside declared `TARGET:`, this is boundary compliance, NOT a failure. Do NOT deduct stars in `granularity-profile.json`.
 
-## Process
+---
 
-1. **Read Top Entry in `progress.log`**: Inspect `Attempts`, `Attempt Trace`, `Duration`, and `Confidence`.
+## 2. Process
+
+1. **Inspect `progress.log`**: Read top entry for `Attempts`, `Attempt Trace`, `Duration`, and `Confidence`.
 2. **Match Score**: Apply rubric.
 3. **Update `docs/agents/granularity-profile.json`**:
    ```json
@@ -33,7 +37,7 @@ Audit worker execution traces from `progress.log` and update module capability r
          "last_score": 5,
          "success_rate": "100%",
          "total_tasks": 1,
-         "notes": "Handles arithmetic and boundary tests cleanly in 1 attempt"
+         "notes": "Handles boundary tests cleanly in 1 attempt"
        }
      }
    }

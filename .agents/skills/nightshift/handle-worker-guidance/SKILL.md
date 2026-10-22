@@ -7,18 +7,22 @@ description: "Handle worker [NEED_GUIDANCE] and [NEED_DECOMPOSITION] requests cl
 
 Resolve worker questions, ambiguity reports, or decomposition proposals without breaking queue execution.
 
-## Triggers
+---
+
+## 1. Triggers
 Activate when `progress.log` or `worker.status` indicates:
 - `[NEED_GUIDANCE]`: Worker hit an architectural contradiction or ambiguous requirement.
 - `[NEED_DECOMPOSITION]`: Worker rejected an oversized or multi-subsystem task.
 - `[BLOCKED]`: Worker failed 3 retry attempts or timed out.
 
-## Workflow
+---
+
+## 2. Process
 
 ### 1. Resolve Ambiguity (`[NEED_GUIDANCE]`)
 1. Read `Question for Manager:` from `progress.log`.
 2. Clarify with human user; present trade-offs succinctly.
-3. Prepend resolved task to `tasks.txt` with a `GUIDANCE:` field:
+3. Prepend resolved task to `tasks.txt` with a `GUIDANCE:` field via `scripts/reorder_queue.sh`:
    ```text
    TASK-XXX | LEVEL: 2 | TARGET: <files> | ACTION: <logic> | GUIDANCE: <clarification> | VERIFY: <cmd> | CONSTRAINTS: <limits>
    ```
@@ -26,7 +30,7 @@ Activate when `progress.log` or `worker.status` indicates:
 ### 2. Decompose Oversized Task (`[NEED_DECOMPOSITION]`)
 1. Review proposed breakdown from `progress.log`.
 2. Split original task into atomic `LEVEL: 2` or `LEVEL: 3` subtasks.
-3. Prepend decomposed tasks to `tasks.txt`. Worker resumes automatically.
+3. Prepend decomposed tasks to `tasks.txt` via `scripts/reorder_queue.sh`. Worker resumes automatically.
 
 ### 3. Handle Blocked Tasks (`[BLOCKED]`)
 Apply the Granularity Escalation Ladder:
