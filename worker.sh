@@ -819,7 +819,8 @@ PROMPT_EOF
     # Dynamic Step Budget Continuation: if CLI hit its internal per-invocation step ceiling (~17 steps)
     # before reaching TASK_MAX_STEPS and left uncommitted progress inside the worktree, resume until
     # TASK_MAX_STEPS is reached or the task finishes cleanly.
-    STEPS_USED=$(grep -cE '^\[EXEC\]|Tool Call|edit_file|write_file|run_command|read_file' "$CMD_OUTPUT_TMP" 2>/dev/null || echo "17")
+    STEPS_USED=$(grep -cE '^\[EXEC\]|Tool Call|edit_file|write_file|run_command|read_file' "$CMD_OUTPUT_TMP" 2>/dev/null || true)
+    STEPS_USED="${STEPS_USED//[^0-9]/}"
     [ "${STEPS_USED:-0}" -lt 1 ] && STEPS_USED=17
     while [ "$EXIT_CODE" -eq 0 ] && [ "$STEPS_USED" -lt "$TASK_MAX_STEPS" ]; do
       CURRENT_HEAD_SHA=$(git -C "$WORK_DIR" rev-parse HEAD 2>/dev/null || echo "")
@@ -841,7 +842,8 @@ PROMPT_EOF
         ) 2>&1 | tee "$CONTINUE_TMP"
         EXIT_CODE="${PIPESTATUS[0]}"
         cat "$CONTINUE_TMP" >> "$CMD_OUTPUT_TMP"
-        ADD_STEPS=$(grep -cE '^\[EXEC\]|Tool Call|edit_file|write_file|run_command|read_file' "$CONTINUE_TMP" 2>/dev/null || echo "17")
+        ADD_STEPS=$(grep -cE '^\[EXEC\]|Tool Call|edit_file|write_file|run_command|read_file' "$CONTINUE_TMP" 2>/dev/null || true)
+        ADD_STEPS="${ADD_STEPS//[^0-9]/}"
         [ "${ADD_STEPS:-0}" -lt 1 ] && ADD_STEPS=17
         STEPS_USED=$(( STEPS_USED + ADD_STEPS ))
         rm -f "$CONTINUE_TMP"
@@ -965,7 +967,6 @@ BLOCK_EOF
 
         # 1. Gate 2: Clean Tree / Git Zero-Modification Gate
         # Ensure working tree has no uncommitted changes to product code or test files
-        local research_dirty
         research_dirty=$(git -C "$WORK_DIR" status --porcelain 2>/dev/null | grep -vE "(progress\.log|tasks\.txt|tasks\.done|worker\..*\.status|\.preview|\.worker\..*|\.reports/|\.reports)" || true)
         if [ -n "$research_dirty" ]; then
           GUARD_STATUS=12
@@ -975,7 +976,7 @@ BLOCK_EOF
         # 2. Gate 1: Artifact Integrity Gate
         # Look for SUMMARY.md in .reports/ or report path in TARGET
         if [ $GUARD_STATUS -eq 0 ]; then
-          local report_path=""
+          report_path=""
           if [ -n "$TASK_TARGET" ] && [ -f "$WORK_DIR/$TASK_TARGET" ]; then
             report_path="$WORK_DIR/$TASK_TARGET"
           else
@@ -995,7 +996,6 @@ BLOCK_EOF
               GUARD_ERROR="Research Artifact Invalid: Report '$report_path' lacks standard markdown headings."
             else
               if ! head -n 1 "$report_path" 2>/dev/null | grep -q "REPORT_META:"; then
-                local r_sha r_tmp
                 r_sha=$(git -C "$WORK_DIR" rev-parse --short HEAD 2>/dev/null || echo "HEAD")
                 r_tmp=$(mktemp)
                 echo "<!-- REPORT_META: Task=$TASK_ID | Commit=$r_sha | Time=$(date -u '+%Y-%m-%dT%H:%M:%SZ') -->" > "$r_tmp"
@@ -1006,15 +1006,13 @@ BLOCK_EOF
 
               # 3. Gate 4: Pointer Validity Probe
               # Extract pointers like <File>#L<Line> from report and verify target file and line count
-              local sampled_ptrs
               sampled_ptrs=$(grep -oE '[a-zA-Z0-9_./-]+\.[a-zA-Z0-9]+#L[0-9]+' "$report_path" 2>/dev/null | head -n 5 || true)
               if [ -n "$sampled_ptrs" ]; then
                 while IFS= read -r ptr; do
                   [ -z "$ptr" ] && continue
-                  local p_file="${ptr%#L*}"
-                  local p_line="${ptr##*#L}"
+                  p_file="${ptr%#L*}"
+                  p_line="${ptr##*#L}"
                   if [ -f "$WORK_DIR/$p_file" ]; then
-                    local total_lines
                     total_lines=$(wc -l < "$WORK_DIR/$p_file" | tr -dc '0-9')
                     if [ "$p_line" -gt "$total_lines" ]; then
                       GUARD_STATUS=13
