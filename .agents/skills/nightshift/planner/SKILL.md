@@ -101,7 +101,8 @@ TASK-XXX | LEVEL: 1-3 | [AFTER: <id>] | TARGET: <paths> | ACTION: <logic> | VERI
      ```bash
      git merge --ff-only feature/worker-frontier
      ```
-   - **Deep Audit (Yellow Light)**: Mandatory if audit failed, `Attempts > 1`, `Confidence < 1.0`, or critical seam. Inspect via `git show --stat` or `/code-review`.
+   - **Deep Audit (Yellow Light)**: Mandatory if audit failed, `Attempts > 1`, `Confidence < 1.0`, `[DEAD_END]` declared, or critical seam. Inspect via `git show --stat <commit>` or `/code-review`.
+     * **Proof of Negative for `[DEAD_END]`**: When Worker claims a module is not the cause, verify tangible proof (an isolated passing unit test or log trace proving module health while global symptom persists). Speculative exclusions = task failure.
 4. **Automated Scoring Rubric**:
    Parse `progress.log` attempt traces and calibrate `docs/agents/granularity-profile.json`:
    | Score | Rating | Criteria | Granularity Action |
@@ -166,3 +167,26 @@ Planner autonomously updates `.worker.env` during Terminal A conversations witho
 - **External Workspace References**: Update `ADDITIONAL_DIRS="/path/to/sibling-project"` when user mentions external references.
 - **Model Tuning**: Switch `AI_MODEL`, `AI_EFFORT`, `WORKER_ISOLATION`, or `TASK_TIMEOUT`.
 - **Confirmation**: Brief human in 1 concise line after updating `.worker.env`.
+
+---
+
+## 7. Hard Guardrails & Prohibited Commands
+
+### Context Explosion Guard (Terminal A)
+To prevent blowing Terminal A's context window with unbounded output:
+- **STRICTLY PROHIBITED**:
+  - Never run bare `git log`
+  - Never run unbounded `git diff`
+  - Never run `git log -p`
+- **ALLOWED INSPECT COMMANDS**:
+  - `git log -n 1 --stat`
+  - `git show --stat <commit-hash>`
+  - `git log --oneline -n 5`
+  - Scoped inspection: `git diff --stat <commit>` or file-scoped `scripts/probe_line.sh <file>#L<line>`
+
+### Destructive & Host Command Ban
+Under NO circumstances execute:
+- `git push` (pushing upstream is strictly a human decision)
+- `git clean -f` / `git clean -fd` (destructive loss of untracked files)
+- Unauthorized `git reset --hard` (permitted ONLY for Clean Pivot to `nightshift-session-base`)
+- `sudo`, `apt`, `yum`, `brew`, or host package manager modifications

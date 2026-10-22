@@ -150,7 +150,7 @@ fi
 if [ ! -f "$TARGET_DIR/.worker.notes.md" ]; then
   cat <<'EOF' > "$TARGET_DIR/.worker.notes.md"
 # Worker Repository Notes & Compiler Quirks
-# Shared across stateless worker runs. Updated by background worker via /manage-worker-notes.
+# Shared across stateless worker runs. Updated by background worker per .skills/universal-build-verify.md.
 EOF
   echo "  ✓ Initialized .worker.notes.md"
 else

@@ -55,6 +55,7 @@ Triggered when caller topology is unknown, cross-module boundaries are affected,
    - Artifact Integrity (valid non-empty `SUMMARY.md` with markdown headings).
    - Clean Tree (0 uncommitted product edits).
    - Pointer Validity (`<File>#L<Line>` verified on disk).
+   - Proof of Negative: If any subsystem is excluded or declared `[DEAD_END]`, require tangible proof (passing isolated probe or log). Speculative exclusions = report rejection.
 
 ---
 

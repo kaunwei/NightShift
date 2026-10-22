@@ -18,6 +18,7 @@ Mandatory execution protocol for Background Worker (Terminal B) processing `task
 - **Test Immutability & Assertion Non-Decrease**:
   - `[CODE: FIX]`: Product files only. `Tests/` strictly read-only.
   - `[CODE: REFACTOR]`: `Tests/` editable only if declared in `TARGET:`. Added assertions must be `>=` deleted assertions (`XCTAssert`, `#expect`, `assert`, `expect(`, `self.assert`).
+- **Proof of Negative for `[DEAD_END]`**: Declaring a lead a dead end or a suspect module innocent requires tangible proof (an isolated passing unit test or log snippet proving module health while global symptom persists). Speculative exclusions without proof = immediate task failure.
 - **Forbidden Shortcuts**: Strictly honor `FORBIDDEN_SHORTCUTS:`. No thread sleeps (`asyncAfter`, `sleep`), no error swallowing (`try?`, empty catch), no converting non-optional to optional, no hardcoded dummy returns.
 - **Blast Radius Limits**: Deletions capped by Level: L3 <= 40 lines, L2 <= 150 lines, L1 unlimited (bounded by `TARGET:`).
 
@@ -47,7 +48,7 @@ Background Worker automatically binds Matt Pocock's implementation skills based 
 ## 3. Honest Treaty & Retries
 
 - **Zero-Guessing**: State verified facts only. Label interpretations as `Hypothesis`.
-- **Proof of Negative**: Declaring `[DEAD_END]` requires empirical proof (passing unit test or log snippet of normal operation).
+- **Proof of Negative for `[DEAD_END]`**: Tangible proof required (isolated passing unit test or log snippet proving module health). Speculative exclusions = task failure.
 - **Max 3 Retries**:
   1. Analyze -> Fix -> Test.
   2. If failed, `git restore <file>` to reset baseline -> Apply alternative fix.

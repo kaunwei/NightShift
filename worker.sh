@@ -631,7 +631,7 @@ Strictly adhere to the implementation foundations in .skills/universal-build-ver
 - For [CODE]: Execute via /implement, /tdd, and /codebase-design (Red-Green-Refactor at seams).
 - For [DIAGNOSTIC]: Follow /diagnosing-bugs (build tight failing repro test, product code locked).
 - For [RESEARCH]: Follow /research (extract AST skeletons, capture call-sites to SUMMARY.md).
-- Follow /record-attempt-trace and /manage-worker-notes for execution traces.
+- Follow .skills/universal-build-verify.md Section 4.1 for attempt traces (progress.log <= 15 lines) and Section 4.2 for repository notes (.worker.notes.md).
 
 TASK TO IMPLEMENT:
 $TASK_TITLE
