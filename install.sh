@@ -102,6 +102,9 @@ rm -rf "$TARGET_DIR/.agents/skills/planner" 2>/dev/null || true
 rm -rf "$TARGET_DIR/.agents/skills/explore" 2>/dev/null || true
 rm -rf "$TARGET_DIR/.agents/skills/productivity/configure-unattended-worker" 2>/dev/null || true
 rm -rf "$TARGET_DIR/.agents/skills/engineering/setup-unattended-workflow" 2>/dev/null || true
+for legacy_ns in watch-worker-queue score-worker-performance handle-worker-guidance manage-worker-notes record-attempt-trace configure-unattended-worker setup-unattended-workflow; do
+  rm -rf "$TARGET_DIR/.agents/skills/nightshift/$legacy_ns" 2>/dev/null || true
+done
 
 # Deploy skill categories
 for category in nightshift engineering productivity misc in-progress; do

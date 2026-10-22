@@ -135,3 +135,12 @@ While the worker daemon executes in the background, human operators test interme
    - **Tweak / Refine**: Instruct Planner in Terminal A $\rightarrow$ Planner injects adjusted ticket via `scripts/reorder_queue.sh`.
    - **Safe Hold**: Run `touch PAUSE` to pause worker after current task completes.
    - **Reject / Pivot**: Trigger Clean Pivot (`git reset --hard nightshift-session-base`) to discard faulty path cleanly.
+
+---
+
+## 6. Autonomous Worker Configuration (.worker.env)
+
+Planner autonomously updates `.worker.env` during Terminal A conversations without manual shell editing:
+- **External Workspace References**: Update `ADDITIONAL_DIRS="/path/to/sibling-project"` when user mentions external references.
+- **Model Tuning**: Switch `AI_MODEL`, `AI_EFFORT`, `WORKER_ISOLATION`, or `TASK_TIMEOUT`.
+- **Confirmation**: Brief human in 1 concise line after updating `.worker.env`.

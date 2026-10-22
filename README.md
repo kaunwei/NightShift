@@ -63,7 +63,7 @@ A plug-and-play, dual-terminal decoupled AI development framework designed for 2
 - **`worker.sh`**: Core background daemon supporting isolation modes, POSIX queue locking, and mechanical audit funnels.
 - **`.worker.env.example`**: Configuration template with model parameters, OS detection, and isolation toggle.
 - **`.skills/universal-build-verify.md`**: Universal SOP for background workers (security guardrails, Matt implementation skills, TDD, auto-commit).
-- **`.agents/skills/nightshift/`**: Unified NightShift workflow skills suite (`planner`, `explore`, `watch-worker-queue`, `score-worker-performance`, `handle-worker-guidance`, `manage-worker-notes`, `record-attempt-trace`, `configure-unattended-worker`, `setup-unattended-workflow`).
+- **`.agents/skills/nightshift/`**: NightShift interactive command skills (`planner` and `explore`). All background operations (sentinel, scoring, guidance, worker notes) execute autonomously without polluting the `/` command interface.
 - **`.worker.notes.md`**: Shared repository quirks and compiler flags cheat sheet across stateless runs.
 - **`tasks.txt`**: FIFO task queue (single-line atomic English contracts).
 - **`progress.log`**: Latest verification reports (newest prepended at top, <=15 lines per task).

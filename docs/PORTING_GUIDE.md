@@ -61,7 +61,7 @@ deploys or upgrades the complete Pure Skills-Driven architecture non-destructive
 | `.worker.env` | Config file | Active config initialized from `.worker.env.example` in target root. |
 | `scripts/` | `chmod +x` | Helper suite: `status.sh`, `watch_worker.sh`, `reorder_queue.sh`, `extract_skeleton.sh`, `probe_line.sh`. |
 | `.skills/universal-build-verify.md` | Instruction | Worker build & test verification skill. |
-| `.agents/skills/nightshift/` | Skills | Unified NightShift skills suite (`planner`, `explore`, `watch-worker-queue`, `score-worker-performance`, `handle-worker-guidance`, `manage-worker-notes`, `record-attempt-trace`, `configure-unattended-worker`, `setup-unattended-workflow`). |
+| `.agents/skills/nightshift/` | Skills | NightShift command skills (`planner`, `explore`). Background operations execute autonomously without polluting the `/` command interface. |
 | `.agents/skills/` (subdirs) | Skills | Supporting Matt Pocock skills (`engineering/`, `productivity/`, `misc/`). |
 | `.worker.notes.md` | Dynamic memory | Worker lessons learned, build quirks, and compiler flags. |
 | `tasks.txt` | FIFO Queue | Task queue initialized with schema header. |

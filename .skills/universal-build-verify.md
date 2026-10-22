@@ -40,9 +40,9 @@ Background Worker automatically binds Matt Pocock's implementation skills based 
   - **`/diagnosing-bugs`**: Build a tight pass/fail feedback loop that goes red strictly on this bug. Isolate root cause with minimal repro test or exact trace in `.reports/<issue-slug>/`. Reject ungrounded speculation.
   - *Valid Red-Light Rule*: Repro test must compile cleanly (0 errors) and fail strictly on assertion. Syntax errors or missing symbols = Invalid Repro.
   - *Product Code Lock*: Modifying production code (`Sources/`, `src/`) during diagnostics is strictly forbidden. Touch only tests and `.reports/`.
-- **Worker Operational Skills**:
-  - **`/record-attempt-trace`**: Record transparent attempt traces, duration, and confidence scores into `progress.log`.
-  - **`/manage-worker-notes`**: Read compiler quirks and environment flags from `.worker.notes.md`.
+- **Worker Operational Standards**:
+  - **Attempt Traces**: Record transparent attempt traces, duration, and confidence scores into `progress.log` (<= 15 lines).
+  - **Repository Notes**: Consult and maintain compiler quirks and environment flags in `.worker.notes.md` (< 30 lines).
 
 ## 3. Honest Treaty & Retries
 
@@ -54,9 +54,35 @@ Background Worker automatically binds Matt Pocock's implementation skills based 
   3. Final attempt. If failed, halt immediately, log `[BLOCKED]` in `progress.log`, and exit.
 - **`[SCOPE_BLOCKED]` Exit**: Downstream compiler errors outside `TARGET:` -> Halt immediately, emit `STATUS: SCOPE_BLOCKED (Need Target: <File>#L<Line>)`. No penalty.
 
-## 4. Acceptance & Logging
+## 4. Acceptance, Logging & Notes
 
-- **Log Density**: `progress.log` entry `<= 15 lines`; Executive Summary in `.reports/<issue-slug>/` `<= 30 lines`.
+### 4.1 Attempt Trace & Progress Journal (progress.log)
+- **Strict Limit**: Entries MUST be `<= 15 lines`. Pointers over prose (`src/file.py#L10-L20`). Zero discursive prose.
+- **Confidence Metrics**:
+  - `HIGH`: Tests passed 100%, 0 warnings, standard conventions.
+  - `MEDIUM`: Tests passed, but required 1-2 retries to align fixtures/linkers.
+  - `LOW`: Tests passed, but code feels brittle or edge cases remain unverified.
+- **Template**:
+  ```text
+  ================================================================================
+  [SUCCESS | BLOCKED] TASK-XXX: <Title>
+  Time: <Timestamp> | Duration: <Xs> | Attempts: <N>/3 | Confidence: <HIGH|MED|LOW>
+  Task Granularity: <Level 1|Level 2|Level 3>
+  Changes: <Files / Report path>
+  Verification: Build <PASS|FAIL>, Tests <PASS|FAIL> (<N> passed)
+  Attempt Trace:
+    • Att 1: <PASS or failure reason with exact error summary>
+    • Att 2/3: <Fix applied and result>
+  Notes: <Optional observations>
+  ================================================================================
+  ```
+
+### 4.2 Repository Quirks & Flags (.worker.notes.md)
+- **Consult**: At start of every task, check `.worker.notes.md` and follow project-specific compiler flags and tool paths.
+- **Update**: When discovering a non-obvious build quirk or linker dependency, append a concise 1-2 line tip under the relevant section (< 30 lines total).
+- **Invariants**: Strictly compiler flags and toolchain quirks. NEVER record architectural lore or task history.
+
+### 4.3 Double-Funnel Mechanical Audit & Commits
 - **Double-Funnel Mechanical Audit**: `worker.sh` mechanically re-runs verification, checks Anti-Idle (`Tests_Run >= 1`), runs regression checks, and stamps `[MECHANICAL_AUDIT]` at line 1.
 - **Conventional Commit Standard (English ONLY)**:
   ```bash
@@ -66,19 +92,6 @@ Background Worker automatically binds Matt Pocock's implementation skills based 
   Scope: <target_files>
   Verification: <test command> (<result>)
   Attempts: <count> | Confidence: <score>"
-  ```
-- **progress.log Template (<= 15 lines)**:
-  ```text
-  ================================================================================
-  [SUCCESS | BLOCKED] TASK-XXX: <Title>
-  Time: <Timestamp> | Duration: <Xs> | Attempts: <N>/3 | Confidence: <HIGH|MED|LOW>
-  Changes: <Files / Report path>
-  Verification: Build <PASS|FAIL>, Tests <PASS|FAIL>
-  Attempt Trace:
-    • Att 1: <Summary>
-    • Att 2/3: <Fix applied or rollback>
-  Notes: <Optional observations>
-  ================================================================================
   ```
 
 ## 5. Execution Modes (`WORKER_ISOLATION`)
