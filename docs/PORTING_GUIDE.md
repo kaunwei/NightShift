@@ -101,9 +101,8 @@ The script automatically detects whether the target is a **Fresh Install** or an
 - Appends required worker runtime entries to `.gitignore` with strict idempotency (checks line existence and header to guarantee zero duplication).
 - Validates the bash syntax of all deployed scripts.
 
-### Step 4.3: Adapt `.skills/universal-build-verify.md`
-Inspect `<target-project>/.skills/universal-build-verify.md`.
-Update **ONLY** Step 2.2 (Build) and Step 2.3 (Test) with the exact build and test commands discovered in Step 4.1.
+### Step 4.3: Seed Project Build/Test Quirks in `.worker.notes.md`
+Record the project's native build and test commands (discovered in Step 4.1) and any required compiler flags in `<target-project>/.worker.notes.md` (`< 30 lines`) so `/planner` and `worker.sh` use them automatically in `VERIFY:` contracts.
 
 ### Step 4.4: Pure Skills Execution (Zero Rules Merging)
 Because NightShift is a **Pure Skills-Driven Architecture**, there is **zero need to merge into, edit, or touch existing `AGENTS.md`, `CLAUDE.md`, or `GEMINI.md` files**.

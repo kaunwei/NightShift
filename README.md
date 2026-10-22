@@ -1,6 +1,6 @@
 # NightShift: 24-Hour Unattended AI Development Framework
 
-A plug-and-play, dual-terminal decoupled AI development framework designed for 24-hour unattended autonomous code generation, verification, and linear integration.
+A plug-and-play, dual-terminal AI development framework combining **Matt Pocock's engineering skills** with an **unattended background worker daemon (`worker.sh`)** for 24-hour autonomous code generation, live `.preview/` testing, and double-funnel verification.
 
 ---
 
@@ -8,25 +8,31 @@ A plug-and-play, dual-terminal decoupled AI development framework designed for 2
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
-│               Terminal A: Interactive Architect (In-Session)           │
-│  • Human + High-IQ AI (Gemini / Claude).                               │
-│  • Discuss requirements, groom domain models & tracer-bullet tasks.    │
-│  • Decompose goals into single-line atomic English contracts.          │
-│  • Level 1~3 granularity aligned with Matt Pocock's TDD blueprints.    │
-│  • Inspects progress.log (<=15 lines) for zero token pollution.        │
-│  • [Acceptance] Auto-merges verified frontier into main upon wake-up.  │
+│               Terminal A: Interactive Planner (/planner, /explore)     │
+│  • Domain & Seam Modeling: /domain-modeling, /codebase-design, /explore│
+│  • Tracer-Bullet Slicing (to-tickets): End-to-end vertical slices      │
+│    independently demoable in .preview/.                                │
+│  • Full-Horizon Dispatch: Enqueues 100% of discovered tasks at once    │
+│    (First-Time Alignment or Full-Auto Mode).                           │
+│  • 10-Task Cadence: Auto-runs /code-review & /improve-codebase-arch    │
+│    every 10 tasks and injects a [CODE: REFACTOR] ticket.               │
+│  • Double-Funnel Acceptance:                                           │
+│    - Green Light (Attempts=1, HIGH): <=5s 0-token FF-merge into main.  │
+│    - Yellow Light: Auto-triggers /code-review.                         │
+│    - [BLOCKED] (3 failed retries): Auto-triggers /retro & escalation.  │
 └───────────────────────────────────┬────────────────────────────────────┘
-                                    │ (FIFO tasks.txt)
+                                    │ (FIFO tasks.txt with POSIX lock)
 ┌───────────────────────────────────▼────────────────────────────────────┐
-│          Terminal B: Background Worker Daemon (worker.sh)              │
-│  • Pure zero-argument execution (auto-sources .worker.env).            │
-│  • Mode 1 (WORKER_ISOLATION=1): Persistent .worker-tree sandbox.       │
-│    Stages verified snapshots to .preview/ drop-box on task PASS.       │
+│          Terminal B: Background Worker Daemon (./worker.sh)            │
+│  • Zero-argument daemon (auto-sources .worker.env & .worker.notes.md). │
+│  • Mode 1 (WORKER_ISOLATION=1): Persistent .worker-tree sandbox on     │
+│    branch feature/worker-frontier; stages PASS builds to .preview/.    │
 │  • Mode 2 (WORKER_ISOLATION=0): Direct in-place single-tree execution. │
-│  • Headless stateless CLI per task (agy --mode accept-edits).          │
-│  • Decoupled Mechanical Audits: [CODE], [RESEARCH], [DIAGNOSTIC].      │
-│  • Max 3 repair attempts -> auto rollback on failure.                  │
-│  • Auto Conventional Commit & prepends <=15 lines to progress.log.     │
+│  • Executes via /implement (skipping per-task /code-review), /tdd,     │
+│    /codebase-design, /diagnosing-bugs, and /research.                  │
+│  • Mechanical Audits: [CODE], [DIAGNOSTIC], [RESEARCH], Proof of       │
+│    Negative for [DEAD_END], Assertion Non-Decrease, Blast Radius.      │
+│  • Max 3 attempts -> auto Conventional Commit & <=15-line progress.log.│
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -34,49 +40,49 @@ A plug-and-play, dual-terminal decoupled AI development framework designed for 2
 
 ## Key Features
 
-1. **Dual-Worktree Persistent Isolation (`WORKER_ISOLATION=1`, Default)**:
-   - Exactly **TWO** persistent worktrees exist (`main` and `.worker-tree`).
-   - The worker executes inside `.worker-tree` on branch `feature/worker-frontier`.
-   - Human's workspace remains 100% stable; IDE files never flicker; compiler/linker locks (`ETXTBSY`) are eliminated.
-   - Automatically mirrors untracked configs (`.env`, `.worker.env`) and symlinks heavy dependencies (`node_modules`, `.venv`) with zero disk bloat.
-   - Prevents network port collisions (`PORT=3001`) and test database contamination.
-2. **Decoupled Multi-Archetype Mechanical Audits**:
-   - `[CODE]`: Deterministic test suite pass, Anti-Idle (`Tests_Run >= 1`), target whitelist, blast radius limits, assertion non-decrease.
-   - `[RESEARCH]`: Artifact integrity check, Clean Tree (zero uncommitted/modified product code), pointer validity probe.
-   - `[DIAGNOSTIC]`: Product code lock, clean build, repro failure strictly on test assertion.
-3. **Immutable Early-Access Drop-box (`.preview/`)**:
-   - As soon as a task passes verification, Worker stages an immutable snapshot/binary with `version.json`.
-   - Human can test intermediate builds immediately without compilation and without branch switching.
-4. **Single-Tree In-Place Mode (`WORKER_ISOLATION=0`)**:
-   - Zero-overhead fallback for projects locked to fixed ports or singleton hardware resources.
-5. **Atomic Hot Preemption & Dynamic Rescheduling**:
-   - Planner dynamically injects urgent `[CODE]` or `[DIAGNOSTIC]` tasks to line 1 of `tasks.txt` via atomic locks (`scripts/reorder_queue.sh`).
-6. **Zero-Token Sentinel Auto-Merge**:
-   - When queue empties, Sentinel Subagent (`scripts/watch_worker.sh`) wakes Planner without chat polling loops.
-   - Planner performs acceptance and automatically runs `git merge --ff-only feature/worker-frontier` into `main`.
+1. **Clean Command Surface + Upstream Skill Integrity**:
+   - Exposes only **`/planner`** and **`/explore`** for NightShift orchestration, keeping Terminal A's `/` autocomplete clean.
+   - Preserves Matt Pocock's upstream skills (`.agents/skills/engineering/`, `productivity/`, `misc/`) 100% intact for frictionless `git pull` updates, binding them via direct file pointers.
+2. **Tracer-Bullet Slicing (`to-tickets`) & On-the-Fly Live Preview (`.preview/`)**:
+   - Tasks are sliced vertically end-to-end so every completed ticket stages a runnable snapshot and `.preview/version.json` into `.preview/`.
+   - Test new features live (e.g. `./.preview/bin/app`) on `main` (`PORT=3000`) while Worker continues building subsequent tasks in `.worker-tree` (`PORT=3001`).
+3. **Full-Horizon Batch Dispatch & Full-Auto Mode**:
+   - Once `/explore` verifies seams, Planner dispatches the entire discovered task queue in one shot (never drip-feeding 2–3 tasks at a time).
+   - Protected by live queue preemption (`scripts/reorder_queue.sh`), safe pause (`touch PAUSE`), and instant Git rollback (`git reset --hard nightshift-session-base`).
+4. **Double-Funnel Acceptance & Token Protection**:
+   - **Worker**: Runs fast unit/integration tests without spawning per-task `/code-review` sub-agents.
+   - **Green Light (`Attempts: 1 | Confidence: HIGH`)**: Zero review tokens; immediate `git merge --ff-only feature/worker-frontier`.
+   - **Yellow Light (`Attempts > 1`, low confidence, or critical seam)**: Automatically runs `/code-review`.
+   - **`[BLOCKED]` (3 failed retries)**: Automatically runs `/retro` on the failure trace to upgrade checks/standards and `.worker.notes.md`.
+5. **10-Task Architecture Deepening Cadence**:
+   - Every 10 tasks (`TASK-010`, `TASK-020`, ...), Planner automatically runs `/code-review` and `/improve-codebase-architecture` over recent commit hotspots (`git log --oneline -n 20`) and queues a `[CODE: REFACTOR]` ticket.
+6. **Dual-Worktree Persistent Isolation (`WORKER_ISOLATION=1`, Default)**:
+   - Eliminates IDE file flickering and compiler/linker locks (`ETXTBSY`) while symlinking heavy dependency caches (`node_modules`, `.venv`).
+   - Includes `WORKER_ISOLATION=0` fallback for hardware-locked or fixed-port projects.
 
 ---
 
 ## File Structure
 
-- **`install.sh` / `update.sh`**: One-command non-destructive copy installer and updater to deploy or upgrade NightShift in any target project.
-- **`worker.sh`**: Core background daemon supporting isolation modes, POSIX queue locking, and mechanical audit funnels.
-- **`.worker.env.example`**: Configuration template with model parameters, OS detection, and isolation toggle.
-- **`.skills/universal-build-verify.md`**: Universal SOP for background workers (security guardrails, Matt implementation skills, TDD, auto-commit).
-- **`.agents/skills/nightshift/`**: NightShift interactive command skills (`planner` and `explore`). All background operations (sentinel, scoring, guidance, worker notes) execute autonomously without polluting the `/` command interface.
-- **`.worker.notes.md`**: Shared repository quirks and compiler flags cheat sheet across stateless runs.
-- **`tasks.txt`**: FIFO task queue (single-line atomic English contracts).
-- **`progress.log`**: Latest verification reports (newest prepended at top, <=15 lines per task).
+- **`install.sh` / `update.sh`**: Unified non-destructive installer and updater (deploys scripts/skills, preserves user state, and prevents duplicate `.gitignore` entries).
+- **`worker.sh`**: Background worker daemon with POSIX queue locking, isolation modes, and mechanical audit gates.
+- **`.worker.env.example`**: Configuration template (model selection, effort level, timeout, `WORKER_ISOLATION`, `ADDITIONAL_DIRS`).
+- **`.skills/universal-build-verify.md`**: Worker execution SOP and hard guardrails (Terminal B).
+- **`.agents/skills/nightshift/`**: NightShift orchestrator skills (`planner/SKILL.md` and `explore/SKILL.md`).
+- **`.agents/skills/{engineering,productivity,misc,in-progress}/`**: Matt Pocock's upstream skills catalog (unmodified).
+- **`.worker.notes.md`**: Shared compiler flags and toolchain quirks across stateless worker runs (`< 30 lines`).
+- **`tasks.txt`**: FIFO task queue (single-line English tracer-bullet contracts).
+- **`progress.log`**: Prepend-only verification journal (`<= 15 lines` per task, stamped with `[MECHANICAL_AUDIT]` at line 1).
 - **`scripts/`**:
-  - **`status.sh`**: Real-time non-blocking visual dashboard of worker state, queue, and preview status.
+  - **`status.sh`**: Real-time dashboard of worker state, queue progress, and `.preview/` version.
   - **`watch_worker.sh`**: Zero-token blocking waiter for Sentinel Subagents.
-  - **`reorder_queue.sh`**: Atomic queue reordering and hot preemption tool.
-  - **`extract_skeleton.sh`**: Signature skeleton and context slice extractor for dossier reports.
-  - **`probe_line.sh`**: Precise line-level code auditor.
+  - **`reorder_queue.sh`**: Atomic queue reordering and hot preemption (`line 1` injection).
+  - **`extract_skeleton.sh`**: AST signature skeleton extractor for low-token exploration.
+  - **`probe_line.sh`**: File- and line-scoped code inspector.
 - **`docs/`**:
-  - **`SPEC.md`**: Architectural specification of the dual-terminal and isolation protocols.
-  - **`PORTING_GUIDE.md`**: Autonomous AI porting guide for adopting this framework into other projects.
-  - **`agents/`**: Domain models, triage labels, and granularity profiles.
+  - **`SPEC.md`**: Technical specification of the dual-terminal architecture and audit gates.
+  - **`PORTING_GUIDE.md`**: Step-by-step guide for installing or updating NightShift in external repositories.
+  - **`agents/`**: Module granularity ratings (`granularity-profile.json`) and triage metadata.
 
 ---
 
@@ -88,46 +94,36 @@ cp .worker.env.example .worker.env
 ```
 
 ### 2. Launch Terminal B (Background Worker)
-Open a separate terminal window or tmux session and run:
+Open a separate terminal or tmux pane:
 ```bash
 ./worker.sh
-```
-*(Runs as a perpetual daemon. To run once until the queue is empty, set `RUN_ONCE=1 ./worker.sh`)*
-
-### 3. Terminal A (Interactive Architect & Planning)
-1. Discuss features with the AI in Terminal A.
-2. Planner writes atomic tasks into `tasks.txt`.
-3. Background Worker picks up tasks, verifies them, and commits automatically.
-
-### 4. Check Status & Early-Access Preview
-Inspect live progress without disturbing the worker:
-```bash
-./scripts/status.sh
+# Or run once until queue is empty:
+RUN_ONCE=1 ./worker.sh
 ```
 
-### 5. Emergency Pause / Resume
-To pause the worker safely after its current task finishes:
+### 3. Plan & Dispatch in Terminal A
+1. Run `/planner` (or `/explore` for seam discovery) in your interactive AI session.
+2. Approve the proposed full queue (or reply `auto` for uninterrupted Full-Auto dispatch into `tasks.txt`).
+3. Worker executes tasks in `.worker-tree`, stages passing builds to `.preview/`, and Sentinel wakes Planner to fast-forward merge into `main`.
+
+### 4. Live Status & Queue Control
 ```bash
-touch PAUSE
-```
-To resume execution:
-```bash
-rm PAUSE
+./scripts/status.sh                                # Live dashboard & .preview/ info
+./scripts/reorder_queue.sh prepend "TASK-099 ..."  # Hot-preempt urgent task to line 1
+touch PAUSE                                        # Pause worker after current task
+rm PAUSE                                           # Resume worker
 ```
 
 ---
 
-## Porting to Other Projects
+## Porting & Updating in Other Projects
 
-NightShift uses a **Pure Skills-Driven Architecture** with zero rules merging (`AGENTS.md` is never touched or required).
-To port NightShift into any target repository in seconds (or update an existing installation):
+NightShift uses a **Pure Skills-Driven Architecture**—it never modifies your project's `AGENTS.md`, `CLAUDE.md`, or `README.md`.
 
 ```bash
 ./install.sh /path/to/target-project
-# or to update an existing deployment:
+# Or update an existing deployment:
 ./update.sh /path/to/target-project
 ```
 
-The script automatically detects fresh install vs update, updates framework scripts and skills, safely preserves existing configs/tasks/notes, and ensures `.gitignore` has zero duplicate entries.
-Then adapt the build and test commands in `<target-project>/.skills/universal-build-verify.md`.
-For comprehensive details, see [docs/PORTING_GUIDE.md](docs/PORTING_GUIDE.md).
+The installer automatically detects fresh install vs. update, syncs `worker.sh`, `scripts/`, `.skills/`, and `.agents/skills/`, preserves your active `.worker.env`, `tasks.txt`, and `.worker.notes.md`, and keeps `.gitignore` clean without duplicate entries. See [docs/PORTING_GUIDE.md](docs/PORTING_GUIDE.md) for details.

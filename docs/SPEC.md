@@ -14,7 +14,7 @@ The framework enforces a strict division of responsibilities:
     2. *Level 3 Implementation Escalation*: Intervenes when a coding task was **already at Level 3 (Micro)** and Worker failed 3 retries, followed by a mandatory post-mortem allocation retro in `granularity-profile.json` and `.worker.notes.md`.
     3. *Diagnostic Evasion & Bogus Report Intervention*: Intervenes when Worker repeatedly produces vague/hallucinated reports or fails to isolate the issue after 2-3 retries without verifiable evidence. Planner directly isolates the root cause and logs quirks in `.worker.notes.md`.
     4. *Explicit User Mandate*: User explicitly asks Planner to modify code directly.
-  - Active Skills: `/planner`, `/explore`, `/domain-modeling`, `/to-tickets`, `/code-review`.
+  - Active Skills: `/planner`, `/explore`, `/domain-modeling`, `/codebase-design`, `/tdd`, `/to-tickets`, `/code-review`, `/improve-codebase-architecture`, `/retro`.
 - **Terminal B (Background Worker Daemon)**:
   - Headless execution engine. Reads `tasks.txt`, executes in `.worker-tree` (or root in Mode 2), runs build/tests, auto-commits with Conventional Commits, and stages `.preview/` snapshots.
 
