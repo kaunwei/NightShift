@@ -67,6 +67,7 @@ TASK-XXX | LEVEL: 1-3 | [AFTER: <id>] | TARGET: <paths> | ACTION: <logic> | VERI
 - `[CODE: EXPAND]` / `[CODE: MIGRATE]` / `[CODE: CONTRACT]`: Phased 3-step migration for `> 5` files.
 - `[DIAGNOSTIC]`: Isolate root cause with failing repro test in `Tests/` or trace in `.reports/<slug>/`. Product code strictly locked.
 - `[RESEARCH]`: Read-only seam discovery producing `.reports/<slug>/SUMMARY.md`.
+- **10-Task Architecture Deepening Cadence**: Every 10 dispatched tasks (i.e. `TASK-010`, `TASK-020`, `TASK-030`, ... or every 10th ticket batch), automatically read and execute [`improve-codebase-architecture`](../engineering/improve-codebase-architecture/SKILL.md) over recent commit hotspots (`git log --oneline -n 20`) to surface module-deepening candidates as a visual HTML report before dispatching the next batch.
 
 ### Block 6: Double-Funnel Acceptance & Auto-Scoring
 1. **Sentinel Subagent Waiter (Zero-Token Wakeup)**:
@@ -137,5 +138,5 @@ TASK-XXX | LEVEL: 1-3 | [AFTER: <id>] | TARGET: <paths> | ACTION: <logic> | VERI
 
 - **Duty Firewall**: Never modify product/test files directly in Terminal A (exceptions: Level 3 Sovereign Intervention after 3 worker failures, repeated worker diagnostic hallucination/evasion, or explicit user mandate).
 - **Artifact Language**: Write all `tasks.txt` entries, logs, and commits strictly in English.
-- **Context Explosion Guard**: Never run bare `git log`, unbounded `git diff`, or `git log -p`. Allowed: `git log -n 1 --stat`, `git show --stat <commit>`, `git log --oneline -n 5`, `git diff --stat <commit>`, `scripts/probe_line.sh <file>#L<line>`.
+- **Context Explosion Guard**: Never run bare `git log`, unbounded `git diff`, or `git log -p`. Allowed: `git log -n 1 --stat`, `git show --stat <commit>`, `git log --oneline -n 20`, `git diff --stat <commit>`, `scripts/probe_line.sh <file>#L<line>`.
 - **Forbidden Commands**: Never run `git push`, `git clean -f`/`-fd`, unauthorized `git reset --hard` (permitted only for Clean Pivot to `nightshift-session-base`), `sudo`, or host package managers (`apt`, `yum`, `brew`).
