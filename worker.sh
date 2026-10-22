@@ -114,7 +114,8 @@ AI_MODEL="${AI_MODEL:-gemini-3.8-flash-low}"
 AI_EFFORT="${AI_EFFORT:-low}"
 AGY_MODE="${AGY_MODE:-accept-edits}"
 TASK_TIMEOUT="${TASK_TIMEOUT:-1800}"
-TASK_MAX_STEPS=1
+STEP_BASE="${STEP_BASE:-12}"
+STEP_PER_FILE="${STEP_PER_FILE:-5}"
 POLL_INTERVAL="${POLL_INTERVAL:-5}"
 USE_SANDBOX="${USE_SANDBOX:-0}"
 RUN_ONCE="${RUN_ONCE:-0}"
@@ -290,6 +291,11 @@ update_status() {
     bar=$(render_progress_bar "$current_idx" "$total_tasks" 30)
   fi
 
+  local escaped_task=""
+  if [ -n "$current_task" ]; then
+    escaped_task=$(printf '%s' "$current_task" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')
+  fi
+
   cat <<EOF > "$STATUS_FILE"
 {
   "worker_id": "$WORKER_ID",
@@ -298,7 +304,7 @@ update_status() {
   "isolation": $ISOLATION_FLAG,
   "work_dir": "$WORK_DIR",
   "state": "$state",
-  "current_task": $(if [ -n "$current_task" ]; then echo "\"$current_task\""; else echo "null"; fi),
+  "current_task": $(if [ -n "$current_task" ]; then printf '"%s"' "$escaped_task"; else echo "null"; fi),
   "elapsed_seconds": $elapsed,
   "progress": {
     "current_index": $current_idx,
@@ -347,6 +353,24 @@ prepend_progress_log() {
     cat "$PROGRESS_FILE" >> "$temp_file"
   fi
   mv "$temp_file" "$PROGRESS_FILE"
+}
+
+extract_task_field() {
+  local raw="$1"
+  local key="$2"
+  printf '%s\n' "$raw" | awk -v k="$key" '
+    {
+      pat = "(^|\\|[[:space:]]*)" k ":[[:space:]]*"
+      if (match($0, pat)) {
+        rest = substr($0, RSTART + RLENGTH)
+        if (match(rest, /[[:space:]]*\|[[:space:]]*(LEVEL|TARGET|GOAL|VERIFY|FORBIDDEN_SHORTCUTS|CONSTRAINTS|DEPENDS_ON):[[:space:]]*/)) {
+          rest = substr(rest, 1, RSTART - 1)
+        }
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", rest)
+        print rest
+      }
+    }
+  '
 }
 
 isolate_and_rollback_dirty_tree() {
@@ -622,13 +646,31 @@ while true; do
   TASK_TITLE="$RAW_TASK"
   TASK_ID=$(echo "$RAW_TASK" | awk -F'|' '{print $1}' | tr -d ' ' || echo "TASK-UNKNOWN")
   TASK_LEVEL=$(echo "$RAW_TASK" | grep -o 'LEVEL:[[:space:]]*[0-9]' | awk '{print $2}' || echo "1")
-  TASK_TARGET=$(echo "$RAW_TASK" | sed -n 's/.*TARGET:[[:space:]]*\([^|]*\).*/\1/p' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' || echo "")
-  TASK_VERIFY=$(echo "$RAW_TASK" | sed -n 's/.*VERIFY:[[:space:]]*\([^|]*\).*/\1/p' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' || echo "")
-  TASK_FORBIDDEN=$(echo "$RAW_TASK" | sed -n 's/.*FORBIDDEN_SHORTCUTS:[[:space:]]*\([^|]*\).*/\1/p' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' || echo "")
-  TASK_CONSTRAINTS=$(echo "$RAW_TASK" | sed -n 's/.*CONSTRAINTS:[[:space:]]*\([^|]*\).*/\1/p' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' || echo "")
+  TASK_TARGET=$(extract_task_field "$RAW_TASK" "TARGET")
+  TASK_VERIFY=$(extract_task_field "$RAW_TASK" "VERIFY")
+  TASK_FORBIDDEN=$(extract_task_field "$RAW_TASK" "FORBIDDEN_SHORTCUTS")
+  TASK_CONSTRAINTS=$(extract_task_field "$RAW_TASK" "CONSTRAINTS")
   TASK_BASE_SHA=$(git -C "$WORK_DIR" rev-parse HEAD 2>/dev/null || echo "HEAD~1")
   START_TIME=$(date +%s)
-  TASK_MAX_STEPS=1
+
+  # Dynamic Step Budget Formula: TASK_MAX_STEPS = STEP_BASE + (TARGET_FILE_COUNT * STEP_PER_FILE)
+  TARGET_FILE_COUNT=0
+  if [ -n "$TASK_TARGET" ]; then
+    IFS=',' read -ra RAW_TARGETS <<< "$TASK_TARGET"
+    for rt in "${RAW_TARGETS[@]}"; do
+      rt_trimmed=$(echo "$rt" | xargs)
+      [ -z "$rt_trimmed" ] && continue
+      if [ -d "$WORK_DIR/$rt_trimmed" ]; then
+        dir_count=$(find "$WORK_DIR/$rt_trimmed" -type f 2>/dev/null | wc -l | tr -dc '0-9')
+        [ "${dir_count:-0}" -lt 1 ] && dir_count=1
+        TARGET_FILE_COUNT=$(( TARGET_FILE_COUNT + dir_count ))
+      else
+        TARGET_FILE_COUNT=$(( TARGET_FILE_COUNT + 1 ))
+      fi
+    done
+  fi
+  [ "$TARGET_FILE_COUNT" -lt 1 ] && TARGET_FILE_COUNT=1
+  TASK_MAX_STEPS=$(( STEP_BASE + (TARGET_FILE_COUNT * STEP_PER_FILE) ))
 
   if echo "$TASK_TITLE $TASK_CONSTRAINTS" | grep -iqE "\[RESEARCH\]"; then
     archive_active_reports
@@ -639,6 +681,7 @@ while true; do
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] >>> [Task $CURRENT_IDX of $TOTAL_COUNT (In Progress) | Completed: $DONE_COUNT/$TOTAL_COUNT ($PERCENT_START%)]"
   echo ">>> Progress: $BAR_START"
   echo ">>> Task: $TASK_TITLE"
+  echo ">>> Step Budget: $TASK_MAX_STEPS steps (Base: $STEP_BASE + $TARGET_FILE_COUNT files * $STEP_PER_FILE)"
   echo "=============================================================================="
 
   update_status "RUNNING" "$TASK_TITLE" "0" "$CURRENT_IDX" "$TOTAL_COUNT" "$((REMAINING_COUNT - 1))" "${PERCENT_START}%" "$BAR_START"
@@ -652,6 +695,7 @@ Execute this atomic task as the unattended Background Worker. Read and follow .s
 
 TASK:
 $TASK_TITLE
+STEP_BUDGET: $TASK_MAX_STEPS steps (Base: $STEP_BASE + $TARGET_FILE_COUNT target files * $STEP_PER_FILE; reserve final 3 steps for verification and git commit)
 
 RULES:
 1. STEP LOGGING: Print "[EXEC] Modifying <file>...", "[EXEC] Running command: <cmd>", or "[EXEC] Running test: <cmd>" before every action.
@@ -717,11 +761,20 @@ PROMPT_EOF
       esac
     fi
 
-    echo "[WORKER] Launching $AI_CLI (Model: $AI_MODEL, Mode: ${AGY_MODE:-default}, WorkDir: $WORK_DIR)..."
+    # Pass dynamic step budget if supported by the CLI (--max-turns / --max-steps)
+    if agy --help 2>&1 | grep -q -- "--max-turns"; then
+      EXTRA_CLI_ARGS+=("--max-turns" "$TASK_MAX_STEPS")
+    elif agy --help 2>&1 | grep -q -- "--max-steps"; then
+      EXTRA_CLI_ARGS+=("--max-steps" "$TASK_MAX_STEPS")
+    fi
+
+    echo "[WORKER] Launching $AI_CLI (Model: $AI_MODEL, Mode: ${AGY_MODE:-default}, StepBudget: $TASK_MAX_STEPS, WorkDir: $WORK_DIR)..."
     (
       cd "$WORK_DIR" && \
       export PORT="$WORKER_PORT" && \
       export TEST_PORT="$WORKER_PORT" && \
+      export MAX_STEPS="$TASK_MAX_STEPS" && \
+      export AGY_MAX_STEPS="$TASK_MAX_STEPS" && \
       run_with_timeout "$TASK_TIMEOUT" agy -p "$PROMPT_PAYLOAD" \
         --dangerously-skip-permissions \
         --model "$AI_MODEL" \
@@ -729,28 +782,34 @@ PROMPT_EOF
     ) 2>&1 | tee "$CMD_OUTPUT_TMP"
     EXIT_CODE="${PIPESTATUS[0]}"
 
-    # Hardcoded 1-Continuation Allowance (TASK_MAX_STEPS=1):
-    # If the initial session hit the CLI step limit right before finishing (leaving uncommitted edits in worktree),
-    # allow at most 1 continuation pass to verify and commit. Requiring more indicates over-scoped task allocation.
-    CONTINUATION_COUNT=0
-    while [ "$EXIT_CODE" -eq 0 ] && [ "$CONTINUATION_COUNT" -lt "$TASK_MAX_STEPS" ]; do
+    # Dynamic Step Budget Continuation: if CLI hit its internal per-invocation step ceiling (~17 steps)
+    # before reaching TASK_MAX_STEPS and left uncommitted progress inside the worktree, resume until
+    # TASK_MAX_STEPS is reached or the task finishes cleanly.
+    STEPS_USED=$(grep -cE '^\[EXEC\]|Tool Call|edit_file|write_file|run_command|read_file' "$CMD_OUTPUT_TMP" 2>/dev/null || echo "17")
+    [ "${STEPS_USED:-0}" -lt 1 ] && STEPS_USED=17
+    while [ "$EXIT_CODE" -eq 0 ] && [ "$STEPS_USED" -lt "$TASK_MAX_STEPS" ]; do
       CURRENT_HEAD_SHA=$(git -C "$WORK_DIR" rev-parse HEAD 2>/dev/null || echo "")
       DIRTY_WORKTREE=$(git -C "$WORK_DIR" status --porcelain 2>/dev/null | grep -vE "(progress\.log|tasks\.txt|tasks\.done|worker\..*\.status|\.preview|\.worker\..*|\.reports/|\.reports)" || true)
       if [ "$CURRENT_HEAD_SHA" = "$TASK_BASE_SHA" ] && [ -n "$DIRTY_WORKTREE" ]; then
-        CONTINUATION_COUNT=$(( CONTINUATION_COUNT + 1 ))
-        echo "[WORKER] ⏩ In-progress edits detected after CLI step limit (Continuation $CONTINUATION_COUNT/$TASK_MAX_STEPS). Resuming to verify and commit..."
+        REMAINING_STEPS=$(( TASK_MAX_STEPS - STEPS_USED ))
+        echo "[WORKER] ⏩ Step budget remaining ($STEPS_USED/$TASK_MAX_STEPS used; $REMAINING_STEPS left). Resuming in-progress changes..."
         CONTINUE_TMP=$(mktemp)
         (
           cd "$WORK_DIR" && \
           export PORT="$WORKER_PORT" && \
           export TEST_PORT="$WORKER_PORT" && \
-          run_with_timeout "$TASK_TIMEOUT" agy -p "Continue $TASK_ID from the current modified working tree (final continuation $CONTINUATION_COUNT/$TASK_MAX_STEPS). Inspect git diff, complete any remaining edits, run verification (${TASK_VERIFY:-build and test}), prepend $PROGRESS_FILE, and commit." \
+          export MAX_STEPS="$REMAINING_STEPS" && \
+          export AGY_MAX_STEPS="$REMAINING_STEPS" && \
+          run_with_timeout "$TASK_TIMEOUT" agy -p "Continue $TASK_ID from the current modified working tree ($REMAINING_STEPS steps remaining in budget of $TASK_MAX_STEPS). Inspect git diff, complete any remaining edits, run verification (${TASK_VERIFY:-build and test}), prepend $PROGRESS_FILE, and commit." \
             --dangerously-skip-permissions \
             --model "$AI_MODEL" \
             "${EXTRA_CLI_ARGS[@]}"
         ) 2>&1 | tee "$CONTINUE_TMP"
         EXIT_CODE="${PIPESTATUS[0]}"
         cat "$CONTINUE_TMP" >> "$CMD_OUTPUT_TMP"
+        ADD_STEPS=$(grep -cE '^\[EXEC\]|Tool Call|edit_file|write_file|run_command|read_file' "$CONTINUE_TMP" 2>/dev/null || echo "17")
+        [ "${ADD_STEPS:-0}" -lt 1 ] && ADD_STEPS=17
+        STEPS_USED=$(( STEPS_USED + ADD_STEPS ))
         rm -f "$CONTINUE_TMP"
       else
         break
