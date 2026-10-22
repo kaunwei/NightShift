@@ -95,7 +95,7 @@ TASK-XXX | LEVEL: 1-3 | [AFTER: <id>] | TARGET: <paths> | ACTION: <logic> | VERI
    | **4⭐** | Passed in 2 attempts (1 self-healed retry), green tests. | Maintain current Level (1 or 2). |
    | **3⭐** | Passed on 3rd attempt (2 retries). | Demote module to Level 2. |
    | **2⭐** | Raised `[NEED_GUIDANCE]` or `[NEED_DECOMPOSITION]`. | Demote to Level 2/3, provide guidance. |
-   | **1⭐** | Blocked after 3 retries, timed out, crashed, or failed anti-cheating gate. | Demote to Level 3; re-architect with user. |
+   | **1⭐** | Blocked after 3 retries, timed out, crashed, or failed anti-cheating gate. | Demote to Level 3; run [`retro`](../engineering/retro/SKILL.md) and re-architect with user. |
 
    *No-Fault Exemption*: `[SCOPE_BLOCKED]` (compiler errors in downstream files outside `TARGET:`) is boundary compliance—never deduct stars.
 5. **Clean Reset**: Archive `.reports/<issue-slug>/` to `.reports/.archive/`.
@@ -120,7 +120,7 @@ TASK-XXX | LEVEL: 1-3 | [AFTER: <id>] | TARGET: <paths> | ACTION: <logic> | VERI
 - **Worker Feedback**:
   - `[NEED_GUIDANCE]`: Clarify question from `progress.log` with human; re-queue with `GUIDANCE: <clarification>` via `scripts/reorder_queue.sh`.
   - `[NEED_DECOMPOSITION]`: Split into atomic Level 2/3 tickets via `scripts/reorder_queue.sh`.
-  - `[BLOCKED]`: Escalate `L1 -> L2 -> L3 -> Planner Sovereign Intervention` (inspect directly, fix, commit, and log post-mortem in `.worker.notes.md`).
+  - `[BLOCKED]` (3 Retries Failed): Run [`retro`](../engineering/retro/SKILL.md) on the failed attempt trace in `progress.log` / `.worker.log` to fix missing checks/pointers/standards, update `.worker.notes.md`, and escalate `L1 -> L2 -> L3 -> Planner Sovereign Intervention` (inspect directly, fix, and commit).
 - **Clean Pivot**: If side-effects require `> 2` patch tickets or trigger `[SCOPE_BLOCKED]`, rollback (`git reset --hard nightshift-session-base`) and re-issue a unified vertical slice. Never stack patches.
 
 ---
