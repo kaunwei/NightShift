@@ -122,6 +122,17 @@ TASK-XXX | LEVEL: 1-3 | [AFTER: <id>] | TARGET: <paths> | ACTION: <logic> | VERI
 - `[CODE: EXPAND]` / `[CODE: MIGRATE]` / `[CODE: CONTRACT]`: Phased 3-step migration for >5 files.
 - `[RESEARCH]`: Read-only seam discovery. Produces `.reports/<slug>/SUMMARY.md`.
 
+#### Multi-Interface & Refactor Authorization Gates
+Planner MUST NOT approve multi-interface targets or `[REFACTOR]` tickets without satisfying all 4 gates:
+1. **Inseparability**: Splitting breaks intermediate commit builds/tests.
+2. **Vertical Slice**: Cohesive protocol $\rightarrow$ implementation $\rightarrow$ test only; no horizontal sprawl across decoupled systems.
+3. **Profile Credit**: Target module has >= 4.5 stars in `docs/agents/granularity-profile.json`. Lower credit requires Level 3 Blueprint Mode.
+4. **Topology Proof**: Prior verified `[DIAGNOSTIC]` or `[RESEARCH]` report in `.reports/<issue-slug>/`.
+
+#### Dual-Track Refactoring Strategies
+- **Track A (Atomic Vertical-Slice)**: Small/Medium (<= 5 files & >= 3 stars). Single `[CODE: REFACTOR]` ticket with interface, implementation, and tests in `TARGET:`. Enforces Assertion Non-Decrease and structural verification in `VERIFY:`.
+- **Track B (Expand-Migrate-Contract)**: Large-Scale (> 5 files or contains 1-star module). 3 green-to-green phases: `[CODE: EXPAND]`, `[CODE: MIGRATE]`, `[CODE: CONTRACT]`.
+
 #### Safety & Control
 - **Hot Preemption**: Inject urgent diagnostic at line 1 via `scripts/reorder_queue.sh`.
 - **Clean Pivot Privilege**: If fixing side-effects requires >2 patch tickets or triggers `[SCOPE_BLOCKED]`, rollback (`git reset --hard nightshift-session-base`) and re-issue a unified vertical slice. Never stack patch-on-patch.
