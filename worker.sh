@@ -626,34 +626,33 @@ while true; do
 
   # Construct Prompt for the CLI Process
   PROMPT_PAYLOAD=$(cat <<PROMPT_EOF
-Execute this atomic task as the unattended Background Worker. Follow .skills/universal-build-verify.md:
-- [CODE]: Follow .agents/skills/engineering/implement/SKILL.md (skip /code-review per task), .agents/skills/engineering/tdd/SKILL.md, and .agents/skills/engineering/codebase-design/SKILL.md (Red-Green-Refactor at public seams).
-- [DIAGNOSTIC]: Follow .agents/skills/engineering/diagnosing-bugs/SKILL.md (failing repro test or trace; product code locked).
-- [RESEARCH]: Follow .agents/skills/engineering/research/SKILL.md and .agents/skills/nightshift/explore/SKILL.md (AST skeletons via scripts/extract_skeleton.sh <file>#L<line>, compiler probes + immediate 'git restore .', output SUMMARY.md <= 5KB and 03-micro.md).
-- Logging & Notes: Follow .skills/universal-build-verify.md Section 4.1 ($PROGRESS_FILE <= 15 lines at top) and Section 4.2 (.worker.notes.md < 30 lines).
+Execute this atomic task as the unattended Background Worker. Read and follow .skills/universal-build-verify.md and .worker.notes.md:
+- [CODE]: Follow .agents/skills/engineering/implement/SKILL.md (skip /code-review per task), .agents/skills/engineering/tdd/SKILL.md, and .agents/skills/engineering/codebase-design/SKILL.md.
+- [DIAGNOSTIC]: Follow .agents/skills/engineering/diagnosing-bugs/SKILL.md (compile-clean failing repro test or trace; product code locked).
+- [RESEARCH]: Follow .agents/skills/engineering/research/SKILL.md and .agents/skills/nightshift/explore/SKILL.md Tier 2 (SUMMARY.md <= 5KB + 03-micro.md).
 
 TASK:
 $TASK_TITLE
 
 RULES:
-1. STEP LOGGING: Before every command or edit, print "[EXEC] Modifying <file>...", "[EXEC] Running command: <cmd>", or "[EXEC] Running test: <cmd>".
-2. SCOPE & ARCHETYPE GATES:
-   - Touch ONLY declared TARGET paths (${TASK_TARGET:-target files}); cohesive multi-interface slices are allowed when declared in TARGET.
-   - [CODE: FIX]: Tests/ strictly read-only. Never weaken existing test assertions.
+1. STEP LOGGING: Print "[EXEC] Modifying <file>...", "[EXEC] Running command: <cmd>", or "[EXEC] Running test: <cmd>" before every action.
+2. SCOPE & GATES:
+   - Touch ONLY declared TARGET paths (${TASK_TARGET:-target files}).
+   - [CODE: FIX]: Tests/ read-only; never weaken assertions.
    - [CODE: REFACTOR]: Tests/ and Mocks/ editable if in TARGET, subject to Assertion Non-Decrease (added assertions >= deleted).
-   - [DIAGNOSTIC]: Repro test must compile cleanly (0 syntax errors) and fail strictly on assertion. Product code (Sources/, src/) is strictly locked.
-   - [SCOPE_BLOCKED]: On downstream compiler errors outside TARGET, do NOT touch unlisted files; halt and emit "[SCOPE_BLOCKED] (Need Target: <File>#L<Line>)" (zero penalty).
+   - [DIAGNOSTIC]: Repro test must compile cleanly (0 syntax errors) and fail strictly on assertion; product code (Sources/, src/) locked.
+   - [SCOPE_BLOCKED]: On downstream compiler errors outside TARGET, halt without touching unlisted files and emit "[SCOPE_BLOCKED] (Need Target: <File>#L<Line>)".
    - Blast Radius (max deletions): L3 <= 40 lines; L2 <= 150 lines; L1 TARGET-bounded.
 3. FORBIDDEN SHORTCUTS & HOST SAFETY:
-   - ${TASK_FORBIDDEN:-"No thread sleeps/asyncAfter, no error swallowing (try?/empty catch), no optional-widening to dodge initializers, no weakened assertions."}
+   - ${TASK_FORBIDDEN:-"No thread sleeps/asyncAfter, no error swallowing (try?/empty catch), no optional-widening to dodge inits, no weakened assertions."}
    - Never run sudo, apt, yum, or global host commands.
 4. VERIFY, RETRIES & [DEAD_END]:
    - Run verification: ${TASK_VERIFY:-build and test}.
    - Proof of Negative: Declaring [DEAD_END] requires an isolated passing unit test or runtime log proving module health while global symptom persists.
-   - Max 3 attempts: if still failing after 3 fixes, restore clean state, log [BLOCKED] at the top of $PROGRESS_FILE, and exit.
+   - Max 3 attempts: if still failing after 3 fixes, restore clean tree, prepend [BLOCKED] trace to $PROGRESS_FILE, and exit.
 5. COMMIT & PROGRESS (ON 100% PASS):
    - Stage all changes (git status --porcelain must be 100% clean after commit).
-   - Prepend a <= 15-line trace to the VERY TOP of $PROGRESS_FILE.
+   - Prepend a <= 15-line trace to the VERY TOP of $PROGRESS_FILE (.skills/universal-build-verify.md Section 4.1).
    - Commit with a clean two-part Conventional Commit (feat|fix|refactor|test|docs|perf; NEVER put raw "TASK-XXX | LEVEL: ..." pipe strings in title):
 
    git commit -m "<type>(<scope>): <concise English action <= 60 chars> ($TASK_ID)" -m "<1-3 summary bullets>
@@ -661,7 +660,7 @@ RULES:
 Task: $TASK_ID (Level ${TASK_LEVEL:-1})
 Scope: ${TASK_TARGET:-<modified files>}
 Verification: ${TASK_VERIFY:-<test command>} (100% PASS)
-Attempts: <attempts_count> | Confidence: <1.0 or confidence score>"
+Attempts: <attempts_count> | Confidence: <HIGH|MED|LOW>"
 PROMPT_EOF
 )
 
