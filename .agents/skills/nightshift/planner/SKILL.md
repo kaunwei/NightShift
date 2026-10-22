@@ -40,21 +40,20 @@ Follow [`tdd`](../engineering/tdd/SKILL.md) and calibrate instruction density fr
 2. **Green Contract**: Public type/function signature and minimal implementation satisfying Red.
 3. **Verification Target**: Deterministic single-command test (`pytest tests/test_foo.py -k test_bar`).
 
-### Block 4: Tracer-Bullet Slicing (`to-tickets`) & Dynamic Gating
-Read and follow [`to-tickets`](../engineering/to-tickets/SKILL.md) to decompose work into end-to-end tracer-bullet vertical slices (prefactoring first, each slice independently demoable in `.preview/`, blocking edges mapped to `[AFTER: <id>]`, and wide refactors sequenced as Expand–Migrate–Contract):
-- **Fast-Path (`<= 2` files, leaf fix, known seam)**: Write `tasks.txt` directly.
-- **Gated Path (large feature / unknown seam)**:
-  1. Dispatch `[RESEARCH]` as Task 1.
-  2. From `.reports/<slug>/SUMMARY.md`, apply [`to-tickets`](../engineering/to-tickets/SKILL.md) (Steps 3–4) and present the **Matt Ticket Spec** to the human:
-     ```text
-     Pre-agreed Public Seam: <Interface_Path>
-     Domain Terms: <Glossary_Additions>
-     Proposed Tickets (end-to-end vertical slices, demoable in .preview/):
-       1. TASK-001 | LEVEL: 2 | TARGET: ... | ACTION: ... | VERIFY: ...
-       2. TASK-002 | LEVEL: 3 | [AFTER: TASK-001] | TARGET: ... | ACTION: ... | VERIFY: ...
-     Confirmation Prompt: "Does this seam, granularity, and blocking order match your expectations?"
-     ```
-  3. Upon human confirmation, publish the approved slices into `tasks.txt`.
+### Block 4: Tracer-Bullet Slicing (`to-tickets`) & Full-Horizon Dispatch
+Read and follow [`to-tickets`](../engineering/to-tickets/SKILL.md) to decompose work into end-to-end tracer-bullet vertical slices (prefactoring first, each slice independently demoable in `.preview/`, blocking edges mapped to `[AFTER: <id>]`, and wide refactors sequenced as Expand–Migrate–Contract).
+- **Full-Horizon Batching (Never Drip-Feed)**: Once seams are verified via [`explore`](../explore/SKILL.md) (zero unverified speculation), enqueue **100% of the discovered tasks at once** (e.g. all 5 or 10 tickets in dependency order). Never throttle to 2–3 tasks at a time—live queue editing (`scripts/reorder_queue.sh`), `touch PAUSE`, and Git rollback (`nightshift-session-base`) already protect execution.
+- **Fast-Path / Full-Auto Mode (known seams, aligned direction, or user requests auto-dispatch)**: Enqueue the entire batch directly into `tasks.txt` without stopping for confirmation (after `[RESEARCH]` completes, immediately expand `.reports/<slug>/SUMMARY.md` into the full implementation queue).
+- **First-Time Alignment (new/ambiguous feature)**: After `/explore` maps the topology, present the **complete N-ticket queue** once:
+  ```text
+  Pre-agreed Public Seam: <Interface_Path> | Domain Terms: <Glossary_Additions>
+  Proposed Full Queue (end-to-end vertical slices, demoable in .preview/):
+    1. TASK-001 | LEVEL: 2 | TARGET: ... | ACTION: ... | VERIFY: ...
+    ...
+    N. TASK-00N | LEVEL: 3 | [AFTER: TASK-...] | TARGET: ... | ACTION: ... | VERIFY: ...
+  Confirmation Prompt: "Approve this full queue (or reply 'auto' to dispatch all current and follow-up batches automatically)?"
+  ```
+  Upon confirmation, write all `N` tickets to `tasks.txt` in one shot.
 
 ### Block 5: Queue Dispatch & Task Archetypes
 Single-line tracer-bullet format in `tasks.txt`:
