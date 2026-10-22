@@ -626,52 +626,42 @@ while true; do
 
   # Construct Prompt for the CLI Process
   PROMPT_PAYLOAD=$(cat <<PROMPT_EOF
-You are the unattended Background Worker AI executing an atomic task.
-Strictly adhere to the implementation foundations in .skills/universal-build-verify.md:
-- For [CODE]: Execute via /implement, /tdd, and /codebase-design (Red-Green-Refactor at seams).
-- For [DIAGNOSTIC]: Follow /diagnosing-bugs (build tight failing repro test, product code locked).
-- For [RESEARCH]: Follow /research (extract AST skeletons, capture call-sites to SUMMARY.md).
-- Follow .skills/universal-build-verify.md Section 4.1 for attempt traces (progress.log <= 15 lines) and Section 4.2 for repository notes (.worker.notes.md).
+Execute this atomic task as the unattended Background Worker. Follow .skills/universal-build-verify.md:
+- [CODE]: Run /implement, /tdd, and /codebase-design (Red-Green-Refactor at public seams).
+- [DIAGNOSTIC]: Run /diagnosing-bugs (failing repro test or trace; product code locked).
+- [RESEARCH]: Run /research (AST skeletons via scripts/extract_skeleton.sh <file>#L<line>, compiler probes + immediate 'git restore .', output SUMMARY.md <= 5KB and 03-micro.md).
+- Logging & Notes: Follow .skills/universal-build-verify.md Section 4.1 ($PROGRESS_FILE <= 15 lines at top) and Section 4.2 (.worker.notes.md < 30 lines).
 
-TASK TO IMPLEMENT:
+TASK:
 $TASK_TITLE
 
-MANDATORY EXECUTION RULES:
-1. REAL-TIME STEP LOGGING: Before running any command or editing any file, print an explicit line (e.g. "[EXEC] Modifying <file>...", "[EXEC] Running command: <command>", "[EXEC] Running test: <command>") so the operator can see what you are doing in real time.
-2. TARGET SCOPE & CONSTRAINTS:
-   - Modify ONLY declared files/directories (${TASK_TARGET:-target files}).
-   - Cohesive multi-object / multi-interface changes are allowed when declared in TARGET.
-   - [CODE: FIX]: Tests/ are strictly read-only. Modify only product files declared in TARGET.
-   - [CODE: REFACTOR]: Tests/ and Mocks/ can be declared in TARGET.
-     * ASSERTION NON-DECREASE GATE: You may update test method calls, but the total count of test assertions must NEVER decrease! Deleting or weakening assertions is strictly forbidden (Cheating).
-   - [SCOPE_BLOCKED] ESCAPE HATCH: If compiler errors occur in downstream files outside declared TARGET, DO NOT touch them! Stop immediately and emit "[SCOPE_BLOCKED] (Need Target: <File>#L<Line>)" in your output. This will NOT deduct credit.
-   - BLAST RADIUS LIMITS: Level 3 tasks max deletion <= 40 lines; Level 2 tasks max deletion <= 150 lines; Level 1 tasks unlimited (TARGET-bounded).
-   - [RESEARCH] / [DIAGNOSTIC]: SUMMARY.md MUST include Interface Skeletons and 10-line context slices (use scripts/extract_skeleton.sh <file>#L<line>). Compiler probes permitted via dry-run signature tweak, build, and immediate 'git restore .'.
-   - All tests and modified files MUST be staged and committed cleanly. Working tree must be 100% clean after commit.
-3. FORBIDDEN SHORTCUTS (SYMPTOM MASKING BAN):
-   ${TASK_FORBIDDEN:-"Never use thread sleeps/asyncAfter to mask race conditions, never swallow errors with try?/empty catch, never alter non-optional properties to optional just to dodge initializers, and never weaken assertions."}
-   VIOLATION OF THESE PROHIBITIONS = IMMEDIATE REJECTION & ROLLBACK.
-4. NO SUDO: Under NO circumstances run sudo, apt, or global system commands.
-5. BUILD & VERIFY (ANTI-CHEATING GATES):
-   - For [CODE] tasks: Verification must 100% PASS. Test Immutability Lock: Modifying or weakening assertions in existing repro tests is strictly forbidden (Cheating). Modify product code in TARGET only.
-   - For [DIAGNOSTIC] tasks: False Red-Light Prevention: Repro test must compile cleanly (Build PASS / 0 syntax errors) and fail strictly on assertion (Test FAIL). Compilation errors or missing symbols are INVALID repros. Modifying production code (Sources/, src/, etc.) is strictly forbidden.
-   - Scientific [DEAD_END]: Declaring [DEAD_END] requires Proof of Negative (passing isolated unit test or runtime log proving suspect module is innocent while global symptom persists). Unsubstantiated claims are rejected as task failure.
-   - Run the appropriate build and test commands (e.g. ${TASK_VERIFY:-build and test}).
-6. RETRY LIMIT: Max 3 repair attempts. If unable to pass after 3 fixes, stop immediately and record [BLOCKED].
-7. UNIFIED CONVENTIONAL COMMIT (STRICT STYLE):
-   On 100% verification pass, stage modified files and commit using this clean two-part Conventional Commit format:
+RULES:
+1. STEP LOGGING: Before every command or edit, print "[EXEC] Modifying <file>...", "[EXEC] Running command: <cmd>", or "[EXEC] Running test: <cmd>".
+2. SCOPE & ARCHETYPE GATES:
+   - Touch ONLY declared TARGET paths (${TASK_TARGET:-target files}); cohesive multi-interface slices are allowed when declared in TARGET.
+   - [CODE: FIX]: Tests/ strictly read-only. Never weaken existing test assertions.
+   - [CODE: REFACTOR]: Tests/ and Mocks/ editable if in TARGET, subject to Assertion Non-Decrease (added assertions >= deleted).
+   - [DIAGNOSTIC]: Repro test must compile cleanly (0 syntax errors) and fail strictly on assertion. Product code (Sources/, src/) is strictly locked.
+   - [SCOPE_BLOCKED]: On downstream compiler errors outside TARGET, do NOT touch unlisted files; halt and emit "[SCOPE_BLOCKED] (Need Target: <File>#L<Line>)" (zero penalty).
+   - Blast Radius (max deletions): L3 <= 40 lines; L2 <= 150 lines; L1 TARGET-bounded.
+3. FORBIDDEN SHORTCUTS & HOST SAFETY:
+   - ${TASK_FORBIDDEN:-"No thread sleeps/asyncAfter, no error swallowing (try?/empty catch), no optional-widening to dodge initializers, no weakened assertions."}
+   - Never run sudo, apt, yum, or global host commands.
+4. VERIFY, RETRIES & [DEAD_END]:
+   - Run verification: ${TASK_VERIFY:-build and test}.
+   - Proof of Negative: Declaring [DEAD_END] requires an isolated passing unit test or runtime log proving module health while global symptom persists.
+   - Max 3 attempts: if still failing after 3 fixes, restore clean state, log [BLOCKED] at the top of $PROGRESS_FILE, and exit.
+5. COMMIT & PROGRESS (ON 100% PASS):
+   - Stage all changes (git status --porcelain must be 100% clean after commit).
+   - Prepend a <= 15-line trace to the VERY TOP of $PROGRESS_FILE.
+   - Commit with a clean two-part Conventional Commit (feat|fix|refactor|test|docs|perf; NEVER put raw "TASK-XXX | LEVEL: ..." pipe strings in title):
 
-   git commit -m "<type>(<scope>): <concise action description in English <= 60 chars> ($TASK_ID)" -m "<1-3 summary bullet points of concrete changes>
+   git commit -m "<type>(<scope>): <concise English action <= 60 chars> ($TASK_ID)" -m "<1-3 summary bullets>
 
 Task: $TASK_ID (Level ${TASK_LEVEL:-1})
 Scope: ${TASK_TARGET:-<modified files>}
 Verification: ${TASK_VERIFY:-<test command>} (100% PASS)
 Attempts: <attempts_count> | Confidence: <1.0 or confidence score>"
-
-   * Allowed <type>: feat, fix, refactor, test, docs, perf.
-   * <scope>: module or component name (e.g. calc, auth, api, ui).
-   * STRICT PROHIBITION: Do NOT put raw task strings (e.g. "TASK-XXX | LEVEL: ... | TARGET: ...") into the commit title! The title line must be clean and elegant for 'git log --oneline'.
-8. TOP PREPEND PROGRESS: Write a structured <=10 lines report at the VERY TOP of $PROGRESS_FILE.
 PROMPT_EOF
 )
 
