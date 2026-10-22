@@ -7,7 +7,7 @@ description: "Master orchestrator for the 24h unattended AI workflow. Drives req
 
 Master orchestrator for Terminal A. Drives requirements through Matt Pocock's engineering loop, dispatches atomic tracer-bullet tickets to background workers (`worker.sh`), and keeps Terminal A context clean:
 
-`Domain (/domain-modeling) -> Seam (/codebase-design, /explore) -> TDD Blueprint (/tdd) -> Gating -> Dispatch (tasks.txt) -> Acceptance & Score`
+`Domain (/domain-modeling) -> Seam (/codebase-design, /explore) -> TDD Blueprint (/tdd) -> Tracer-Bullet Slicing (to-tickets) -> Dispatch (tasks.txt) -> Live Preview (.preview/) & Acceptance`
 
 ---
 
@@ -16,18 +16,18 @@ Master orchestrator for Terminal A. Drives requirements through Matt Pocock's en
 Execute this closed-loop progression by default; invoke individual blocks for surgical interventions.
 
 ### Block 1: Domain & Seam Modeling
-- **Domain Modeling (`/domain-modeling`)**: Record ubiquitous language in `GLOSSARY.md` and architectural decisions in `docs/adr/`.
-- **Deep Seam Design (`/codebase-design`)**: Design narrow public interfaces hiding deep implementations. Anchor tests strictly to public seams; never test ephemeral private helpers.
+- **Domain Modeling**: Follow [`domain-modeling`](../engineering/domain-modeling/SKILL.md) to record ubiquitous language in `GLOSSARY.md` and decisions in `docs/adr/`.
+- **Deep Seam Design**: Follow [`codebase-design`](../engineering/codebase-design/SKILL.md) (and [`grilling`](../productivity/grilling/SKILL.md) when requirements are ambiguous) to design narrow public interfaces hiding deep implementations.
 
 ### Block 2: Mandatory Seam Exploration (`/explore`)
-Never guess file paths or caller topology:
+Follow [`explore`](../explore/SKILL.md) — never guess file paths or caller topology:
 - **Known Seams (`<= 2` files, leaf fix, explicit user target)**: Fast-path direct dispatch.
-- **Unknown Seams (new features, wide refactors, unfamiliar callers)**: Dispatch Tier 2 `[RESEARCH]` via `/explore` to produce `.reports/<slug>/SUMMARY.md`.
+- **Unknown Seams (new features, wide refactors, unfamiliar callers)**: Dispatch Tier 2 `[RESEARCH]` via [`explore`](../explore/SKILL.md) to produce `.reports/<slug>/SUMMARY.md`.
 - **Distant Module Revisit**: Run Tier 1 instant probe (`git grep -n`, `git log -n 1 -- <path>`) before assuming state.
-- **Discrepancy Invalidation**: If disk contradicts memory, confidence drops to zero -> run `/explore` or trigger Clean Pivot.
+- **Discrepancy Invalidation**: If disk contradicts memory, confidence drops to zero -> run [`explore`](../explore/SKILL.md) or trigger Clean Pivot.
 
 ### Block 3: Granularity Ladder & TDD Blueprints
-Calibrate instruction density from module ratings in `docs/agents/granularity-profile.json`:
+Follow [`tdd`](../engineering/tdd/SKILL.md) and calibrate instruction density from module ratings in `docs/agents/granularity-profile.json`:
 
 | Level | Mode & Rating | Instruction Density & Blueprint | Max Deletions |
 | :---: | :--- | :--- | :--- |
@@ -40,20 +40,21 @@ Calibrate instruction density from module ratings in `docs/agents/granularity-pr
 2. **Green Contract**: Public type/function signature and minimal implementation satisfying Red.
 3. **Verification Target**: Deterministic single-command test (`pytest tests/test_foo.py -k test_bar`).
 
-### Block 4: Dynamic Gating & Ticket Spec
+### Block 4: Tracer-Bullet Slicing (`to-tickets`) & Dynamic Gating
+Read and follow [`to-tickets`](../engineering/to-tickets/SKILL.md) to decompose work into end-to-end tracer-bullet vertical slices (prefactoring first, each slice independently demoable in `.preview/`, blocking edges mapped to `[AFTER: <id>]`, and wide refactors sequenced as Expand–Migrate–Contract):
 - **Fast-Path (`<= 2` files, leaf fix, known seam)**: Write `tasks.txt` directly.
 - **Gated Path (large feature / unknown seam)**:
   1. Dispatch `[RESEARCH]` as Task 1.
-  2. From `.reports/<slug>/SUMMARY.md`, present the **Matt Ticket Spec** to the human:
+  2. From `.reports/<slug>/SUMMARY.md`, apply [`to-tickets`](../engineering/to-tickets/SKILL.md) (Steps 3–4) and present the **Matt Ticket Spec** to the human:
      ```text
      Pre-agreed Public Seam: <Interface_Path>
      Domain Terms: <Glossary_Additions>
-     Proposed Tickets:
+     Proposed Tickets (end-to-end vertical slices, demoable in .preview/):
        1. TASK-001 | LEVEL: 2 | TARGET: ... | ACTION: ... | VERIFY: ...
-       2. TASK-002 | LEVEL: 3 | TARGET: ... | ACTION: ... | VERIFY: ...
-     Confirmation Prompt: "Does this seam and TDD blueprint match your expectations?"
+       2. TASK-002 | LEVEL: 3 | [AFTER: TASK-001] | TARGET: ... | ACTION: ... | VERIFY: ...
+     Confirmation Prompt: "Does this seam, granularity, and blocking order match your expectations?"
      ```
-  3. Enqueue into `tasks.txt` upon human confirmation.
+  3. Upon human confirmation, publish the approved slices into `tasks.txt`.
 
 ### Block 5: Queue Dispatch & Task Archetypes
 Single-line tracer-bullet format in `tasks.txt`:
@@ -84,7 +85,7 @@ TASK-XXX | LEVEL: 1-3 | [AFTER: <id>] | TARGET: <paths> | ACTION: <logic> | VERI
    `[MECHANICAL_AUDIT] Status: PASS | Verify_Exit: 0 | Tests_Run: >=1 | Whitelist: PASS | Tree: CLEAN`
 3. **Acceptance Routing**:
    - **Fast-Track (Green Light, `<= 5s`)**: Mechanical Audit `PASS` + `Attempts: 1 | Confidence: HIGH` -> `git merge --ff-only feature/worker-frontier`.
-   - **Deep Audit (Yellow Light)**: Mandatory on audit fail, `Attempts > 1`, `Confidence < 1.0`, `[DEAD_END]`, or critical seam. Inspect via `git show --stat <commit>` or `/code-review`.
+   - **Deep Audit (Yellow Light)**: Mandatory on audit fail, `Attempts > 1`, `Confidence < 1.0`, `[DEAD_END]`, or critical seam. Inspect via `git show --stat <commit>` or [`code-review`](../engineering/code-review/SKILL.md).
      * **Proof of Negative for `[DEAD_END]`**: Require tangible proof (isolated passing unit test or runtime log proving module health while global symptom persists). Speculative exclusion = task failure.
 4. **Automated Scoring Rubric** (update `docs/agents/granularity-profile.json`):
    | Score | Criteria | Granularity Action |

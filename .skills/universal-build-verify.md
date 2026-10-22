@@ -20,21 +20,19 @@ Mandatory execution protocol for Background Worker (Terminal B) processing `task
 - **Forbidden Shortcuts**: Honor `FORBIDDEN_SHORTCUTS:`. No thread sleeps (`asyncAfter`, `sleep`), no error swallowing (`try?`, empty catch), no optional-widening to dodge initializers, no dummy returns.
 - **Blast Radius Limits**: Max deletions by Level: L3 `<= 40` lines, L2 `<= 150` lines, L1 `TARGET:`-bounded.
 
-## 2. Archetypes & Execution Loops (Matt Pocock Skills Binding)
+## 2. Archetypes & Execution Loops (Skill Pointers)
 
 - **`[CODE: FIX]` / `[CODE: REFACTOR]`**:
-  - **`/implement`**: Implement requirements iteratively; run typechecking and target tests frequently, and full suite at completion.
-  - **`/tdd`**: Strict Red $\rightarrow$ Green $\rightarrow$ Refactor at pre-agreed seams. Write minimal code to pass the failing test.
-  - **`/codebase-design`**: Keep public interfaces narrow; never test or leak ephemeral private helpers.
+  - Follow [`implement`](../.agents/skills/engineering/implement/SKILL.md), [`tdd`](../.agents/skills/engineering/tdd/SKILL.md) (Red $\rightarrow$ Green $\rightarrow$ Refactor at pre-agreed seams), and [`codebase-design`](../.agents/skills/engineering/codebase-design/SKILL.md) (narrow public interfaces; never test ephemeral private helpers).
   - Refactors enforce **Assertion Non-Decrease** and structural closure in `VERIFY:` (e.g. `<cmd> && ! grep -rn "<Deprecated>" Sources/`).
-- **`[CODE: EXPAND/MIGRATE/CONTRACT]`**: Phased migration; every intermediate commit must leave builds and tests 100% green.
+- **`[CODE: EXPAND/MIGRATE/CONTRACT]`**: Phased migration per [`to-tickets`](../.agents/skills/engineering/to-tickets/SKILL.md); every intermediate commit must leave builds and tests 100% green.
 - **`[RESEARCH]` / `[BENCHMARK]`**:
-  - **`/research`**: Extract AST skeletons via `scripts/extract_skeleton.sh <path>#L<line>`.
+  - Follow [`research`](../.agents/skills/engineering/research/SKILL.md) and [`explore`](../.agents/skills/nightshift/explore/SKILL.md). Extract AST skeletons via `scripts/extract_skeleton.sh <path>#L<line>`.
   - *Compiler Probe*: Temporarily alter signatures, run `build` to capture 100% of call-sites into `SUMMARY.md`, and immediately run `git restore .`.
   - *Progressive Disclosure*: `SUMMARY.md` is an executive digest (`<= 5 KB`: topology, coupling bottlenecks, Expand-Migrate-Contract matrix, validated pointers). Full skeletons and 10-line slices belong in `03-micro.md`.
   - *Dedicated Audit*: Audited on Artifact Integrity (non-empty report), Clean Tree (0 uncommitted product edits), and Pointer Validity (`<File>#L<Line>` verified on disk). `VERIFY:` can be `REPORT_ONLY`.
 - **`[DIAGNOSTIC]`**:
-  - **`/diagnosing-bugs`**: Build a tight pass/fail feedback loop that goes red strictly on this bug. Isolate root cause with minimal repro test or trace in `.reports/<issue-slug>/`.
+  - Follow [`diagnosing-bugs`](../.agents/skills/engineering/diagnosing-bugs/SKILL.md) to build a tight pass/fail feedback loop that goes red strictly on this bug. Isolate root cause with minimal repro test or trace in `.reports/<issue-slug>/`.
   - *Valid Red-Light Rule*: Repro test must compile cleanly (0 syntax errors) and fail strictly on assertion.
   - *Product Code Lock*: Production code (`Sources/`, `src/`) is strictly read-only; touch only tests and `.reports/`.
 
