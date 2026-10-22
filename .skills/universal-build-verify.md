@@ -21,17 +21,28 @@ Mandatory execution protocol for Background Worker (Terminal B) processing `task
 - **Forbidden Shortcuts**: Strictly honor `FORBIDDEN_SHORTCUTS:`. No thread sleeps (`asyncAfter`, `sleep`), no error swallowing (`try?`, empty catch), no converting non-optional to optional, no hardcoded dummy returns.
 - **Blast Radius Limits**: Deletions capped by Level: L3 <= 40 lines, L2 <= 150 lines, L1 unlimited (bounded by `TARGET:`).
 
-## 2. Archetypes & Execution Loops
+## 2. Archetypes & Execution Loops (Matt Pocock Skills Binding)
 
-- **`[CODE: FIX]` / `[CODE: REFACTOR]`**: Follow `/tdd` (Red -> Green -> Refactor). Refactors enforce Assertion Non-Decrease and structural verification in `VERIFY:` (e.g. `<cmd> && ! grep -rn "<Deprecated>" Sources/`).
-- **`[CODE: EXPAND/MIGRATE/CONTRACT]`**: Phased migration. Every intermediate step must leave builds and tests 100% green.
-- **`[RESEARCH]` / `[BENCHMARK]`**: Capture metrics/facts to `.reports/<issue-slug>/` or `docs/research/`.
+Background Worker automatically binds Matt Pocock's implementation skills based on the task archetype:
+
+- **`[CODE: FIX]` / `[CODE: REFACTOR]`**:
+  - **`/implement`**: Implement ticket requirements iteratively. Run typechecking regularly, test individual target files frequently, and verify full test suite once at completion.
+  - **`/tdd`**: Execute strict Red $\rightarrow$ Green $\rightarrow$ Refactor at pre-agreed seams. Red before green; write only enough code to pass the failing test.
+  - **`/codebase-design`**: Target deep module boundaries. Keep public interface narrow; never test or leak ephemeral private helpers.
+  - Refactors enforce **Assertion Non-Decrease** and structural verification in `VERIFY:` (e.g. `<cmd> && ! grep -rn "<Deprecated>" Sources/`).
+- **`[CODE: EXPAND/MIGRATE/CONTRACT]`**: Phased migration. Every intermediate commit must leave builds and tests 100% green.
+- **`[RESEARCH]` / `[BENCHMARK]`**:
+  - **`/research`**: Investigate questions against primary source code and specs. Extract AST skeletons via `scripts/extract_skeleton.sh <path>#L<line>`.
   - *Compiler Probe*: Temporarily alter signatures and run `build` to capture 100% of call-sites into `SUMMARY.md`. Mandatory immediate `git restore .`.
   - *Progressive Disclosure*: `SUMMARY.md` is strictly an executive digest (<= 5 KB: topology, coupling bottlenecks, Expand-Migrate-Contract matrix, validated pointers). Full skeletons and inlined 10-line slices belong in `03-micro.md`.
   - *Dedicated Audit*: Evaluated on Artifact Integrity (valid non-empty report), Clean Tree (zero uncommitted product code), and Pointer Validity (`<File>#L<Line>` verified on disk). `VERIFY:` can be `REPORT_ONLY`.
-- **`[DIAGNOSTIC]`**: Follow `/diagnosing-bugs`. Isolate root cause with minimal repro test or exact trace in `.reports/<issue-slug>/`. Reject ungrounded speculation.
+- **`[DIAGNOSTIC]`**:
+  - **`/diagnosing-bugs`**: Build a tight pass/fail feedback loop that goes red strictly on this bug. Isolate root cause with minimal repro test or exact trace in `.reports/<issue-slug>/`. Reject ungrounded speculation.
   - *Valid Red-Light Rule*: Repro test must compile cleanly (0 errors) and fail strictly on assertion. Syntax errors or missing symbols = Invalid Repro.
   - *Product Code Lock*: Modifying production code (`Sources/`, `src/`) during diagnostics is strictly forbidden. Touch only tests and `.reports/`.
+- **Worker Operational Skills**:
+  - **`/record-attempt-trace`**: Record transparent attempt traces, duration, and confidence scores into `progress.log`.
+  - **`/manage-worker-notes`**: Read compiler quirks and environment flags from `.worker.notes.md`.
 
 ## 3. Honest Treaty & Retries
 

@@ -627,7 +627,11 @@ while true; do
   # Construct Prompt for the CLI Process
   PROMPT_PAYLOAD=$(cat <<PROMPT_EOF
 You are the unattended Background Worker AI executing an atomic task.
-Read and strictly follow the mandatory SOP in .skills/universal-build-verify.md and guidelines in AGENTS.md.
+Strictly adhere to the implementation foundations in .skills/universal-build-verify.md:
+- For [CODE]: Execute via /implement, /tdd, and /codebase-design (Red-Green-Refactor at seams).
+- For [DIAGNOSTIC]: Follow /diagnosing-bugs (build tight failing repro test, product code locked).
+- For [RESEARCH]: Follow /research (extract AST skeletons, capture call-sites to SUMMARY.md).
+- Follow /record-attempt-trace and /manage-worker-notes for execution traces.
 
 TASK TO IMPLEMENT:
 $TASK_TITLE

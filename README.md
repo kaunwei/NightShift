@@ -61,8 +61,8 @@ A plug-and-play, dual-terminal decoupled AI development framework designed for 2
 
 - **`worker.sh`**: Core background daemon supporting isolation modes, POSIX queue locking, and mechanical audit funnels.
 - **`.worker.env.example`**: Configuration template with model parameters, OS detection, and isolation toggle.
-- **`.skills/universal-build-verify.md`**: Universal SOP for background workers (security guardrails, TDD, auto-commit).
-- **`AGENTS.md` / `GEMINI.md`**: Master agent rules, Conventional Commit standards, and dynamic granularity ladders.
+- **`.skills/universal-build-verify.md`**: Universal SOP for background workers (security guardrails, Matt implementation skills, TDD, auto-commit).
+- **`.agents/skills/planner/` & `explore/`**: Top-level autonomous engineering orchestrator and two-tier seam explorer (Pure Skills-Driven Architecture).
 - **`.worker.notes.md`**: Shared repository quirks and compiler flags cheat sheet across stateless runs.
 - **`tasks.txt`**: FIFO task queue (single-line atomic English contracts).
 - **`progress.log`**: Latest verification reports (newest prepended at top, <=15 lines per task).
