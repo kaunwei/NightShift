@@ -13,11 +13,10 @@ description: "Orchestrate the 24h unattended workflow: domain modeling, /explore
 - **Domain**: Follow [`domain-modeling`](../engineering/domain-modeling/SKILL.md) to maintain `GLOSSARY.md` and `docs/adr/`.
 - **Deep Seams**: Follow [`codebase-design`](../engineering/codebase-design/SKILL.md) (and [`grilling`](../productivity/grilling/SKILL.md) when requirements are ambiguous) to design narrow public interfaces hiding deep implementations. Anchor tests strictly to public seams; never test private helpers.
 
-### Block 2: Seam Exploration (`/explore`)
-Follow [`explore`](../explore/SKILL.md) to verify paths and caller topology before planning (never call `read_file` on product/test source code in Terminal A):
-- **Default (Tier 2 `[RESEARCH]`)**: Dispatch a `[RESEARCH]` ticket to `tasks.txt` + Queue Sentinel to produce `.reports/<slug>/SUMMARY.md` (stamped with `<!-- REPORT_META: Task=<id> | Commit=<sha> -->`).
-- **Known Leaf Target (`<= 2` files, explicit `<path>#L<line>`)**: Verify via Tier 1 shell probes (`git grep -n`, `git log -n 1 --oneline`, `scripts/extract_skeleton.sh`) and fast-path dispatch.
-- **Stale Report & Discrepancy Invalidation**: Read only `.reports/<current-slug>/SUMMARY.md` matching `HEAD` (never `.reports/.archive/`; `worker.sh` auto-archives reports after `[CODE]` commits). If disk contradicts report/memory, re-run [`explore`](../explore/SKILL.md) or trigger **Clean Pivot**.
+### Block 2: Seam Resolution & Exploration (`/explore`)
+Resolve target paths and signatures without inspecting source files in Terminal A:
+- **Cache Hit (Active Report or Memory)**: If `.reports/<slug>/SUMMARY.md`, `.worker.notes.md`, or `progress.log` already covers the target seams (and `worker.sh` has not archived the report due to overlapping `[CODE]` edits), plan and dispatch `[CODE]` tickets directly without re-running `[RESEARCH]`.
+- **Cache Miss or `/explore` Invoked**: Follow [`explore`](../explore/SKILL.md) to enqueue a `[RESEARCH]` ticket to `tasks.txt` + Queue Sentinel and read the resulting `.reports/<slug>/SUMMARY.md`. If disk contradicts report/memory during execution, re-run [`explore`](../explore/SKILL.md) or trigger **Clean Pivot**.
 
 ### Block 3: Granularity Ladder & TDD Blueprints
 Follow [`tdd`](../engineering/tdd/SKILL.md) and size instruction density from `docs/agents/granularity-profile.json`:

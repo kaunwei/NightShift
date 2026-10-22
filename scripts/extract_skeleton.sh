@@ -7,6 +7,12 @@
 
 set -uo pipefail
 
+if [ "${NIGHTSHIFT_WORKER:-0}" != "1" ]; then
+  echo "[GUARD] scripts/extract_skeleton.sh is restricted to the Background Worker (Terminal B)."
+  echo "[GUARD] In Terminal A, read active .reports/<slug>/SUMMARY.md or .worker.notes.md; if missing, enqueue a [RESEARCH] task to tasks.txt."
+  exit 1
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TARGET="${1:-}"
 LINE="${2:-}"

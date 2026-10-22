@@ -138,6 +138,7 @@ export PAGER=cat
 export NO_COLOR=1
 export DEBIAN_FRONTEND=noninteractive
 export TERM=dumb
+export NIGHTSHIFT_WORKER=1
 
 # ------------------------------------------------------------------------------
 # Workspace Isolation & Preview Staging Helpers
@@ -186,6 +187,39 @@ archive_active_reports() {
     base=$(basename "$entry")
     [ "$base" = ".archive" ] && continue
     mv "$entry" "$SCRIPT_DIR/.reports/.archive/${ts}-${base}" 2>/dev/null || true
+  done
+}
+
+archive_overlapping_reports() {
+  local base_sha="${1:-HEAD~1}"
+  mkdir -p "$SCRIPT_DIR/.reports/.archive"
+  local ts changed_files
+  ts=$(date '+%Y%m%d-%H%M%S')
+  changed_files=$(git -C "$WORK_DIR" diff --name-only "$base_sha" HEAD 2>/dev/null || true)
+  [ -z "$changed_files" ] && return 0
+
+  for entry in "$SCRIPT_DIR/.reports"/*; do
+    [ ! -e "$entry" ] && continue
+    local base
+    base=$(basename "$entry")
+    [ "$base" = ".archive" ] && continue
+    local summary_file="$entry/SUMMARY.md"
+    [ -f "$entry" ] && summary_file="$entry"
+    [ ! -f "$summary_file" ] && continue
+
+    local overlap=0
+    while IFS= read -r cf; do
+      [ -z "$cf" ] && continue
+      if grep -Fq "$cf" "$summary_file" 2>/dev/null; then
+        overlap=1
+        break
+      fi
+    done <<< "$changed_files"
+
+    if [ $overlap -eq 1 ]; then
+      echo "[WORKER] 📦 Archiving stale report '$base' (referenced file modified in commit)..."
+      mv "$entry" "$SCRIPT_DIR/.reports/.archive/${ts}-${base}" 2>/dev/null || true
+    fi
   done
 }
 
@@ -1081,7 +1115,7 @@ BLOCK_EOF
 
       # Success
       if ! echo "$TASK_TITLE $TASK_CONSTRAINTS" | grep -iqE "\[(RESEARCH|DIAGNOSTIC)\]"; then
-        archive_active_reports
+        archive_overlapping_reports "$TASK_BASE_SHA"
       fi
       if [ "$WORKER_ISOLATION" = "1" ] || [ "$WORKER_ISOLATION" = "true" ]; then
         publish_preview_artifact "$TASK_ID" "$TASK_TITLE"
