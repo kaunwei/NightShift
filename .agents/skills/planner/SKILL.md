@@ -133,16 +133,27 @@ Planner MUST NOT approve multi-interface targets or `[REFACTOR]` tickets without
 - **Track A (Atomic Vertical-Slice)**: Small/Medium (<= 5 files & >= 3 stars). Single `[CODE: REFACTOR]` ticket with interface, implementation, and tests in `TARGET:`. Enforces Assertion Non-Decrease and structural verification in `VERIFY:`.
 - **Track B (Expand-Migrate-Contract)**: Large-Scale (> 5 files or contains 1-star module). 3 green-to-green phases: `[CODE: EXPAND]`, `[CODE: MIGRATE]`, `[CODE: CONTRACT]`.
 
-#### Safety & Control
-- **Hot Preemption**: Inject urgent diagnostic at line 1 via `scripts/reorder_queue.sh`.
+#### Safety, Preemption & Worker Feedback
+- **Planner Re-Schedule & Explore Preemption (插隊)**: When urgent diagnostics arise or `/explore` needs immediate caller mapping while the worker daemon is running, inject tickets directly to line 1 of `tasks.txt` via `scripts/reorder_queue.sh` (POSIX directory atomic lock). The background worker picks it up as its next task without stopping.
+- **Worker Feedback Handling**: Listen for worker escalation markers in `progress.log`:
+  - `[NEED_GUIDANCE]`: Worker hit an architectural contradiction $\rightarrow$ resolve via `/handle-worker-guidance` and re-inject with `GUIDANCE: <clarification>`.
+  - `[NEED_DECOMPOSITION]`: Worker rejected an oversized task $\rightarrow$ split into Level 2/3 atomic tickets and re-queue.
+  - `.worker.notes.md`: Worker autonomously maintains and consults repository quirks and compiler flags across stateless runs (`/manage-worker-notes`).
 - **Clean Pivot Privilege**: If fixing side-effects requires >2 patch tickets or triggers `[SCOPE_BLOCKED]`, rollback (`git reset --hard nightshift-session-base`) and re-issue a unified vertical slice. Never stack patch-on-patch.
 
 ---
 
 ### Block 6: Double-Funnel Acceptance & Auto-Scoring
 
-When the queue completes, Sentinel Subagent (`scripts/watch_worker.sh`) wakes Planner:
+#### Sentinel Subagent Waiter (Zero-Token Wakeup)
+After enqueueing tasks into `tasks.txt`, Planner yields control and deploys a lightweight Sentinel Subagent (via `/watch-worker-queue`) using `scripts/watch_worker.sh`:
+```bash
+# Sentinel runs in background without polling chat tokens:
+bash scripts/watch_worker.sh 3600
+```
+When `watch_worker.sh` exits (queue empty or failure), Sentinel immediately wakes Planner with the top lines of `progress.log`.
 
+#### Acceptance Protocol
 1. **Double-Funnel Mechanical Audit**:
    - Inspect line 1 of `progress.log`:
      `[MECHANICAL_AUDIT] Status: PASS | Verify_Exit: 0 | Tests_Run: >=1 | Whitelist: PASS | Tree: CLEAN`

@@ -36,7 +36,7 @@ Used for fast verification of known or leaf targets without token bloat:
 ### Tier 2: Deep Background Probe (Terminal B, Ephemeral Dossier)
 Triggered when caller topology is unknown, cross-module boundaries are affected, or compiler probes are required:
 1. **Dispatch `[RESEARCH]` Ticket**:
-   Planner writes a solitary research ticket into `tasks.txt`:
+   Planner writes a solitary research ticket into `tasks.txt`. If the worker daemon is currently processing other tasks, inject the ticket at line 1 via `scripts/reorder_queue.sh` (**Hot Preemption / 插隊**) so Worker executes it next:
    ```text
    TASK-001 | LEVEL: 1 | TARGET: .reports/<issue-slug>/SUMMARY.md | ACTION: Map callers and extract interface skeletons for <component> | VERIFY: REPORT_ONLY
    ```
