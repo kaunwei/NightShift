@@ -179,11 +179,13 @@ REQUIRED_IGNORES=(
   ".worker*.log"
   ".worker*.pid"
   "PAUSE"
+  ".scratch/"
+  ".reports"
+  "tasks.txt.lock/"
   ".worker-tree/"
   ".preview/"
-  ".reports/"
-  "tasks.txt.lock/"
   "tasks.done"
+  "tasks.done.*"
 )
 
 HEADER="# NightShift 24h Unattended Worker Artifacts"
