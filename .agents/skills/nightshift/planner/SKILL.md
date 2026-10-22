@@ -78,6 +78,7 @@ TASK-XXX | LEVEL: 1-3 | [AFTER: <id>] | TARGET: <paths> | ACTION: <logic> | VERI
 - `[CODE: FIX]`: Product files only. `Tests/` read-only.
 - `[CODE: REFACTOR]`: Interface refactor. `Tests/` allowed in `TARGET:`. Enforces **Assertion Non-Decrease Gate** and structural closure (`<test_cmd> && ! grep -rn "<Deprecated>" Sources/`).
 - `[CODE: EXPAND]` / `[CODE: MIGRATE]` / `[CODE: CONTRACT]`: Phased 3-step migration for >5 files.
+- `[DIAGNOSTIC]`: Isolate root cause with failing repro test in `Tests/` or trace in `.reports/<slug>/`. Product code strictly locked.
 - `[RESEARCH]`: Read-only seam discovery. Produces `.reports/<slug>/SUMMARY.md`.
 
 ### Block 6: Double-Funnel Acceptance & Auto-Scoring
@@ -171,6 +172,10 @@ Planner autonomously updates `.worker.env` during Terminal A conversations witho
 ---
 
 ## 7. Hard Guardrails & Prohibited Commands
+
+### Duty Firewall & Language (Terminal A)
+- **Duty Firewall**: Never modify product/test files directly in Terminal A (exceptions: Level 3 Sovereign Intervention after Worker fails 3 retries, repeated Worker diagnostic hallucination/evasion, or explicit user mandate).
+- **Artifact Language**: All `tasks.txt` entries, logs, and commits MUST be strictly in English.
 
 ### Context Explosion Guard (Terminal A)
 To prevent blowing Terminal A's context window with unbounded output:

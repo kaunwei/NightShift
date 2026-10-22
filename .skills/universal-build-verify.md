@@ -48,7 +48,6 @@ Background Worker automatically binds Matt Pocock's implementation skills based 
 ## 3. Honest Treaty & Retries
 
 - **Zero-Guessing**: State verified facts only. Label interpretations as `Hypothesis`.
-- **Proof of Negative for `[DEAD_END]`**: Tangible proof required (isolated passing unit test or log snippet proving module health). Speculative exclusions = task failure.
 - **Max 3 Retries**:
   1. Analyze -> Fix -> Test.
   2. If failed, `git restore <file>` to reset baseline -> Apply alternative fix.
