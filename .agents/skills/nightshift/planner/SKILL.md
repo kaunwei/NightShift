@@ -67,7 +67,7 @@ TASK-XXX | LEVEL: 1-3 | [AFTER: <id>] | TARGET: <paths> | ACTION: <logic> | VERI
 - `[CODE: EXPAND]` / `[CODE: MIGRATE]` / `[CODE: CONTRACT]`: Phased 3-step migration for `> 5` files.
 - `[DIAGNOSTIC]`: Isolate root cause with failing repro test in `Tests/` or trace in `.reports/<slug>/`. Product code strictly locked.
 - `[RESEARCH]`: Read-only seam discovery producing `.reports/<slug>/SUMMARY.md`.
-- **10-Task Architecture Deepening Cadence**: Every 10 dispatched tasks (i.e. `TASK-010`, `TASK-020`, `TASK-030`, ... or every 10th ticket batch), automatically read and execute [`improve-codebase-architecture`](../engineering/improve-codebase-architecture/SKILL.md) over recent commit hotspots (`git log --oneline -n 20`) to surface module-deepening candidates as a visual HTML report before dispatching the next batch.
+- **10-Task Review & Refactor Cadence**: Every 10 tasks (`TASK-010`, `TASK-020`, `TASK-030`, ...), Planner automatically runs [`code-review`](../engineering/code-review/SKILL.md) (over the last 10 tasks) and [`improve-codebase-architecture`](../engineering/improve-codebase-architecture/SKILL.md) (over `git log --oneline -n 20` hotspots), and automatically appends/injects a `[CODE: REFACTOR]` ticket into `tasks.txt` to resolve code smells and deepen shallow modules.
 
 ### Block 6: Double-Funnel Acceptance & Auto-Scoring
 1. **Sentinel Subagent Waiter (Zero-Token Wakeup)**:
@@ -85,8 +85,8 @@ TASK-XXX | LEVEL: 1-3 | [AFTER: <id>] | TARGET: <paths> | ACTION: <logic> | VERI
 2. **Mechanical Audit**: Check line 1 of `progress.log`:
    `[MECHANICAL_AUDIT] Status: PASS | Verify_Exit: 0 | Tests_Run: >=1 | Whitelist: PASS | Tree: CLEAN`
 3. **Acceptance Routing**:
-   - **Fast-Track (Green Light, `<= 5s`)**: Mechanical Audit `PASS` + `Attempts: 1 | Confidence: HIGH` -> `git merge --ff-only feature/worker-frontier`.
-   - **Deep Audit (Yellow Light)**: Mandatory on audit fail, `Attempts > 1`, `Confidence < 1.0`, `[DEAD_END]`, or critical seam. Inspect via `git show --stat <commit>` or [`code-review`](../engineering/code-review/SKILL.md).
+   - **Fast-Track (Green Light, `<= 5s`, 0 Review Tokens)**: Mechanical Audit `PASS` + `Attempts: 1 | Confidence: HIGH` -> `git merge --ff-only feature/worker-frontier`.
+   - **Deep Audit (Yellow Light — Auto-Trigger `code-review`)**: Triggered automatically on audit fail, `Attempts > 1`, `Confidence < HIGH`, `[DEAD_END]`, or critical seam (or anytime the human invokes `/code-review`). Planner runs `git show --stat <commit>` and [`code-review`](../engineering/code-review/SKILL.md); if defects or smells are found, inject a remedial `[CODE: FIX]` or `[CODE: REFACTOR]` ticket to line 1 of `tasks.txt` via `scripts/reorder_queue.sh`.
      * **Proof of Negative for `[DEAD_END]`**: Require tangible proof (isolated passing unit test or runtime log proving module health while global symptom persists). Speculative exclusion = task failure.
 4. **Automated Scoring Rubric** (update `docs/agents/granularity-profile.json`):
    | Score | Criteria | Granularity Action |

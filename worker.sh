@@ -627,7 +627,7 @@ while true; do
   # Construct Prompt for the CLI Process
   PROMPT_PAYLOAD=$(cat <<PROMPT_EOF
 Execute this atomic task as the unattended Background Worker. Follow .skills/universal-build-verify.md:
-- [CODE]: Follow .agents/skills/engineering/implement/SKILL.md, .agents/skills/engineering/tdd/SKILL.md, and .agents/skills/engineering/codebase-design/SKILL.md (Red-Green-Refactor at public seams).
+- [CODE]: Follow .agents/skills/engineering/implement/SKILL.md (skip /code-review per task), .agents/skills/engineering/tdd/SKILL.md, and .agents/skills/engineering/codebase-design/SKILL.md (Red-Green-Refactor at public seams).
 - [DIAGNOSTIC]: Follow .agents/skills/engineering/diagnosing-bugs/SKILL.md (failing repro test or trace; product code locked).
 - [RESEARCH]: Follow .agents/skills/engineering/research/SKILL.md and .agents/skills/nightshift/explore/SKILL.md (AST skeletons via scripts/extract_skeleton.sh <file>#L<line>, compiler probes + immediate 'git restore .', output SUMMARY.md <= 5KB and 03-micro.md).
 - Logging & Notes: Follow .skills/universal-build-verify.md Section 4.1 ($PROGRESS_FILE <= 15 lines at top) and Section 4.2 (.worker.notes.md < 30 lines).

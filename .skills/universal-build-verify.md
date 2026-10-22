@@ -23,7 +23,7 @@ Mandatory execution protocol for Background Worker (Terminal B) processing `task
 ## 2. Archetypes & Execution Loops (Skill Pointers)
 
 - **`[CODE: FIX]` / `[CODE: REFACTOR]`**:
-  - Follow [`implement`](../.agents/skills/engineering/implement/SKILL.md), [`tdd`](../.agents/skills/engineering/tdd/SKILL.md) (Red $\rightarrow$ Green $\rightarrow$ Refactor at pre-agreed seams), and [`codebase-design`](../.agents/skills/engineering/codebase-design/SKILL.md) (narrow public interfaces; never test ephemeral private helpers).
+  - Follow [`implement`](../.agents/skills/engineering/implement/SKILL.md) (skip its `/code-review` step—`code-review` is run by Planner on Yellow Light / 10-task milestones only), [`tdd`](../.agents/skills/engineering/tdd/SKILL.md) (Red $\rightarrow$ Green $\rightarrow$ Refactor at pre-agreed seams), and [`codebase-design`](../.agents/skills/engineering/codebase-design/SKILL.md) (narrow public interfaces; never test ephemeral private helpers).
   - Refactors enforce **Assertion Non-Decrease** and structural closure in `VERIFY:` (e.g. `<cmd> && ! grep -rn "<Deprecated>" Sources/`).
 - **`[CODE: EXPAND/MIGRATE/CONTRACT]`**: Phased migration per [`to-tickets`](../.agents/skills/engineering/to-tickets/SKILL.md); every intermediate commit must leave builds and tests 100% green.
 - **`[RESEARCH]` / `[BENCHMARK]`**:
