@@ -83,6 +83,9 @@ Explore supplies read-only, evidence-based knowledge of code ownership, callers,
 - **Failure recovery:** `rollback-failed-task` saves tracked diff and untracked files under failed-task storage, restores the task workspace baseline, and retains queue/progress runtime state needed to report or retry.
 - **Status/diagnostics:** `status-write` and `status-display` maintain/read machine status; shell helpers watch worker, reorder queue, print status, extract bounded skeletons, and probe source lines. Status and logs are observability interfaces, not score authorities.
 - **Configuration contract:** environment settings choose CLI/agent registry/state, model and effort, timeout, budget base/per-file, task/progress/status/log paths, polling, run-once, isolation, sandbox/approval, preview port, sibling directories, and pause file. Human owns model choice; script reads configuration and must not query model quota proactively.
+- **Replaceable agents:** a selected registry profile owns its executable, argv, environment, model, effort, and final result. Global CLI selection must not affect another profile's result handling. Generic API wrappers receive the task and model settings through the documented environment contract and return a nonempty final result file; transport logs are not final outcomes. Native Codex/AgY retain their CLI adapters.
+- **Closeout acceptance:** Codex closeout is verification-only, requires `[CLOSEOUT_VERIFIED]`, and preserves blocking/guidance outcomes. Host Git finalization runs only after accepted closeout; an empty or unrecognized reply cannot authorize a commit.
+
 
 ## Further Notes
 

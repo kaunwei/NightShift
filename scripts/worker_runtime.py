@@ -127,12 +127,18 @@ def record_score_result(path, task_id, result, evidence=""):
         lock.rmdir()
 
 
-def build_ghost_closeout_prompt(task_id, verify, progress_file):
+def blocking_outcome(text):
+    return bool(re.search(r"\[(?:SCOPE_BLOCKED|NEED_GUIDANCE|NEED_DECOMPOSITION|BLOCKED)\]", text))
+
+
+def build_ghost_closeout_prompt(task_id, verify, progress_file, host_git=False):
+    git_policy = ("The host runtime owns all Git writes. Do not stage or commit. After verification succeeds, report [CLOSEOUT_VERIFIED]."
+                  if host_git else "If verification passes, commit only the existing changes; never alter file contents.")
     return f"""CLOSEOUT ONLY for original task {task_id}. You are a verification and Git-finalization helper, not an implementation worker.
 
 You MUST NOT modify source code, tests, documentation, configuration, or any other implementation files. Do not fix, refactor, create, delete, or rewrite files. Do not issue commands that alter project contents. If anything still requires implementation, stop immediately and report [CLOSEOUT_INCOMPLETE] with the reason; do not try a workaround.
 
-Allowed: inspect git status/diff/log, run the required verification command ({verify or 'the task verification command'}), and perform only the Git closeout explicitly allowed by the task. If verification passes, commit only the existing changes; never alter file contents. Do not commit if verification fails or if a code change would be needed. Report a concise evidence-based result for {task_id}. Do not create or count a separate task. The script attributes your outcome to {task_id} and enforces file-change checks.
+Allowed: inspect git status/diff/log, run the required verification command ({verify or 'the task verification command'}), and perform only the Git closeout explicitly allowed by the task. {git_policy} Do not commit if verification fails or if a code change would be needed. Report a concise evidence-based result for {task_id}. Do not create or count a separate task. The script attributes your outcome to {task_id} and enforces file-change checks.
 Runtime-owned changes to progress.log and tasks.done are expected. Leave them untouched and unstaged; they do not block verification or committing the declared task artifacts. Only unexpected implementation changes require [CLOSEOUT_INCOMPLETE].
 Progress log: {progress_file}
 """
@@ -156,6 +162,10 @@ def workspace_snapshot(work_dir, base):
     return snapshot
 
 
+def agent_command(args, options, prompt):
+    return [args.executable, *options, *getattr(args, "extra_args", []), prompt]
+
+
 def run_codex_closeout(args, environment, output, actions_used):
     remaining = args.step_budget - actions_used
     if remaining <= 0:
@@ -163,15 +173,15 @@ def run_codex_closeout(args, environment, output, actions_used):
     before = workspace_snapshot(args.work_dir, args.base)
     original_message = Path(args.result_file) if args.result_file else Path(args.output_file)
     closeout_message = str(original_message.with_name("closeout-message.txt"))
-    prompt = build_ghost_closeout_prompt(args.task_id, args.verify, args.progress_file)
-    prompt += "\nFor this Codex closeout, the host runtime owns all Git writes. Run verification only; do not stage or commit. After verification succeeds, report [CLOSEOUT_VERIFIED]. Git metadata sandbox restrictions are handled by the host and are not implementation failures.\n"
+    Path(closeout_message).unlink(missing_ok=True)
+    prompt = build_ghost_closeout_prompt(args.task_id, args.verify, args.progress_file, host_git=True)
     codex = argparse.Namespace(
         last_message=closeout_message, model=args.model, effort=args.effort,
         approval_mode=args.approval_mode, sandbox=args.sandbox,
         ephemeral=args.ephemeral, additional_dirs=args.additional_dirs,
     )
     environment["MAX_STEPS"] = str(remaining)
-    command = [args.executable, *codex_args(codex), prompt]
+    command = agent_command(args, codex_args(codex), prompt)
     code = stream_with_timeout(args.timeout, command, args.work_dir,
                                environment, output, append=True, action_budget=remaining)
     after = workspace_snapshot(args.work_dir, args.base)
@@ -181,8 +191,15 @@ def run_codex_closeout(args, environment, output, actions_used):
     output_text = output.read_text(encoding="utf-8", errors="replace") if output.exists() else ""
     if count_codex_actions(output_text) > args.step_budget:
         return 125
-    if code == 0 and closeout_message and Path(closeout_message).is_file():
-        if "[CLOSEOUT_INCOMPLETE]" in Path(closeout_message).read_text(encoding="utf-8", errors="replace"):
+    if code == 0:
+        message = Path(closeout_message)
+        text = message.read_text(encoding="utf-8", errors="replace") if message.is_file() else ""
+        atomic_write(original_message, text)
+        if "[CLOSEOUT_INCOMPLETE]" in text:
+            return 126
+        if blocking_outcome(text):
+            return 0
+        if "[CLOSEOUT_VERIFIED]" not in text:
             return 126
     return code
 
@@ -244,7 +261,13 @@ def parse_agent_registry(raw, defaults):
     for item in profiles:
         if not isinstance(item, dict):
             raise ValueError("each AI_AGENTS_JSON entry must be an object")
-        agent_id = str(item.get("id", "")).strip()
+        unknown = set(item) - {"id", "provider", "command", "executable", "model", "effort", "agy_mode", "args", "env"}
+        if unknown:
+            raise ValueError(f"agent profile has unknown fields: {', '.join(sorted(unknown))}")
+        for key in ("id", "provider", "command", "executable", "model", "effort", "agy_mode"):
+            if key in item and not isinstance(item[key], str):
+                raise ValueError(f"agent {key} must be a string")
+        agent_id = item.get("id", "").strip()
         provider = str(item.get("provider", "")).strip().lower()
         command = str(item.get("command", item.get("executable", ""))).strip()
         if not agent_id or agent_id in seen:
@@ -253,9 +276,18 @@ def parse_agent_registry(raw, defaults):
             raise ValueError(f"unsupported provider for agent {agent_id}: {provider}")
         if not command:
             raise ValueError(f"AI_AGENTS_JSON agent {agent_id} requires a command")
+        extra_args = item.get("args", [])
+        environment = item.get("env", {})
+        if not isinstance(extra_args, list) or not all(isinstance(arg, str) for arg in extra_args):
+            raise ValueError(f"agent {agent_id} args must be an array of strings")
+        if not isinstance(environment, dict) or not all(isinstance(k, str) and isinstance(v, str)
+                                                      and k and "=" not in k and "\0" not in k + v
+                                                      for k, v in environment.items()):
+            raise ValueError(f"agent {agent_id} env must map valid names to strings")
         seen.add(agent_id)
         agents.append({
             "id": agent_id, "provider": provider, "command": command,
+            "args": extra_args, "env": environment,
             "model": str(item.get("model", defaults["model"])),
             "effort": str(item.get("effort", defaults["effort"])),
             "agy_mode": str(item.get("agy_mode", defaults["agy_mode"])),
@@ -295,6 +327,8 @@ def execute_registered_agents(args, agents, state_path, rollback):
         attempt.model = agent["model"]
         attempt.effort = agent["effort"]
         attempt.agy_mode = agent["agy_mode"]
+        attempt.extra_args = agent["args"]
+        attempt.agent_env = agent["env"]
         for output_name in ("output_file", "result_file"):
             output = Path(getattr(attempt, output_name, "") or ".")
             if output.is_file():
@@ -650,12 +684,57 @@ def stream_with_timeout(seconds, command, cwd, environment, output_path, append=
     return 128 + abs(code) if code < 0 else code
 
 
+def finalize_task_git(args):
+    targets = [item.strip() for item in args.target.split(",") if item.strip()]
+    for target in targets:
+        subprocess.run(["git", "-C", args.work_dir, "add", "-A", "--", target],
+                       check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    staged = subprocess.run(["git", "-C", args.work_dir, "diff", "--cached", "--quiet"],
+                            check=False)
+    if staged.returncode:
+        title = args.title
+        commit_type = ("fix" if "[CODE: FIX]" in title else
+                       "refactor" if "[CODE: REFACTOR]" in title else
+                       "docs" if "[RESEARCH]" in title else
+                       "test" if "[DIAGNOSTIC]" in title else "feat")
+        commit = subprocess.run([
+            "git", "-C", args.work_dir, "commit", "-m",
+            f"{commit_type}(worker): complete {args.task_id}", "-m",
+            f"Task: {args.task_id} (Level {args.level})\nScope: {args.target or '<modified files>'}\n"
+            f"Verification: {args.verify or '<worker post-flight>'}\n"
+            "Attempts: wrapper-managed | Confidence: pending audit",
+        ], check=False)
+        if commit.returncode:
+            print(f"[WORKER] Failed to commit task changes for {args.task_id}.", file=sys.stderr)
+            return 1
+    return 0
+
+
 def execute_task_cli(args):
+    with tempfile.TemporaryDirectory(prefix="nightshift-agent-") as directory:
+        return _execute_task_cli(args, Path(directory) / "prompt.txt")
+
+
+def _execute_task_cli(args, adapter_prompt):
+    if not args.result_file:
+        args.result_file = str(Path(args.output_file).with_name("last-message.txt"))
     prompt = Path(args.prompt_file).read_text(encoding="utf-8")
+    if args.provider == "generic":
+        prompt += "\nSELECTED ADAPTER POLICY: Generic adapter. The host runtime stages and commits TARGET paths. Verify the task, then write the final UTF-8 outcome to NIGHTSHIFT_RESULT_FILE. Do not request restricted closeout; this adapter does not support it. Use [BLOCKED] if verification cannot finish.\n"
+    elif args.provider == "codex":
+        prompt += "\nSELECTED ADAPTER POLICY: Codex. The host runtime stages and commits TARGET paths. Run verification and report the outcome. If verification still needs a restricted continuation, use [CLOSEOUT_REQUIRED].\n"
+    else:
+        prompt += "\nSELECTED ADAPTER POLICY: AgY. Commit only verified task changes. If verification or Git closeout remains, use [CLOSEOUT_REQUIRED].\n"
+    adapter_prompt.write_text(prompt, encoding="utf-8")
+    Path(args.result_file).unlink(missing_ok=True)
     environment = os.environ.copy()
+    environment.update(getattr(args, "agent_env", {}))
+    environment.update(NIGHTSHIFT_MODEL=args.model, NIGHTSHIFT_EFFORT=args.effort,
+                       NIGHTSHIFT_PROMPT_FILE=str(adapter_prompt.resolve()),
+                       NIGHTSHIFT_RESULT_FILE=str(Path(args.result_file).resolve()),
+                       NIGHTSHIFT_TASK_ID=args.task_id)
     environment.update(PORT=args.worker_port, TEST_PORT=args.worker_port)
-    if args.provider in ("codex", "agy"):
-        environment["MAX_STEPS"] = str(args.step_budget)
+    environment["MAX_STEPS"] = str(args.step_budget)
     environment.pop("AI_AGENTS_JSON", None)
     environment.pop("AI_AGENT_STATE_FILE", None)
     if args.provider == "agy":
@@ -669,7 +748,7 @@ def execute_task_cli(args):
             approval_mode=args.approval_mode, sandbox=args.sandbox,
             ephemeral=args.ephemeral, additional_dirs=args.additional_dirs,
         )
-        command = [args.executable, *codex_args(codex), prompt]
+        command = agent_command(args, codex_args(codex), prompt)
         result_code = stream_with_timeout(args.timeout, command, args.work_dir,
                                           environment, output, action_budget=args.step_budget)
         codex_output = output.read_text(encoding="utf-8", errors="replace")
@@ -679,34 +758,13 @@ def execute_task_cli(args):
             return 125
         result_path = last_message if last_message and last_message.is_file() and last_message.stat().st_size else output
         if (result_code == 0 and args.approval_mode in ("auto", "approve-for-me")
-                and not re.search(r"\[(?:SCOPE_BLOCKED|NEED_GUIDANCE|NEED_DECOMPOSITION|BLOCKED)\]",
-                                  result_path.read_text(encoding="utf-8", errors="replace"))):
+                and not blocking_outcome(result_path.read_text(encoding="utf-8", errors="replace"))):
             closeout_requested = "[CLOSEOUT_REQUIRED]" in result_path.read_text(encoding="utf-8", errors="replace")
             if closeout_requested:
                 result_code = run_codex_closeout(args, environment, output, actions_used)
-            if result_code == 0:
-                targets = [item.strip() for item in args.target.split(",") if item.strip()]
-                for target in targets:
-                    subprocess.run(["git", "-C", args.work_dir, "add", "-A", "--", target],
-                                   check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                staged = subprocess.run(["git", "-C", args.work_dir, "diff", "--cached", "--quiet"],
-                                        check=False)
-                if staged.returncode:
-                    title = args.title
-                    commit_type = ("fix" if "[CODE: FIX]" in title else
-                                   "refactor" if "[CODE: REFACTOR]" in title else
-                                   "docs" if "[RESEARCH]" in title else
-                                   "test" if "[DIAGNOSTIC]" in title else "feat")
-                    commit = subprocess.run([
-                        "git", "-C", args.work_dir, "commit", "-m",
-                        f"{commit_type}(worker): complete {args.task_id}", "-m",
-                        f"Task: {args.task_id} (Level {args.level})\nScope: {args.target or '<modified files>'}\n"
-                        f"Verification: {args.verify or '<worker post-flight>'}\n"
-                        "Attempts: wrapper-managed | Confidence: pending audit",
-                    ], check=False)
-                    if commit.returncode:
-                        print(f"[WORKER] Failed to commit Codex changes for {args.task_id}.", file=sys.stderr)
-                        result_code = 1
+                result_path = Path(args.result_file)
+            if result_code == 0 and not blocking_outcome(result_path.read_text(encoding="utf-8", errors="replace")):
+                result_code = finalize_task_git(args)
     elif args.provider == "agy":
         agy = argparse.Namespace(
             sandbox=args.use_sandbox, mode=args.agy_mode, model=args.model,
@@ -714,7 +772,7 @@ def execute_task_cli(args):
             effort=args.effort, executable=args.executable,
             step_budget=args.step_budget,
         )
-        command = [args.executable, "-p", prompt, "--dangerously-skip-permissions", *agy_args(agy)]
+        command = [args.executable, "-p", prompt, "--dangerously-skip-permissions", *agy_args(agy), *getattr(args, "extra_args", [])]
         result_code = stream_with_timeout(args.timeout, command, args.work_dir,
                                           environment, output)
         text = output.read_text(encoding="utf-8", errors="replace")
@@ -741,7 +799,7 @@ def execute_task_cli(args):
             environment["AGY_MAX_STEPS"] = str(remaining)
             continuation = argparse.Namespace(**vars(agy))
             continuation.step_budget = remaining
-            command = [args.executable, "-p", prompt, "--dangerously-skip-permissions", *agy_args(continuation)]
+            command = [args.executable, "-p", prompt, "--dangerously-skip-permissions", *agy_args(continuation), *getattr(args, "extra_args", [])]
             result_code = stream_with_timeout(args.timeout, command, args.work_dir,
                                               environment, output, append=True)
             text = output.read_text(encoding="utf-8", errors="replace")
@@ -755,8 +813,20 @@ def execute_task_cli(args):
             if "[CLOSEOUT_INCOMPLETE]" in text:
                 return 126
     else:
-        result_code = stream_with_timeout(args.timeout, [args.executable, prompt],
+        result_code = stream_with_timeout(args.timeout, agent_command(args, [], prompt),
                                           args.work_dir, environment, output)
+        if result_code == 0:
+            if "print timeout after" in output.read_text(encoding="utf-8", errors="replace").lower():
+                return 124
+            message = Path(args.result_file)
+            if not message.is_file() or not message.stat().st_size:
+                print("[WORKER] Generic adapter must write NIGHTSHIFT_RESULT_FILE.", file=sys.stderr)
+                return 2
+            text = message.read_text(encoding="utf-8", errors="replace")
+            if "[CLOSEOUT_REQUIRED]" in text or "[CLOSEOUT_INCOMPLETE]" in text:
+                return 126
+            if not blocking_outcome(text):
+                result_code = finalize_task_git(args)
     if result_code == 0 and "print timeout after" in output.read_text(
             encoding="utf-8", errors="replace").lower():
         result_code = 124
@@ -791,8 +861,8 @@ WORK
 - Keep each action independent. Before every AgY tool call, emit one `[EXEC] <brief action>` line; the runtime counts these as steps. Codex actions are counted from CLI events. Do not dictate command formatting, bundle actions, or fabricate markers to evade the budget.
 - Run {verify or 'the task verification'} and report only checks actually completed. A [DEAD_END] claim needs an isolated passing test or runtime evidence that the suspected module is healthy while the symptom remains.
 - Make at most 3 implementation attempts. If blocked, report [BLOCKED] and the cause; the runtime preserves failed work and restores the task baseline. Do not destructively reset files. Do not edit {progress_file}; the runtime records the task and performs mechanical audits.
-- Commit only after verification passes, with only task changes staged. Use a concise English Conventional Commit and include the task ID. End your report with Attempts: <N> | Confidence: <HIGH|MED|LOW>. The Planner reviews the evidence and records the score; never adjust the shared score yourself.
-- If implementation is complete and only verification/Git closeout remains, stop and emit [CLOSEOUT_REQUIRED]. The runtime may launch one restricted closeout for this task; it may verify and finalize existing changes but may not edit project files. If implementation remains, stop.
+- Follow the selected adapter's Git policy; only verified task changes may be staged or committed. Use a concise English Conventional Commit and include the task ID. End your report with Attempts: <N> | Confidence: <HIGH|MED|LOW>. The Planner reviews the evidence and records the score; never adjust the shared score yourself.
+- If the selected adapter supports restricted closeout and implementation is complete with only verification/Git closeout remaining, stop and emit [CLOSEOUT_REQUIRED]. The runtime may launch one restricted closeout for this task; it may verify and finalize existing changes but may not edit project files. If implementation remains, stop.
 """
 
 
@@ -1012,7 +1082,7 @@ def worker_daemon(root):
                 cli_args = argparse.Namespace(
                     provider=provider, executable=ai_cli, work_dir=str(work_dir),
                     prompt_file=str(prompt_path), output_file=str(output_path),
-                    result_file=str(result_path) if provider == "codex" else "",
+                    result_file=str(result_path),
                     timeout=timeout, model=ai_model, effort=ai_effort,
                     approval_mode=config.get("CODEX_APPROVAL_MODE", "auto"),
                     sandbox=config.get("CODEX_SANDBOX", "workspace-write"),
@@ -1051,10 +1121,11 @@ def worker_daemon(root):
                            "timeout" if exit_code == 124 else
                            "step_budget" if exit_code == 125 else
                            "closeout_failed" if exit_code == 126 else
+                           "error" if exit_code else
                            "scope" if "[SCOPE_BLOCKED]" in result_text else
                            "blocked" if "[BLOCKED]" in result_text else
                            "guidance" if re.search(r"\[(?:NEED_GUIDANCE|NEED_DECOMPOSITION)\]", result_text) else
-                           "error" if exit_code else "success")
+                           "success")
                 stamp_now = stamp()
                 if outcome == "quota_exhausted":
                     restore_task_front(tasks_file, raw_task)

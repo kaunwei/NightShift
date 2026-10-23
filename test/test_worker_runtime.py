@@ -57,6 +57,24 @@ class WorkerPromptContractTests(unittest.TestCase):
         self.assertNotIn("restore the clean tree", prompt)
 
 
+class AgentConfigContractTests(unittest.TestCase):
+    def test_invalid_profile_is_rejected_before_claiming_a_task(self):
+        for override, expected in (({"arguments": []}, "unknown fields"),
+                                   ({"model": None}, "must be a string"),
+                                   ({"args": "--flag"}, "array of strings"),
+                                   ({"env": []}, "map valid names")):
+            with self.subTest(override=override), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                task = "TASK-CFG | TARGET: output.txt | ACTION: configuration check\n"
+                (root / "tasks.txt").write_text(task)
+                profile = {"id": "api", "provider": "generic", "command": "unused", **override}
+                env = {**os.environ, "AI_AGENTS_JSON": json.dumps([profile]), "WORKER_ISOLATION": "0", "RUN_ONCE": "1", "TASK_TIMEOUT": "1"}
+                result = runtime("daemon", "--root", root, env=env)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(expected, result.stderr)
+                self.assertEqual((root / "tasks.txt").read_text(), task)
+
+
 class QueueContractTests(unittest.TestCase):
     def test_pop_preserves_comments_and_only_removes_first_task(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -279,8 +297,8 @@ class WorkerScoreTests(unittest.TestCase):
                 "last='' prev=''\n"
                 "for arg in \"$@\"; do if [ \"$prev\" = --output-last-message ]; then last=\"$arg\"; fi; prev=\"$arg\"; done\n"
                 "case \"$*\" in\n"
-                "  *'CLOSEOUT ONLY'*) printf '[CLOSEOUT_VERIFIED]\\n' > \"$last\" ;;\n"
-                "  *) printf '[CLOSEOUT_REQUIRED]\\n' > \"$last\"; printf 'after\\n' > output.txt ;;\n"
+                "  *'CLOSEOUT ONLY'*) printf '%s\\n' \"${CLOSEOUT_REPLY:-[CLOSEOUT_VERIFIED]}\" > \"$last\" ;;\n"
+                "  *) if [ \"$OMIT_INITIAL_RESULT\" = 1 ]; then rm -f \"$last\"; printf '[CLOSEOUT_REQUIRED]\\n'; else printf '[CLOSEOUT_REQUIRED]\\n' > \"$last\"; fi; printf 'after\\n' > output.txt ;;\n"
                 "esac\n"
                 "printf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"type\":\"command_execution\"}}'\n"
             )
@@ -288,16 +306,33 @@ class WorkerScoreTests(unittest.TestCase):
             git("add", "codex")
             git("commit", "-qm", "add fake cli")
             base = git("rev-parse", "HEAD")
-            result = runtime("task-cli", "--provider", "codex", "--executable", executable,
+            def invoke(reply="[CLOSEOUT_VERIFIED]", omit_initial=False):
+                env = os.environ.copy()
+                env["CLOSEOUT_REPLY"] = reply
+                env["OMIT_INITIAL_RESULT"] = "1" if omit_initial else "0"
+                return runtime("task-cli", "--provider", "codex", "--executable", executable,
                              "--work-dir", root, "--prompt-file", prompt, "--output-file", output,
                              "--result-file", last_message, "--timeout", "10", "--model", "gpt-6-luna",
                              "--effort", "none", "--approval-mode", "auto", "--target", "output.txt",
                              "--task-id", "TASK-CLOSE", "--title", "[CODE: FIX] change output",
-                             "--base", base, "--step-budget", "2")
+                             "--base", base, "--step-budget", "2", env=env)
+
+            result = invoke()
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(git("log", "-1", "--pretty=%s"), "fix(worker): complete TASK-CLOSE")
             self.assertEqual(git("show", "HEAD:output.txt"), "after")
             self.assertEqual(git("status", "--porcelain"), "")
+            for reply, omit_initial in ((reply, missing) for missing in (False, True)
+                                         for reply in ("[BLOCKED]", "[NEED_GUIDANCE]", "[NEED_DECOMPOSITION]", "[SCOPE_BLOCKED]", "[CLOSEOUT_INCOMPLETE]", "unverified")):
+                with self.subTest(reply=reply):
+                    git("reset", "--hard", base)
+                    result = invoke(reply, omit_initial)
+                    self.assertEqual(git("rev-parse", "HEAD"), base, "unverified closeout must not commit")
+                    if reply not in ("unverified", "[CLOSEOUT_INCOMPLETE]"):
+                        self.assertIn(reply, last_message.read_text())
+                    else:
+                        self.assertEqual(result.returncode, 126)
+
 
 
 class StatusContractTests(unittest.TestCase):
@@ -915,7 +950,7 @@ class WorkerIntegrationTests(unittest.TestCase):
                 {"id": "backup", "provider": "codex", "command": "codex", "model": "gpt-6.1-sol"},
             ]
             (root / ".worker.env").write_text(
-                "WORKER_ISOLATION=0\nRUN_ONCE=1\nPOLL_INTERVAL=0\n"
+                "AI_CLI=agy\nWORKER_ISOLATION=0\nRUN_ONCE=1\nPOLL_INTERVAL=0\n"
                 "AI_AGENTS_JSON='" + json.dumps(profiles) + "'\n"
             )
             (root / "tasks.txt").write_text(
@@ -956,6 +991,48 @@ class WorkerIntegrationTests(unittest.TestCase):
             self.assertEqual((root / "output.txt").read_text(), "hello\n")
             state = json.loads((root / ".worker-agent-state.default.json").read_text())
             self.assertEqual(state["exhausted"]["primary"]["reason"], "quota")
+
+    def test_generic_registry_receives_model_arguments_environment_and_result_contract(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "repo"
+            (root / "scripts").mkdir(parents=True)
+            shutil.copy2(ROOT / "worker.sh", root / "worker.sh")
+            shutil.copy2(RUNTIME, root / "scripts/worker_runtime.py")
+            shutil.copy2(ROOT / ".gitignore", root / ".gitignore")
+            wrapper = Path(directory) / "API wrapper.py"
+            wrapper.write_text(
+                "import os, sys, json\nfrom pathlib import Path\n"
+                "assert sys.argv[1] == '--api-mode'\n"
+                "assert os.environ['NIGHTSHIFT_MODEL'] == 'vendor/model-x'\n"
+                "assert os.environ['NIGHTSHIFT_EFFORT'] == 'medium'\n"
+                "assert os.environ['API_BASE_URL'] == 'https://api.invalid/v2'\n"
+                "assert Path(os.environ['NIGHTSHIFT_PROMPT_FILE']).read_text() == sys.argv[-1]\n"
+                "assert os.environ['NIGHTSHIFT_TASK_ID'] == 'TASK-API'\n"
+                "Path('output.txt').write_text('api adapter worked\\n')\n"
+                "Path(os.environ['NIGHTSHIFT_RESULT_FILE']).write_text('Attempts: 1 | Confidence: HIGH')\n"
+                "print('[BLOCKED] quoted tool output; not the final result')\n"
+            )
+            profiles = [{"id": "api", "provider": "generic", "command": sys.executable,
+                         "args": [str(wrapper), "--api-mode"], "model": "vendor/model-x",
+                         "effort": "medium", "env": {"API_BASE_URL": "https://api.invalid/v2"}}]
+            (root / ".worker.env").write_text(
+                "WORKER_ISOLATION=0\nRUN_ONCE=1\nPOLL_INTERVAL=0\nAI_AGENTS_JSON='" + json.dumps(profiles) + "'\n")
+            (root / "tasks.txt").write_text(
+                "TASK-API | LEVEL: 1 | TARGET: output.txt | ACTION: [CODE: EXPAND] "
+                "Write artifact | VERIFY: test -f output.txt\n")
+            def git(*args):
+                return subprocess.run(["git", "-C", str(root), *args], check=True,
+                                      capture_output=True, text=True).stdout.strip()
+            git("init", "-q")
+            git("config", "user.name", "API Test")
+            git("config", "user.email", "api@example.invalid")
+            git("add", "worker.sh", "scripts", ".gitignore", "tasks.txt")
+            git("commit", "-qm", "fixture")
+            result = subprocess.run(["bash", str(root / "worker.sh")], cwd=root,
+                                    capture_output=True, text=True, timeout=20)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("[DONE] TASK-API", (root / "tasks.done").read_text(), result.stdout)
+            self.assertEqual(git("show", "HEAD:output.txt"), "api adapter worked")
 
     def test_worker_requeues_task_and_stops_when_all_registered_agents_are_exhausted(self):
         with tempfile.TemporaryDirectory() as directory:
