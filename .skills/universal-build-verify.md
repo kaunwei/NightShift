@@ -28,12 +28,13 @@ Execution protocol for Background Worker (Terminal B) processing `tasks.txt`.
 - **Max 3 Retries**:
   1. Analyze $\rightarrow$ Fix $\rightarrow$ Test.
   2. On failure, `git restore <file>` to reset baseline $\rightarrow$ Apply alternative fix.
-  3. Final attempt: if failed, restore clean tree, log `[BLOCKED]` at the top of `progress.log`, and exit.
+  3. Final attempt: if failed, restore clean tree, report `[BLOCKED]` in the final response, and exit. `worker.sh` owns `progress.log` updates outside the agent sandbox.
 
 ## 4. Acceptance, Logging & Notes
 
 ### 4.1 Attempt Trace (`progress.log`)
-- **Strict Limit**: Prepend `<= 15 lines` at the top of `progress.log`. Use pointers (`src/file.py#L10-L20`), zero discursive prose.
+- **Ownership**: The agent reports its attempt count and confidence in its final response; `worker.sh` prepends the trace to `progress.log` outside the agent sandbox.
+- **Strict Limit**: Keep the reported trace concise. Use pointers (`src/file.py#L10-L20`), zero discursive prose.
 - **Confidence**: `HIGH` (1st pass, 0 warnings), `MEDIUM` (1-2 retries needed), `LOW` (brittle or edge cases unverified).
 ```text
 ================================================================================

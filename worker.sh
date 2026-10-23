@@ -109,10 +109,13 @@ else
   PID_FILE="$(resolve_path ".worker.${WORKER_ID}.pid")"
 fi
 
-AI_CLI="${AI_CLI:-agy}"
-AI_MODEL="${AI_MODEL:-gemini-3.8-flash-low}"
-AI_EFFORT="${AI_EFFORT:-low}"
+AI_CLI="${AI_CLI:-codex}"
+AI_MODEL="${AI_MODEL:-}"
+AI_EFFORT="${AI_EFFORT:-}"
 AGY_MODE="${AGY_MODE:-accept-edits}"
+CODEX_SANDBOX="${CODEX_SANDBOX:-workspace-write}"
+CODEX_APPROVAL_MODE="${CODEX_APPROVAL_MODE:-auto}"
+CODEX_EPHEMERAL="${CODEX_EPHEMERAL:-1}"
 TASK_TIMEOUT="${TASK_TIMEOUT:-1800}"
 STEP_BASE="${STEP_BASE:-12}"
 STEP_PER_FILE="${STEP_PER_FILE:-5}"
@@ -397,7 +400,7 @@ extract_task_field() {
       pat = "(^|\\|[[:space:]]*)" k ":[[:space:]]*"
       if (match($0, pat)) {
         rest = substr($0, RSTART + RLENGTH)
-        if (match(rest, /[[:space:]]*\|[[:space:]]*(LEVEL|TARGET|GOAL|VERIFY|FORBIDDEN_SHORTCUTS|CONSTRAINTS|DEPENDS_ON):[[:space:]]*/)) {
+        if (match(rest, /[[:space:]]*\|[[:space:]]*(LEVEL|TARGET|ACTION|GOAL|VERIFY|FORBIDDEN_SHORTCUTS|CONSTRAINTS|DEPENDS_ON):[[:space:]]*/)) {
           rest = substr(rest, 1, RSTART - 1)
         }
         gsub(/^[[:space:]]+|[[:space:]]+$/, "", rest)
@@ -578,7 +581,12 @@ fi
 echo "=============================================================================="
 echo " 24-Hour Unattended AI Worker Daemon Started"
 echo " Worker ID: $WORKER_ID | OS: $PLATFORM_NAME (CPUs: $NUM_CPUS)"
-echo " PID: $$ | CLI: $AI_CLI | Model: $AI_MODEL | Mode: $AGY_MODE"
+if [ "$AI_CLI" = "codex" ]; then
+  AI_MODE="sandbox=$CODEX_SANDBOX,approval=$CODEX_APPROVAL_MODE,ephemeral=$CODEX_EPHEMERAL"
+else
+  AI_MODE="$AGY_MODE"
+fi
+echo " PID: $$ | CLI: $AI_CLI | Model: ${AI_MODEL:-configured default} | Mode: $AI_MODE"
 echo " WorkDir: $WORK_DIR | Isolation: $ISOLATION_FLAG"
 echo " Tasks: $TASKS_FILE | Status: $STATUS_FILE"
 echo " Progress: $PROGRESS_FILE | Log: $LOG_FILE"
@@ -746,10 +754,11 @@ RULES:
 4. VERIFY, RETRIES & [DEAD_END]:
    - Run verification: ${TASK_VERIFY:-build and test}.
    - Proof of Negative: Declaring [DEAD_END] requires an isolated passing unit test or runtime log proving module health while global symptom persists.
-   - Max 3 attempts: if still failing after 3 fixes, restore clean tree, prepend [BLOCKED] trace to $PROGRESS_FILE, and exit.
+   - Max 3 attempts: if still failing after 3 fixes, restore the clean tree and report [BLOCKED] in the final response.
 5. COMMIT & PROGRESS (ON 100% PASS):
    - Stage all changes (git status --porcelain must be 100% clean after commit).
-   - Prepend a <= 15-line trace to the VERY TOP of $PROGRESS_FILE (.skills/universal-build-verify.md Section 4.1).
+   - Do not edit $PROGRESS_FILE directly; worker.sh records the result outside the agent sandbox.
+   - End the final response with Attempts: <count> | Confidence: <HIGH|MED|LOW>.
    - Commit with a clean two-part Conventional Commit (feat|fix|refactor|test|docs|perf; NEVER put raw "TASK-XXX | LEVEL: ..." pipe strings in title):
 
    git commit -m "<type>(<scope>): <concise English action <= 60 chars> ($TASK_ID)" -m "<1-3 summary bullets>
@@ -763,6 +772,8 @@ PROMPT_EOF
 
   # Execute CLI with Timeout Guard
   CMD_OUTPUT_TMP=$(mktemp)
+  RESULT_OUTPUT_TMP="$CMD_OUTPUT_TMP"
+  CODEX_LAST_MESSAGE_TMP=""
   EXIT_CODE=0
 
   if [ "$AI_CLI" = "agy" ]; then
@@ -772,6 +783,9 @@ PROMPT_EOF
     fi
     if [ -n "$AGY_MODE" ]; then
       EXTRA_CLI_ARGS+=("--mode" "$AGY_MODE")
+    fi
+    if [ -n "$AI_MODEL" ]; then
+      EXTRA_CLI_ARGS+=("--model" "$AI_MODEL")
     fi
     EXTRA_CLI_ARGS+=("--print-timeout" "${TASK_TIMEOUT}s")
     if [ -n "$ADDITIONAL_DIRS" ]; then
@@ -811,7 +825,6 @@ PROMPT_EOF
       export AGY_MAX_STEPS="$TASK_MAX_STEPS" && \
       run_with_timeout "$TASK_TIMEOUT" agy -p "$PROMPT_PAYLOAD" \
         --dangerously-skip-permissions \
-        --model "$AI_MODEL" \
         "${EXTRA_CLI_ARGS[@]}"
     ) 2>&1 | tee "$CMD_OUTPUT_TMP"
     EXIT_CODE="${PIPESTATUS[0]}"
@@ -837,7 +850,6 @@ PROMPT_EOF
           export AGY_MAX_STEPS="$REMAINING_STEPS" && \
           run_with_timeout "$TASK_TIMEOUT" agy -p "Continue $TASK_ID from the current modified working tree ($REMAINING_STEPS steps remaining in budget of $TASK_MAX_STEPS). Inspect git diff, complete any remaining edits, run verification (${TASK_VERIFY:-build and test}), prepend $PROGRESS_FILE, and commit." \
             --dangerously-skip-permissions \
-            --model "$AI_MODEL" \
             "${EXTRA_CLI_ARGS[@]}"
         ) 2>&1 | tee "$CONTINUE_TMP"
         EXIT_CODE="${PIPESTATUS[0]}"
@@ -851,6 +863,94 @@ PROMPT_EOF
         break
       fi
     done
+  elif [ "$AI_CLI" = "codex" ]; then
+    CODEX_ARGS=(exec --color never)
+    CODEX_LAST_MESSAGE_TMP=$(mktemp)
+    CODEX_ARGS+=("--output-last-message" "$CODEX_LAST_MESSAGE_TMP")
+
+    if [ "$CODEX_EPHEMERAL" = "1" ] || [ "$CODEX_EPHEMERAL" = "true" ]; then
+      CODEX_ARGS+=("--ephemeral")
+    fi
+    if [ -n "$AI_MODEL" ]; then
+      CODEX_ARGS+=("--model" "$AI_MODEL")
+    fi
+    if [ -n "$AI_EFFORT" ]; then
+      CODEX_ARGS+=("--config" "model_reasoning_effort=$AI_EFFORT")
+    fi
+
+    case "$CODEX_APPROVAL_MODE" in
+      auto|approve-for-me)
+        # --approve-for-me already selects Codex's workspace-write sandbox.
+        CODEX_ARGS+=("--approve-for-me")
+        ;;
+      prompt|default|"")
+        CODEX_ARGS+=("--sandbox" "$CODEX_SANDBOX")
+        ;;
+      bypass)
+        CODEX_ARGS+=("--dangerously-bypass-approvals-and-sandbox")
+        ;;
+      *)
+        echo "[WORKER] Unsupported CODEX_APPROVAL_MODE: $CODEX_APPROVAL_MODE (expected auto, prompt, or bypass)"
+        EXIT_CODE=2
+        ;;
+    esac
+
+    if [ -n "$ADDITIONAL_DIRS" ]; then
+      IFS=',' read -ra DIRS <<< "$ADDITIONAL_DIRS"
+      for d in "${DIRS[@]}"; do
+        d_trimmed=$(echo "$d" | xargs)
+        if [ -n "$d_trimmed" ] && [ -d "$d_trimmed" ]; then
+          CODEX_ARGS+=("--add-dir" "$d_trimmed")
+        fi
+      done
+    fi
+
+    if [ "$EXIT_CODE" -eq 0 ]; then
+      echo "[WORKER] Launching codex (Model: ${AI_MODEL:-configured default}, Effort: ${AI_EFFORT:-configured default}, StepBudget: $TASK_MAX_STEPS, WorkDir: $WORK_DIR)..."
+      (
+        cd "$WORK_DIR" && \
+        export PORT="$WORKER_PORT" && \
+        export TEST_PORT="$WORKER_PORT" && \
+        export MAX_STEPS="$TASK_MAX_STEPS" && \
+        run_with_timeout "$TASK_TIMEOUT" codex "${CODEX_ARGS[@]}" "$PROMPT_PAYLOAD"
+      ) 2>&1 | tee "$CMD_OUTPUT_TMP"
+      EXIT_CODE="${PIPESTATUS[0]}"
+      if [ -s "$CODEX_LAST_MESSAGE_TMP" ]; then
+        RESULT_OUTPUT_TMP="$CODEX_LAST_MESSAGE_TMP"
+      fi
+
+      # Codex automatic review intentionally keeps Git metadata read-only.
+      # After a successful turn, stage only declared TARGET paths and let the
+      # trusted wrapper create the commit before the existing post-flight audit.
+      if [ "$EXIT_CODE" -eq 0 ] && { [ "$CODEX_APPROVAL_MODE" = "auto" ] || [ "$CODEX_APPROVAL_MODE" = "approve-for-me" ]; }; then
+        if ! grep -q '\[SCOPE_BLOCKED\]\|\[NEED_GUIDANCE\]\|\[NEED_DECOMPOSITION\]\|\[BLOCKED\]' "$RESULT_OUTPUT_TMP" 2>/dev/null; then
+          IFS=',' read -ra CODEX_TARGETS <<< "$TASK_TARGET"
+          for target_path in "${CODEX_TARGETS[@]}"; do
+            target_path=$(echo "$target_path" | xargs)
+            if [ -n "$target_path" ]; then
+              git -C "$WORK_DIR" add -A -- "$target_path" 2>/dev/null || true
+            fi
+          done
+
+          if ! git -C "$WORK_DIR" diff --cached --quiet 2>/dev/null; then
+            case "$TASK_TITLE" in
+              *"[CODE: FIX]"*) COMMIT_TYPE="fix" ;;
+              *"[CODE: REFACTOR]"*) COMMIT_TYPE="refactor" ;;
+              *"[RESEARCH]"*) COMMIT_TYPE="docs" ;;
+              *"[DIAGNOSTIC]"*) COMMIT_TYPE="test" ;;
+              *) COMMIT_TYPE="feat" ;;
+            esac
+            if ! git -C "$WORK_DIR" commit -m "$COMMIT_TYPE(worker): complete $TASK_ID" -m "Task: $TASK_ID (Level ${TASK_LEVEL:-1})
+Scope: ${TASK_TARGET:-<modified files>}
+Verification: ${TASK_VERIFY:-<worker post-flight>}
+Attempts: wrapper-managed | Confidence: pending audit"; then
+              echo "[WORKER] Failed to commit Codex changes for $TASK_ID."
+              EXIT_CODE=1
+            fi
+          fi
+        fi
+      fi
+    fi
   else
     echo "[WORKER] Launching $AI_CLI (WorkDir: $WORK_DIR)..."
     (
@@ -893,7 +993,7 @@ BLOCK_EOF
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] [FAILED] $TASK_TITLE [TIMEOUT]" >> "$TASKS_DONE_FILE"
     update_status "BLOCKED" "$TASK_TITLE (TIMEOUT)" "$DURATION" "$CURRENT_IDX" "$TOTAL_COUNT" "$((REMAINING_COUNT - 1))" "${PERCENT_START}%" "$BAR_START"
 
-  elif grep -q '\[SCOPE_BLOCKED\]' "$CMD_OUTPUT_TMP" 2>/dev/null; then
+  elif grep -q '\[SCOPE_BLOCKED\]' "$RESULT_OUTPUT_TMP" 2>/dev/null; then
     # Worker honestly reported downstream scope blocked
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] 🚧 [SCOPE BLOCKED] Worker honestly stopped at unannounced downstream boundaries."
     isolate_and_rollback_dirty_tree "$TASK_ID"
@@ -912,7 +1012,7 @@ BLOCK_EOF
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] [SCOPE_BLOCKED] $TASK_TITLE" >> "$TASKS_DONE_FILE"
     update_status "SCOPE_BLOCKED" "$TASK_TITLE" "$DURATION" "$CURRENT_IDX" "$TOTAL_COUNT" "$((REMAINING_COUNT - 1))" "${PERCENT_START}%" "$BAR_START"
 
-  elif grep -q '\[NEED_GUIDANCE\]\|\[NEED_DECOMPOSITION\]' "$CMD_OUTPUT_TMP" 2>/dev/null; then
+  elif grep -q '\[NEED_GUIDANCE\]\|\[NEED_DECOMPOSITION\]' "$RESULT_OUTPUT_TMP" 2>/dev/null; then
     # Worker honestly requested guidance or decomposition
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] ✋ [AWAITING GUIDANCE] Worker honestly requested manager guidance."
     isolate_and_rollback_dirty_tree "$TASK_ID"
@@ -1102,7 +1202,7 @@ BLOCK_EOF
       update_status "BLOCKED" "$TASK_TITLE (GUARD VIOLATION)" "$DURATION" "$CURRENT_IDX" "$TOTAL_COUNT" "$((REMAINING_COUNT - 1))" "${PERCENT_START}%" "$BAR_START"
     else
       # Extract actual attempts count from output or progress.log
-      DETECTED_ATTEMPTS=$(grep -oE 'Attempts:[[:space:]]*[0-9]+' "$CMD_OUTPUT_TMP" 2>/dev/null | head -n 1 | awk '{print $2}' || true)
+      DETECTED_ATTEMPTS=$(grep -oE 'Attempts:[[:space:]]*[0-9]+' "$RESULT_OUTPUT_TMP" 2>/dev/null | head -n 1 | awk '{print $2}' || true)
       [ -z "$DETECTED_ATTEMPTS" ] && DETECTED_ATTEMPTS=$(grep -oE 'Attempts:[[:space:]]*[0-9]+' "$PROGRESS_FILE" 2>/dev/null | head -n 1 | awk '{print $2}' || true)
       [ -z "$DETECTED_ATTEMPTS" ] && DETECTED_ATTEMPTS="1"
 
@@ -1127,5 +1227,6 @@ BLOCK_EOF
   fi
 
   rm -f "$CMD_OUTPUT_TMP"
+  [ -n "$CODEX_LAST_MESSAGE_TMP" ] && rm -f "$CODEX_LAST_MESSAGE_TMP"
   sleep "$POLL_INTERVAL"
 done

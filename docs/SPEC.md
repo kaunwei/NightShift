@@ -40,7 +40,7 @@ The framework physically separates interactive architectural reasoning from unat
 │          Terminal B: Background Worker Daemon (worker.sh)              │
 │  • Zero-argument background daemon (sources .worker.env).              │
 │  • Evaluates WORKER_ISOLATION toggle (Mode 1: Worktree / Mode 2: Root) │
-│  • Headless stateless CLI per task (agy --mode accept-edits).          │
+│  • Headless stateless CLI per task (Codex or agy, selected via env).   │
 │  • Enforces universal-build-verify.md (100% test pass).                │
 │  • Max 3 automated repair attempts -> clean rollback on block.         │
 │  • Unified Conventional Commit & prepends <=15 lines to progress.log.  │
