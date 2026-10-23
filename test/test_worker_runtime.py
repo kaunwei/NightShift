@@ -112,6 +112,155 @@ class PollContractTests(unittest.TestCase):
             self.assertEqual(tasks.read_text(), "# queued\n")
 
 
+class WorkerScoreTests(unittest.TestCase):
+    def test_new_worker_starts_at_five_and_maps_to_coarsest_task_level(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "score.json"
+            result = runtime("score-read", "--state", state)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            data = json.loads(result.stdout)
+            self.assertEqual(data["score"], 5)
+            self.assertEqual(data["task_level"], 1)
+            self.assertTrue(state.exists())
+
+    def test_only_five_accepted_real_tasks_increase_score(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "score.json"
+            state.write_text(json.dumps({"version": 1, "score": 3,
+                                         "success_window": [], "failures": {}}))
+            for index in range(4):
+                result = runtime("score-record", "--state", state,
+                                 "--task-id", f"TASK-{index}", "--result", "accept")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(result.stdout)["score"], 3)
+            result = runtime("score-record", "--state", state,
+                             "--task-id", "TASK-4", "--result", "accept")
+            self.assertEqual(json.loads(result.stdout)["score"], 4)
+            self.assertEqual(json.loads(result.stdout)["successes_in_window"], 0)
+
+    def test_reject_resets_success_window_while_no_fault_is_excluded(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "score.json"
+            state.write_text(json.dumps({"version": 1, "score": 4,
+                                         "success_window": ["A", "B"], "failures": {}}))
+            result = runtime("score-record", "--state", state, "--task-id", "C",
+                             "--result", "no_fault", "--evidence", "progress.log#L1")
+            persisted = json.loads(state.read_text())
+            self.assertEqual(persisted["success_window"], ["A", "B"])
+            self.assertEqual(persisted["feedback"][-1]["evidence"], "progress.log#L1")
+            result = runtime("score-record", "--state", state, "--task-id", "D",
+                             "--result", "reject", "--evidence", "tasks.done#L2")
+            self.assertEqual(json.loads(state.read_text())["success_window"], [])
+
+    def test_concurrent_feedback_updates_do_not_lose_score_records(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "score.json"
+            state.write_text(json.dumps({"version": 1, "score": 3,
+                                         "success_window": [], "failures": {}}))
+            with ThreadPoolExecutor(max_workers=5) as pool:
+                results = list(pool.map(
+                    lambda index: runtime("score-record", "--state", state,
+                                           "--task-id", f"TASK-{index}",
+                                           "--result", "accept"), range(5)))
+            self.assertTrue(all(result.returncode == 0 for result in results))
+            persisted = json.loads(state.read_text())
+            self.assertEqual(persisted["score"], 4)
+            self.assertEqual(len(persisted["feedback"]), 5)
+
+    def test_hard_failures_lower_original_task_score_on_second_and_third_attempt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "score.json"
+            for expected in (5, 4, 3):
+                result = runtime("score-record", "--state", state,
+                                 "--task-id", "TASK-X", "--result", "hard_failure")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(result.stdout)["score"], expected)
+            result = runtime("score-record", "--state", state,
+                             "--task-id", "TASK-X", "--result", "hard_failure")
+            self.assertEqual(json.loads(result.stdout)["score"], 3)
+            result = runtime("score-record", "--state", state,
+                             "--task-id", "TASK-X", "--result", "success")
+            self.assertEqual(json.loads(state.read_text())["failures"], {})
+
+    def test_ghost_closeout_prompt_forbids_implementation_and_names_original_task(self):
+        with tempfile.TemporaryDirectory() as directory:
+            prompt = Path(directory) / "closeout.txt"
+            result = runtime("ghost-prompt", "--output", prompt,
+                             "--task-id", "TASK-7", "--verify", "python3 -m unittest")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            text = prompt.read_text()
+            self.assertIn("TASK-7", text)
+            self.assertIn("MUST NOT modify", text)
+            self.assertIn("python3 -m unittest", text)
+
+    def test_codex_jsonl_command_execution_events_are_counted_against_budget(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            prompt, output, last_message = root / "prompt", root / "output", root / "message"
+            prompt.write_text("task")
+            executable = root / "codex"
+            executable.write_text(
+                "#!/bin/sh\n"
+                "while [ \"$#\" -gt 0 ]; do\n"
+                "  if [ \"$1\" = --output-last-message ]; then shift; printf 'done\\n' > \"$1\"; fi\n"
+                "  shift\n"
+                "done\n"
+                "printf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"type\":\"command_execution\"}}'\n"
+            )
+            executable.chmod(0o755)
+            result = runtime("task-cli", "--provider", "codex", "--executable", executable,
+                             "--work-dir", root, "--prompt-file", prompt, "--output-file", output,
+                             "--result-file", last_message, "--timeout", "10", "--model", "gpt-6-luna",
+                             "--effort", "none", "--approval-mode", "auto", "--sandbox", "workspace-write",
+                             "--ephemeral", "1", "--additional-dirs", "", "--step-budget", "0",
+                             "--worker-port", "3001", "--target", "", "--task-id", "TASK-C", "--title", "test",
+                             "--level", "1", "--verify", "", "--base", "HEAD", "--progress-file", "progress.log")
+            self.assertEqual(result.returncode, 125)
+
+    def test_codex_hands_closeout_marker_to_ghost_without_editing_code(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "project"
+            root.mkdir()
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            def git(*args):
+                return subprocess.run(["git", "-C", str(root), *args], check=True,
+                                      capture_output=True, text=True).stdout.strip()
+            git("config", "user.name", "Codex Test")
+            git("config", "user.email", "codex@example.invalid")
+            (root / "output.txt").write_text("before\n")
+            git("add", "output.txt")
+            git("commit", "-qm", "baseline")
+            base = git("rev-parse", "HEAD")
+            prompt = Path(directory) / "prompt.txt"
+            prompt.write_text("implement")
+            output, last_message = Path(directory) / "cli.log", Path(directory) / "message.txt"
+            executable = root / "codex"
+            executable.write_text(
+                "#!/bin/sh\n"
+                "last='' prev=''\n"
+                "for arg in \"$@\"; do if [ \"$prev\" = --output-last-message ]; then last=\"$arg\"; fi; prev=\"$arg\"; done\n"
+                "case \"$*\" in\n"
+                "  *'CLOSEOUT ONLY'*) printf 'verified closeout\\n' > \"$last\"; git add output.txt; git commit -qm closeout ;;\n"
+                "  *) printf '[CLOSEOUT_REQUIRED]\\n' > \"$last\"; printf 'after\\n' > output.txt ;;\n"
+                "esac\n"
+                "printf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"type\":\"command_execution\"}}'\n"
+            )
+            executable.chmod(0o755)
+            git("add", "codex")
+            git("commit", "-qm", "add fake cli")
+            base = git("rev-parse", "HEAD")
+            result = runtime("task-cli", "--provider", "codex", "--executable", executable,
+                             "--work-dir", root, "--prompt-file", prompt, "--output-file", output,
+                             "--result-file", last_message, "--timeout", "10", "--model", "gpt-6-luna",
+                             "--effort", "none", "--approval-mode", "auto", "--target", "output.txt",
+                             "--task-id", "TASK-CLOSE", "--title", "[CODE: FIX] change output",
+                             "--base", base, "--step-budget", "2")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(git("log", "-1", "--pretty=%s"), "closeout")
+            self.assertEqual(git("show", "HEAD:output.txt"), "after")
+            self.assertEqual(git("status", "--porcelain"), "")
+
+
 class StatusContractTests(unittest.TestCase):
     def test_status_is_valid_json_for_quoted_task_and_path(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -133,6 +282,7 @@ class StatusContractTests(unittest.TestCase):
             display = runtime("status-display", status)
             self.assertEqual(display.returncode, 0, display.stderr)
             self.assertIn(task, display.stdout)
+            self.assertIn("Worker Score   : 5/5", display.stdout)
 
     def test_progress_prepend_keeps_new_record_before_existing_history(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -232,9 +382,10 @@ class CliContractTests(unittest.TestCase):
             self.assertEqual(git("show", "HEAD:output.txt"), "after")
             self.assertEqual(git("status", "--porcelain"), "")
 
-    def test_agy_task_cli_resumes_dirty_uncommitted_work_with_remaining_budget(self):
+    def test_agy_task_cli_uses_one_restricted_closeout_for_dirty_work(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory) / "project"
+            root.mkdir()
             subprocess.run(["git", "init", "-q", str(root)], check=True)
             def git(*args):
                 return subprocess.run(["git", "-C", str(root), *args], check=True,
@@ -245,9 +396,9 @@ class CliContractTests(unittest.TestCase):
             git("add", "output.txt")
             git("commit", "-qm", "baseline")
             base = git("rev-parse", "HEAD")
-            prompt = root / "prompt.txt"
+            prompt = Path(directory) / "prompt.txt"
             prompt.write_text("perform the task")
-            output, calls = root / "cli.log", root / "calls.log"
+            output, calls = Path(directory) / "cli.log", Path(directory) / "calls.log"
             executable = root / "agy"
             executable.write_text(
                 "#!/bin/sh\n"
@@ -268,10 +419,13 @@ class CliContractTests(unittest.TestCase):
             )
 
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(len(calls.read_text().splitlines()), 2)
-            self.assertTrue(calls.read_text().splitlines()[0].startswith("2 "))
-            self.assertTrue(calls.read_text().splitlines()[1].startswith("1 "))
-            self.assertIn("Continue TASK-2", calls.read_text())
+            call_lines = [line for line in calls.read_text().splitlines()
+                          if line.startswith(("2 -p", "1 -p"))]
+            self.assertEqual(len(call_lines), 2)
+            self.assertTrue(call_lines[0].startswith("2 "))
+            self.assertTrue(call_lines[1].startswith("1 "))
+            self.assertIn("CLOSEOUT ONLY for original task TASK-2", calls.read_text())
+            self.assertIn("MUST NOT modify source code", calls.read_text())
             self.assertEqual(output.read_text().count("[EXEC] step"), 2)
 
     def test_task_cli_converts_provider_print_timeout_to_timeout_exit(self):
@@ -608,7 +762,8 @@ class WorkerIntegrationTests(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertEqual(calls.read_text().splitlines(), ["gpt-6-luna", "gpt-6.1-sol"])
-            self.assertIn("[DONE]", (root / "tasks.done").read_text())
+            self.assertIn("[DONE]", (root / "tasks.done").read_text(),
+                          (root / "progress.log").read_text())
             self.assertEqual((root / "output.txt").read_text(), "hello\n")
             state = json.loads((root / ".worker-agent-state.default.json").read_text())
             self.assertEqual(state["exhausted"]["primary"]["reason"], "quota")
@@ -799,6 +954,7 @@ class WorkerIntegrationTests(unittest.TestCase):
             shutil.copy2(ROOT / "scripts/worker_runtime.py", root / "scripts/worker_runtime.py")
             (root / ".worker.env").write_text(
                 "AI_CLI=codex\nWORKER_ISOLATION=0\nRUN_ONCE=1\nPOLL_INTERVAL=0\nTASK_TIMEOUT=0.5\n"
+                "WORKER_SCORE_FILE=.worker-score-test.json\n"
             )
             (root / "output.txt").write_text("baseline\n")
             (root / "tasks.txt").write_text(
@@ -832,6 +988,9 @@ class WorkerIntegrationTests(unittest.TestCase):
             self.assertEqual(len(backups), 1)
             self.assertIn("partial", backups[0].read_text())
             self.assertFalse((root / ".worker.pid").exists())
+            score = json.loads((root / ".worker-score-test.json").read_text())
+            self.assertEqual(score["failures"]["TASK-T"], 1)
+            self.assertEqual(score["score"], 5)
 
     def test_codex_task_keeps_queue_status_commit_and_guard_contract(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -924,6 +1083,8 @@ class InstallerIntegrationTests(unittest.TestCase):
             self.assertTrue((target / "test/nightshift_worker/README.md").is_file())
             self.assertTrue((target / ".worker.env").is_file())
             self.assertIn(".worker-agent-state*.json", (target / ".gitignore").read_text())
+            self.assertIn(".worker-score*.json", (target / ".gitignore").read_text())
+            self.assertIn(".worker-score*.json.lock/", (target / ".gitignore").read_text())
             (target / ".worker.env").write_text("AI_CLI=agy\nCUSTOM_SETTING=preserve\n")
             update = subprocess.run(["bash", str(ROOT / "install.sh"), str(target)],
                                     cwd=ROOT, capture_output=True, text=True, timeout=30)

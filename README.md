@@ -67,6 +67,7 @@ A plug-and-play, dual-terminal AI development framework combining **Matt Pocock'
 - **`install.sh` / `update.sh`**: Unified non-destructive installer and updater (deploys scripts/skills, preserves user state, and prevents duplicate `.gitignore` entries).
 - **`worker.sh` + `scripts/worker_runtime.py`**: The Bash entry point only loads `.worker.env`, validates Python, and transfers control. Python 3 owns daemon lifecycle, polling, task execution (Codex/agy/generic CLI), timeout and continuation handling, Git and mechanical audits, rollback, report archiving, status, worktree isolation, and preview publishing.
 - **`.worker.env.example`**: Configuration template (model selection, effort level, timeout, `WORKER_ISOLATION`, `ADDITIONAL_DIRS`).
+- **Shared Worker score**: Runtime state starts at 5 stars, records compact Planner acceptance evidence, lowers after repeated same-task timeout/action-budget failures, and exposes the score/recommended task level in `scripts/status.sh`. Planner reads and records it through `python3 scripts/worker_runtime.py score-read ...` and `score-record ...`.
 
 The active low-cost test configuration is `AI_CLI=codex`, `AI_MODEL=gpt-6-luna`, and `AI_EFFORT=none`. The retained `test/` suite uses a fake Codex executable, so routine regression tests consume no model tokens:
 

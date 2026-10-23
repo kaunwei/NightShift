@@ -55,6 +55,136 @@ def prepend_progress(path, entry):
     atomic_write(path, f"{entry}\n{history}")
 
 
+def read_score_state(path):
+    path = Path(path)
+    if not path.exists():
+        state = {"version": 1, "score": 5, "success_window": [], "failures": {}, "feedback": []}
+        atomic_write(path, json.dumps(state, indent=2) + "\n")
+        return state
+    state = json.loads(path.read_text(encoding="utf-8"))
+    if (state.get("version") != 1 or not isinstance(state.get("score"), int)
+            or not 1 <= state["score"] <= 5
+            or not isinstance(state.get("success_window"), list)
+            or not isinstance(state.get("failures"), dict)):
+        raise ValueError(f"invalid worker score state file: {path}")
+    state.setdefault("feedback", [])
+    return state
+
+
+def score_task_level(score):
+    return 1 if score == 5 else 2 if score >= 3 else 3
+
+
+def score_summary(state):
+    return {"score": state["score"], "task_level": score_task_level(state["score"]),
+            "successes_in_window": len(state["success_window"])}
+
+
+def _record_score_result(path, task_id, result, evidence=""):
+    """Update shared Worker score from planner feedback or hard runtime evidence."""
+    if result not in ("accept", "reject", "no_fault", "hard_failure", "success"):
+        raise ValueError(f"unsupported score result: {result}")
+    state = read_score_state(path)
+    failures = state["failures"]
+    if result == "hard_failure":
+        count = int(failures.get(task_id, 0)) + 1
+        failures[task_id] = count
+        if count in (2, 3):
+            state["score"] = max(1, state["score"] - 1)
+    elif result == "success":
+        failures.pop(task_id, None)
+    elif result == "accept":
+        failures.pop(task_id, None)
+        state["success_window"].append(task_id)
+        if len(state["success_window"]) >= 5:
+            if all(state["success_window"][-5:]):
+                state["score"] = min(5, state["score"] + 1)
+            state["success_window"] = []
+    elif result == "reject":
+        state["success_window"] = []
+    # no_fault is deliberately excluded from both scoring windows and penalties.
+    state["feedback"].append({"task_id": task_id, "result": result,
+                              "evidence": evidence, "at": datetime.now(timezone.utc).isoformat()})
+    state["feedback"] = state["feedback"][-20:]
+    atomic_write(path, json.dumps(state, ensure_ascii=False, indent=2) + "\n")
+    return {**score_summary(state), "task_id": task_id, "result": result}
+
+
+def record_score_result(path, task_id, result, evidence=""):
+    path = Path(path)
+    lock = Path(f"{path}.lock")
+    for _ in range(100):
+        try:
+            lock.mkdir()
+            break
+        except FileExistsError:
+            time.sleep(0.05)
+    else:
+        raise TimeoutError(f"score state lock remains held: {lock}")
+    try:
+        return _record_score_result(path, task_id, result, evidence)
+    finally:
+        lock.rmdir()
+
+
+def build_ghost_closeout_prompt(task_id, verify, progress_file):
+    return f"""CLOSEOUT ONLY for original task {task_id}. You are a verification and Git-finalization helper, not an implementation worker.
+
+You MUST NOT modify source code, tests, documentation, configuration, or any other implementation files. Do not fix, refactor, create, delete, or rewrite files. Do not issue commands that alter project contents. If anything still requires implementation, stop immediately and report [CLOSEOUT_INCOMPLETE] with the reason; do not try a workaround.
+
+Allowed: inspect git status/diff/log, run the required verification command ({verify or 'the task verification command'}), and perform only the Git closeout explicitly allowed by the task. If verification passes, commit only the existing changes; never alter file contents. Do not commit if verification fails or if a code change would be needed. Report a concise evidence-based result for {task_id}. Do not create or count a separate task. The script attributes your outcome to {task_id} and enforces file-change checks.
+Progress log: {progress_file}
+"""
+
+
+def workspace_snapshot(work_dir, base):
+    changed = subprocess.run(["git", "-C", work_dir, "diff", "--name-only", "-z", base],
+                             capture_output=True, check=False).stdout
+    untracked = subprocess.run(["git", "-C", work_dir, "ls-files", "--others", "--exclude-standard", "-z"],
+                               capture_output=True, check=False).stdout
+    paths = {os.fsdecode(item) for item in changed.split(b"\0") + untracked.split(b"\0") if item}
+    snapshot = {}
+    for name in paths:
+        path = Path(work_dir) / name
+        if path.is_symlink():
+            snapshot[name] = ("symlink", os.readlink(path), path.lstat().st_mode & 0o777)
+        elif path.is_file():
+            snapshot[name] = ("file", path.read_bytes(), path.stat().st_mode & 0o777)
+        else:
+            snapshot[name] = None
+    return snapshot
+
+
+def run_codex_closeout(args, environment, output, actions_used):
+    remaining = args.step_budget - actions_used
+    if remaining <= 0:
+        return 125
+    before = workspace_snapshot(args.work_dir, args.base)
+    original_message = Path(args.result_file) if args.result_file else Path(args.output_file)
+    closeout_message = str(original_message.with_name("closeout-message.txt"))
+    prompt = build_ghost_closeout_prompt(args.task_id, args.verify, args.progress_file)
+    codex = argparse.Namespace(
+        last_message=closeout_message, model=args.model, effort=args.effort,
+        approval_mode=args.approval_mode, sandbox=args.sandbox,
+        ephemeral=args.ephemeral, additional_dirs=args.additional_dirs,
+    )
+    environment["MAX_STEPS"] = str(remaining)
+    command = [args.executable, *codex_args(codex), prompt]
+    code = stream_with_timeout(args.timeout, command, args.work_dir,
+                               environment, output, append=True)
+    after = workspace_snapshot(args.work_dir, args.base)
+    if before != after:
+        print("[WORKER] Ghost closeout changed implementation files; rejecting closeout.", file=sys.stderr)
+        return 126
+    output_text = output.read_text(encoding="utf-8", errors="replace") if output.exists() else ""
+    if count_codex_actions(output_text) > args.step_budget:
+        return 125
+    if code == 0 and closeout_message and Path(closeout_message).is_file():
+        if "[CLOSEOUT_INCOMPLETE]" in Path(closeout_message).read_text(encoding="utf-8", errors="replace"):
+            return 126
+    return code
+
+
 def pop_task(queue_path):
     """Remove one task under the same directory lock used by reorder_queue.sh."""
     queue = Path(queue_path)
@@ -265,6 +395,8 @@ def write_status(args):
         "model": args.model,
         "cli": args.cli,
         "timeout_seconds": args.timeout,
+        "worker_score": getattr(args, "worker_score", 5),
+        "recommended_task_level": score_task_level(getattr(args, "worker_score", 5)),
         "last_heartbeat": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
     atomic_write(args.path, json.dumps(state, ensure_ascii=False, indent=2) + "\n")
@@ -285,6 +417,7 @@ def display_status(path):
     print(f"Current Task   : {data.get('current_task') or 'None'} "
           f"({data.get('elapsed_seconds', 0)}s elapsed)")
     print(f"Progress       : {data.get('progress', {}).get('bar', '[---]')}")
+    print(f"Worker Score   : {data.get('worker_score', 5)}/5 | Recommended task level: L{data.get('recommended_task_level', 1)}")
     if data.get("isolation"):
         print(f"Isolation Mode : ENABLED (Sandboxed in {data.get('work_dir', '-')})")
     else:
@@ -293,7 +426,7 @@ def display_status(path):
 
 def codex_args(args):
     """Build the Codex adapter invocation without shell splitting or eval."""
-    command = ["exec", "--color", "never", "--output-last-message", args.last_message]
+    command = ["exec", "--color", "never", "--json", "--output-last-message", args.last_message]
     if args.ephemeral.lower() in ("1", "true"):
         command.append("--ephemeral")
     if args.model:
@@ -348,6 +481,21 @@ def agy_args(args):
 def count_agy_steps(output):
     pattern = re.compile(r"^\[EXEC\]|Tool Call|edit_file|write_file|run_command|read_file")
     return sum(bool(pattern.search(line)) for line in output.splitlines())
+
+
+def count_codex_actions(output):
+    """Count observable Codex command executions from its JSONL event stream."""
+    count = 0
+    for line in output.splitlines():
+        try:
+            event = json.loads(line)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        item = event.get("item", {}) if isinstance(event, dict) else {}
+        if (isinstance(item, dict) and item.get("type") == "command_execution"
+                and event.get("type") == "item.completed"):
+            count += 1
+    return count
 
 
 def run_with_timeout(seconds, command):
@@ -481,32 +629,41 @@ def execute_task_cli(args):
         command = [args.executable, *codex_args(codex), prompt]
         result_code = stream_with_timeout(args.timeout, command, args.work_dir,
                                           environment, output)
+        codex_output = output.read_text(encoding="utf-8", errors="replace")
+        actions_used = count_codex_actions(codex_output)
+        if actions_used > args.step_budget:
+            print(f"[WORKER] Codex action budget exceeded ({actions_used}/{args.step_budget}).")
+            return 125
         result_path = last_message if last_message and last_message.is_file() and last_message.stat().st_size else output
         if (result_code == 0 and args.approval_mode in ("auto", "approve-for-me")
                 and not re.search(r"\[(?:SCOPE_BLOCKED|NEED_GUIDANCE|NEED_DECOMPOSITION|BLOCKED)\]",
                                   result_path.read_text(encoding="utf-8", errors="replace"))):
-            targets = [item.strip() for item in args.target.split(",") if item.strip()]
-            for target in targets:
-                subprocess.run(["git", "-C", args.work_dir, "add", "-A", "--", target],
-                               check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            staged = subprocess.run(["git", "-C", args.work_dir, "diff", "--cached", "--quiet"],
-                                    check=False)
-            if staged.returncode:
-                title = args.title
-                commit_type = ("fix" if "[CODE: FIX]" in title else
-                               "refactor" if "[CODE: REFACTOR]" in title else
-                               "docs" if "[RESEARCH]" in title else
-                               "test" if "[DIAGNOSTIC]" in title else "feat")
-                commit = subprocess.run([
-                    "git", "-C", args.work_dir, "commit", "-m",
-                    f"{commit_type}(worker): complete {args.task_id}", "-m",
-                    f"Task: {args.task_id} (Level {args.level})\nScope: {args.target or '<modified files>'}\n"
-                    f"Verification: {args.verify or '<worker post-flight>'}\n"
-                    "Attempts: wrapper-managed | Confidence: pending audit",
-                ], check=False)
-                if commit.returncode:
-                    print(f"[WORKER] Failed to commit Codex changes for {args.task_id}.", file=sys.stderr)
-                    result_code = 1
+            closeout_requested = "[CLOSEOUT_REQUIRED]" in result_path.read_text(encoding="utf-8", errors="replace")
+            if not closeout_requested:
+                targets = [item.strip() for item in args.target.split(",") if item.strip()]
+                for target in targets:
+                    subprocess.run(["git", "-C", args.work_dir, "add", "-A", "--", target],
+                                   check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                staged = subprocess.run(["git", "-C", args.work_dir, "diff", "--cached", "--quiet"],
+                                        check=False)
+                if staged.returncode:
+                    title = args.title
+                    commit_type = ("fix" if "[CODE: FIX]" in title else
+                                   "refactor" if "[CODE: REFACTOR]" in title else
+                                   "docs" if "[RESEARCH]" in title else
+                                   "test" if "[DIAGNOSTIC]" in title else "feat")
+                    commit = subprocess.run([
+                        "git", "-C", args.work_dir, "commit", "-m",
+                        f"{commit_type}(worker): complete {args.task_id}", "-m",
+                        f"Task: {args.task_id} (Level {args.level})\nScope: {args.target or '<modified files>'}\n"
+                        f"Verification: {args.verify or '<worker post-flight>'}\n"
+                        "Attempts: wrapper-managed | Confidence: pending audit",
+                    ], check=False)
+                    if commit.returncode:
+                        print(f"[WORKER] Failed to commit Codex changes for {args.task_id}.", file=sys.stderr)
+                        result_code = 1
+            if result_code == 0 and closeout_requested:
+                result_code = run_codex_closeout(args, environment, output, actions_used)
     elif args.provider == "agy":
         agy = argparse.Namespace(
             sandbox=args.use_sandbox, mode=args.agy_mode, model=args.model,
@@ -519,8 +676,10 @@ def execute_task_cli(args):
                                           environment, output)
         text = output.read_text(encoding="utf-8", errors="replace")
         steps_used = count_agy_steps(text)
-        steps_used = max(steps_used, 17 if not steps_used else 0)
-        while result_code == 0 and steps_used < args.step_budget:
+        if result_code == 0 and steps_used >= args.step_budget:
+            print(f"[WORKER] AgY action budget exhausted ({steps_used}/{args.step_budget}).")
+            return 125
+        if result_code == 0 and steps_used < args.step_budget:
             head = subprocess.run(["git", "-C", args.work_dir, "rev-parse", "HEAD"],
                                   capture_output=True, text=True, check=False).stdout.strip()
             dirty = subprocess.run(["git", "-C", args.work_dir, "status", "--porcelain"],
@@ -528,23 +687,30 @@ def execute_task_cli(args):
             dirty = "\n".join(line for line in dirty.splitlines()
                               if not re.search(r"progress\.log|tasks\.txt|tasks\.done|worker\..*\.status|\.preview|\.worker\..*|\.reports/|\.reports", line))
             if head != args.base or not dirty:
-                break
+                return result_code
             remaining = args.step_budget - steps_used
-            print(f"[WORKER] ⏩ Step budget remaining ({steps_used}/{args.step_budget} used; {remaining} left). Resuming in-progress changes...")
+            print(f"[WORKER] Starting one restricted ghost closeout ({steps_used}/{args.step_budget} actions used).")
+            # The ghost may verify and commit existing work, but the diff against
+            # the original base must remain byte-for-byte unchanged.
+            before_snapshot = workspace_snapshot(args.work_dir, args.base)
+            prompt = build_ghost_closeout_prompt(args.task_id, args.verify, args.progress_file)
             environment["MAX_STEPS"] = str(remaining)
             environment["AGY_MAX_STEPS"] = str(remaining)
             continuation = argparse.Namespace(**vars(agy))
             continuation.step_budget = remaining
-            continue_prompt = (f"Continue {args.task_id} from the current modified working tree ({remaining} steps remaining in budget of {args.step_budget}). "
-                               f"Inspect git diff, complete any remaining edits, run verification ({args.verify or 'build and test'}), prepend {args.progress_file}, and commit.")
-            command = [args.executable, "-p", continue_prompt,
-                       "--dangerously-skip-permissions", *agy_args(continuation)]
-            before = count_agy_steps(text)
+            command = [args.executable, "-p", prompt, "--dangerously-skip-permissions", *agy_args(continuation)]
             result_code = stream_with_timeout(args.timeout, command, args.work_dir,
                                               environment, output, append=True)
             text = output.read_text(encoding="utf-8", errors="replace")
-            added = count_agy_steps(text) - before
-            steps_used += max(added, 17 if added < 1 else 0)
+            after_snapshot = workspace_snapshot(args.work_dir, args.base)
+            if before_snapshot != after_snapshot:
+                print("[WORKER] Ghost closeout changed implementation files; rejecting closeout.", file=sys.stderr)
+                return 126
+            added_steps = count_agy_steps(text) - steps_used
+            if added_steps > remaining:
+                return 125
+            if "[CLOSEOUT_INCOMPLETE]" in text:
+                return 126
     else:
         result_code = stream_with_timeout(args.timeout, [args.executable, prompt],
                                           args.work_dir, environment, output)
@@ -593,6 +759,7 @@ Task: {task_id} (Level {level or '1'})
 Scope: {target or '<modified files>'}
 Verification: {verify or '<test command>'} (100% PASS)
 Attempts: <attempts_count> | Confidence: <HIGH|MED|LOW>"
+6. CLOSEOUT HANDOFF: If implementation is complete and only verification/Git closeout remains, stop implementation and emit [CLOSEOUT_REQUIRED]. The script may start one restricted ghost closeout; it cannot perform implementation work.
 """
 
 
@@ -662,6 +829,7 @@ def worker_daemon(root):
     safe_worker_id = re.sub(r"[^A-Za-z0-9_.-]", "_", worker_id)
     agent_state_path = resolve(
         "AI_AGENT_STATE_FILE", f".worker-agent-state.{safe_worker_id}.json")
+    score_state_path = resolve("WORKER_SCORE_FILE", ".worker-score.json")
     timeout_value = float(config.get("TASK_TIMEOUT", "1800"))
     timeout = int(timeout_value) if timeout_value.is_integer() else timeout_value
     step_base = int(config.get("STEP_BASE", "12"))
@@ -707,6 +875,7 @@ def worker_daemon(root):
             current_index=int(current), total_tasks=int(total), remaining=int(remaining),
             percentage=percentage, bar=bar or progress_bar(int(current), int(total)),
             pid=pid, model=ai_model, cli=ai_cli, timeout=timeout,
+            worker_score=read_score_state(score_state_path)["score"],
         )
         write_status(status_args)
 
@@ -845,6 +1014,8 @@ def worker_daemon(root):
 
                 outcome = ("quota_exhausted" if quota_exhausted else
                            "timeout" if exit_code == 124 else
+                           "step_budget" if exit_code == 125 else
+                           "closeout_failed" if exit_code == 126 else
                            "scope" if "[SCOPE_BLOCKED]" in result_text else
                            "guidance" if re.search(r"\[(?:NEED_GUIDANCE|NEED_DECOMPOSITION)\]", result_text) else
                            "error" if exit_code else "success")
@@ -863,6 +1034,8 @@ def worker_daemon(root):
                     break
                 elif outcome == "timeout":
                     print(f"[{stamp_now}] [TIMEOUT] Task exceeded {timeout}s limit!")
+                    record_score_result(score_state_path, task_id, "hard_failure",
+                                        f"timeout after {timeout}s")
                     rollback_failed_task(root, work_dir, task_id,
                                          (tasks_file, done_file, progress_file))
                     summary = ("=" * 80 + f"\n[BLOCKED] {task_id}: Timeout Exceeded ({timeout}s)\n"
@@ -872,6 +1045,18 @@ def worker_daemon(root):
                     append_line(done_file, f"[{stamp_now}] [FAILED] {task} [TIMEOUT]")
                     update_status("BLOCKED", f"{task} (TIMEOUT)", duration, current, total,
                                   max(0, remaining - 1), percent, bar)
+                elif outcome in ("step_budget", "closeout_failed"):
+                    reason = ("Codex/AgY action budget exhausted" if outcome == "step_budget"
+                              else "Restricted ghost closeout failed or attempted implementation")
+                    print(f"[{stamp_now}] [HARD FAILURE] {task_id}: {reason}")
+                    record_score_result(score_state_path, task_id, "hard_failure", reason)
+                    rollback_failed_task(root, work_dir, task_id,
+                                         (tasks_file, done_file, progress_file))
+                    prepend_progress(progress_file,
+                                     f"[HARD_FAILURE] {task_id}: {reason}; score now {read_score_state(score_state_path)['score']}/5")
+                    append_line(done_file, f"[{stamp_now}] [FAILED] {task} [{outcome.upper()}]")
+                    update_status("BLOCKED", f"{task} ({outcome.upper()})", duration, current,
+                                  total, max(0, remaining - 1), percent, bar)
                 elif outcome == "scope":
                     print(f"[{stamp_now}] 🚧 [SCOPE BLOCKED] Worker honestly stopped at unannounced downstream boundaries.")
                     rollback_failed_task(root, work_dir, task_id, (tasks_file, done_file, progress_file))
@@ -923,6 +1108,7 @@ def worker_daemon(root):
                         update_status("BLOCKED", f"{task} (GUARD VIOLATION)", duration,
                                       current, total, max(0, remaining - 1), percent, bar)
                     else:
+                        record_score_result(score_state_path, task_id, "success")
                         attempts_match = re.search(r"Attempts:\s*(\d+)", result_text)
                         if not attempts_match and progress_file.exists():
                             attempts_match = re.search(r"Attempts:\s*(\d+)", progress_file.read_text(encoding="utf-8", errors="replace"))
@@ -1327,6 +1513,18 @@ def rollback_failed_task(root, work_dir, task_id, runtime_paths):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
+    score_read = commands.add_parser("score-read")
+    score_read.add_argument("--state", required=True)
+    score_record = commands.add_parser("score-record")
+    score_record.add_argument("--state", required=True)
+    score_record.add_argument("--task-id", required=True)
+    score_record.add_argument("--result", choices=("accept", "reject", "no_fault", "hard_failure", "success"), required=True)
+    score_record.add_argument("--evidence", default="")
+    ghost_prompt = commands.add_parser("ghost-prompt")
+    ghost_prompt.add_argument("--output", required=True)
+    ghost_prompt.add_argument("--task-id", required=True)
+    ghost_prompt.add_argument("--verify", default="")
+    ghost_prompt.add_argument("--progress-file", default="progress.log")
     pop = commands.add_parser("queue-pop")
     pop.add_argument("path")
     field = commands.add_parser("task-field")
@@ -1439,7 +1637,14 @@ def main(argv=None):
     daemon = commands.add_parser("daemon")
     daemon.add_argument("--root", required=True)
     args = parser.parse_args(argv)
-    if args.command == "queue-pop":
+    if args.command == "score-read":
+        state = read_score_state(args.state)
+        print(json.dumps(score_summary(state), ensure_ascii=False))
+    elif args.command == "score-record":
+        print(json.dumps(record_score_result(args.state, args.task_id, args.result, args.evidence), ensure_ascii=False))
+    elif args.command == "ghost-prompt":
+        atomic_write(args.output, build_ghost_closeout_prompt(args.task_id, args.verify, args.progress_file))
+    elif args.command == "queue-pop":
         task = pop_task(args.path)
         if task:
             print(task)

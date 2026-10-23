@@ -19,7 +19,15 @@ Resolve target paths and signatures without inspecting source files in Terminal 
 - **Cache Miss or `/explore` Invoked**: Follow [`explore`](../explore/SKILL.md) to enqueue a `[RESEARCH]` ticket to `tasks.txt` + Queue Sentinel and read the resulting `.reports/<slug>/SUMMARY.md`. If disk contradicts report/memory during execution, re-run [`explore`](../explore/SKILL.md) or trigger **Clean Pivot**.
 
 ### Block 3: Granularity Ladder & TDD Blueprints
-Follow [`tdd`](../engineering/tdd/SKILL.md) and size instruction density from `docs/agents/granularity-profile.json`:
+Before each concurrent dispatch batch, read the shared runtime score with `python3 scripts/worker_runtime.py score-read --state .worker-score.json`. New workers start at 5 stars. Use the same score for every worker model/provider; only a human changes model or manually edits the score. Select task granularity from the shared score, not from a per-subsystem profile:
+
+| Score | Queue level | Task size |
+| :---: | :---: | :--- |
+| **5⭐** | **1 (Macro)** | Largest bounded vertical slice |
+| **3–4⭐** | **2 (Meso)** | Split by module or distinct seam |
+| **1–2⭐** | **3 (Micro)** | Function-sized slice with exact observable contract |
+
+Follow [`tdd`](../engineering/tdd/SKILL.md) and use the level to set instruction density:
 
 | Level | Rating | Blueprint Density | Max Deletions |
 | :---: | :--- | :--- | :--- |
@@ -62,13 +70,10 @@ TASK-XXX | LEVEL: 1-3 | [AFTER: <id>] | TARGET: <paths> | ACTION: <logic> | VERI
    - **Fast-Track (Green Light, `<= 5s`, 0 Review Tokens)**: Audit `PASS` + `Attempts: 1 | Confidence: HIGH` -> `git merge --ff-only feature/worker-frontier`.
    - **Deep Audit (Yellow Light — Auto `code-review`)**: On audit fail, `Attempts > 1`, `Confidence < HIGH`, `[DEAD_END]`, or critical seam, run `git show --stat <commit>` and [`code-review`](../engineering/code-review/SKILL.md). Inject remedial `[CODE: FIX]` / `[CODE: REFACTOR]` to line 1 via `scripts/reorder_queue.sh`.
      * **Proof of Negative (`[DEAD_END]`)**: Require isolated passing unit test or runtime log proving module health while global symptom persists; speculative exclusion = task failure.
-4. **Scoring Rubric** (`docs/agents/granularity-profile.json`):
-   - **5⭐**: 1st attempt pass, 0 warnings -> Maintain / Promote to L1.
-   - **4⭐**: 2nd attempt pass (1 self-healed retry) -> Maintain L1/L2.
-   - **3⭐**: 3rd attempt pass (2 retries) -> Demote module to L2.
-   - **2⭐**: `[NEED_GUIDANCE]` or `[NEED_DECOMPOSITION]` -> Demote to L2/L3; see Section 3.
-   - **1⭐**: `[BLOCKED]` (3 retries failed), timeout, crash, or cheating -> Demote to L3; execute `[BLOCKED]` protocol (Section 3).
-   - *No-Fault Exemption*: `[SCOPE_BLOCKED]` (downstream compiler errors outside `TARGET:`) is boundary compliance—never deduct stars.
+4. **Shared Worker Score**: The runtime owns all score arithmetic. After reviewing a completed task, record one compact result and evidence pointer, for example `python3 scripts/worker_runtime.py score-record --state .worker-score.json --task-id TASK-001 --result accept --evidence progress.log#L1`. Use `reject` when acceptance fails and `no_fault` for an environment/scope issue; do not adjust stars yourself. Every five consecutive eligible accepts raise the shared score by one (maximum 5); a reject closes that window without raising it. No-fault results do not enter the window.
+   - Runtime-enforced timeout or exhausted action budget is hard evidence. The second and third hard failure for the same `TASK_ID` each lower the score by one; a successful audited task clears that task's failure count. Do not assign a fresh ID to an unchanged retry. Split work into new IDs only when changing scope/granularity.
+   - Scope and environment failures are not score penalties. Planner confidence, acceptance quality, and evidence remain the Planner's review responsibility; the script records only the compact outcome/evidence, not narrative reasoning.
+   - A ghost closeout is not a formal task and never counts toward score cadence. Its failure belongs to the original `TASK_ID`.
 5. **Clean Reset**: Archive `.reports/<issue-slug>/` to `.reports/.archive/`.
 
 ## 2. Refactor Authorization Gates
@@ -76,7 +81,7 @@ TASK-XXX | LEVEL: 1-3 | [AFTER: <id>] | TARGET: <paths> | ACTION: <logic> | VERI
 Approve multi-interface targets or `[CODE: REFACTOR]` tickets only when all 4 gates pass:
 1. **Inseparability**: Splitting breaks intermediate builds/tests.
 2. **Vertical Slice**: Cohesive protocol -> implementation -> test only.
-3. **Profile Credit**: Module `>= 4.5⭐` in `granularity-profile.json` (otherwise require Level 3 blueprint).
+3. **Worker Readiness**: Use the shared score from Block 3; below 3 stars, require a Level 3 blueprint.
 4. **Topology Proof**: Verified `[DIAGNOSTIC]` or `[RESEARCH]` report in `.reports/<issue-slug>/`.
 
 ## 3. Queue Preemption, Feedback & Clean Pivot
@@ -84,7 +89,8 @@ Approve multi-interface targets or `[CODE: REFACTOR]` tickets only when all 4 ga
 - **Hot Queue Preemption**: Inject urgent tickets to line 1 of `tasks.txt` via `scripts/reorder_queue.sh` (POSIX lock).
 - **`[NEED_GUIDANCE]`**: Clarify question from `progress.log` with human; re-queue with `GUIDANCE: <clarification>` via `scripts/reorder_queue.sh`.
 - **`[NEED_DECOMPOSITION]`**: Split into atomic L2/L3 tickets via `scripts/reorder_queue.sh`.
-- **`[BLOCKED]` (3 Retries Failed)**: Run [`retro`](../engineering/retro/SKILL.md) on `progress.log` / `.worker.log` to fix missing checks/pointers/standards, update `.worker.notes.md`, and escalate `L1 -> L2 -> L3 -> Planner Sovereign Intervention` (inspect, fix, commit).
+- **`[BLOCKED]` (3 Retries Failed)**: Review `progress.log` / `.worker.log`, record only actionable repository quirks in `.worker.notes.md`, and re-slice or narrow the ticket according to the shared score. Do not raise the score or reissue the same broad contract unchanged.
+- **Closeout Continuation**: The script may launch one ghost closeout after the implementation call. It may verify/test and perform allowed Git finalization only. It must not edit source, tests, docs, configuration, or other project files. If more implementation is needed, it stops and reports failure against the original task; script auditing rejects any implementation diff.
 - **Clean Pivot**: If side-effects require `> 2` patch tickets or trigger `[SCOPE_BLOCKED]`, run `git reset --hard nightshift-session-base` and re-issue a unified vertical slice.
 
 ## 4. Live Preview (`.preview/`) & `.worker.env`

@@ -9,5 +9,6 @@ Keep new tests at public seams: the `scripts/worker_runtime.py` commands, the
 failing test with a fixed expected result, make the smallest implementation
 change, then run the whole suite. Coverage includes task claiming, Codex/agy
 CLI invocation, Luna/none settings, wrapper commits, mechanical and Git audit
-gates, report artifacts, rollback, polling states and budgets, and timeout
-exit-code/process-termination behavior.
+gates, report artifacts, rollback, polling states and budgets, timeout
+exit-code/process-termination behavior, shared-score transitions, and restricted
+Codex/AgY ghost closeout auditing.

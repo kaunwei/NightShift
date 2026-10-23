@@ -30,6 +30,7 @@ fi
 export WORKER_ID="${WORKER_ID:-default}" OS_TYPE="${OS_TYPE:-auto}"
 export TASKS_FILE="${TASKS_FILE:-tasks.txt}" TASKS_DONE_FILE="${TASKS_DONE_FILE:-tasks.done}"
 export PROGRESS_FILE="${PROGRESS_FILE:-progress.log}" PAUSE_FILE="${PAUSE_FILE:-PAUSE}"
+export WORKER_SCORE_FILE="${WORKER_SCORE_FILE:-.worker-score.json}"
 export STATUS_FILE="${STATUS_FILE:-worker.status}" LOG_FILE="${LOG_FILE:-.worker.log}"
 export AI_CLI="${AI_CLI:-codex}" AI_MODEL="${AI_MODEL:-}" AI_EFFORT="${AI_EFFORT:-}"
 export AI_AGENTS_JSON="${AI_AGENTS_JSON:-}" AI_AGENT_STATE_FILE="${AI_AGENT_STATE_FILE:-}"

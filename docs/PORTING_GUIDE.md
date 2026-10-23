@@ -62,6 +62,7 @@ deploys or upgrades the complete Pure Skills-Driven architecture non-destructive
 | `.worker.env` | Config file | Active config initialized from `.worker.env.example` in target root. |
 | `AI_AGENTS_JSON` | Optional JSON environment setting | Ordered agent profiles (`id`, `provider`, `command`, `model`, `effort`, optional `agy_mode`) for error-triggered quota failover. No quota preflight calls are made. |
 | `.worker-agent-state.<WORKER_ID>.json` | Ignored runtime state | Remembers agents whose CLI failures explicitly indicated quota exhaustion; remove after quota reset. |
+| `.worker-score.json` | Ignored runtime state | Shared 1–5 Worker score across worker IDs/models/providers, five-task acceptance window, same-task hard-failure counters, and compact evidence pointers. New profiles start at 5. |
 | `scripts/` | `chmod +x` | Helper suite: `status.sh`, `watch_worker.sh`, `reorder_queue.sh`, `extract_skeleton.sh`, `probe_line.sh`. |
 | `.skills/universal-build-verify.md` | Instruction | Worker build & test verification skill. |
 | `.agents/skills/nightshift/` | Skills | NightShift command skills (`planner`, `explore`). Background operations execute autonomously without polluting the `/` command interface. |

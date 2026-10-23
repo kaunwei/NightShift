@@ -11,8 +11,8 @@ The framework enforces a strict division of responsibilities:
   - Default Reflex: Grooms requirements, models domain, decomposes into atomic contracts in `tasks.txt` (`[CODE]`, `[DIAGNOSTIC]`, `[RESEARCH]`), and yields control. NEVER modifies application code directly for routine tasks (`Sources/`, `src/`, `app/`, `lib/`, `tests/`) and avoids unbounded in-session debugging loops.
   - Sovereign Exceptions:
     1. *Anti-Rubber-Stamp Audit*: Mandated deep inspections on `Attempts > 1`, `Confidence < 1.0`, or critical architectural seams.
-    2. *Level 3 Implementation Escalation*: Intervenes when a coding task was **already at Level 3 (Micro)** and Worker failed 3 retries, followed by a mandatory post-mortem allocation retro in `granularity-profile.json` and `.worker.notes.md`.
-    3. *Diagnostic Evasion & Bogus Report Intervention*: Intervenes when Worker repeatedly produces vague/hallucinated reports or fails to isolate the issue after 2-3 retries without verifiable evidence. Planner directly isolates the root cause and logs quirks in `.worker.notes.md`.
+    2. *Granularity Recovery*: On hard timeout/action-budget evidence or insufficient acceptance confidence, Planner splits or narrows the task according to the shared runtime score. Planner does not change the score; only runtime evidence and explicit human override do.
+    3. *Diagnostic Evasion & Bogus Report Intervention*: Intervenes when Worker repeatedly produces vague/hallucinated reports or fails to isolate the issue after 2-3 retries without verifiable evidence. Planner logs concise, actionable quirks in `.worker.notes.md` and re-slices the task rather than instructing arbitrary command bundling.
     4. *Explicit User Mandate*: User explicitly asks Planner to modify code directly.
   - Active Skills: `/planner`, `/explore`, `/domain-modeling`, `/codebase-design`, `/tdd`, `/to-tickets`, `/code-review`, `/improve-codebase-architecture`, `/retro`.
 - **Terminal B (Background Worker Daemon)**:
@@ -129,20 +129,20 @@ TASK-XXX | LEVEL: 1 | AFTER: <task_id> | TARGET: <file_paths> | ACTION: <concret
   - *Implementation*: Precise function-level instructions used when worker requested guidance or previous attempts struggled.
   - *Exploration*: Function deep dive into specific timing calculations, drift, race conditions, or localized error branches.
 
-### 5.3 Granularity Escalation Ladder & Level 3 Sovereign Intervention
-1. **Escalation on Failure**: When a task blocks (`[BLOCKED]`):
-   - Level 1 Blocked ➔ Demote to Level 2 (split into component slices).
-   - Level 2 Blocked ➔ Demote to Level 3 (micro function-level instructions & exact tests).
-2. **Level 3 Failure Threshold (Planner Sovereign Intervention)**:
-   - When a task is **ALREADY at Level 3 (Micro)** and Worker still blocks/fails after 3 retries, this indicates deep architectural contradictions, environment quirks, or subtle bugs beyond the smaller model's scope.
-   - **Planner Steps In**: Planner reads `.worker.log`, inspects target code directly, applies the surgical fix, runs verification tests, and commits.
-3. **Post-Mortem Allocation Retro**:
-   - Planner **MUST record why the allocation failed** in:
-     - `docs/agents/granularity-profile.json` (subsystem score & notes)
-     - `.worker.notes.md` (compiler traps / repo quirks discovered)
-   - Permanently enhances future task allocation efficiency.
+### 5.3 Shared Worker Reliability Score (current runtime policy)
+- Runtime state is stored in ignored `.worker-score.json`; new profiles start at 5/5 and share one score across workers/models/providers. Only a human changes the selected model or manually overrides the score.
+- Before every concurrent Planner dispatch batch, read the shared score and map it to task granularity: 5 stars → Level 1; 3–4 → Level 2; 1–2 → Level 3. Keep `STEP_BASE + target_file_count * STEP_PER_FILE` as the action-budget formula.
+- Planner reviews acceptance quality, Worker confidence, and evidence, then records only `accept`, `reject`, or `no_fault` plus a compact evidence pointer using `score-record`. Runtime does not infer quality from narrative reports.
+- Every five eligible accepts in a row raise the score by one (maximum 5). A reject closes the window without increasing the score; no-fault results do not enter the window.
+- Timeout and exhausted action budget are hard failures. The second failure for the same `TASK_ID` lowers one star; the third lowers one more. Later failures do not decrement further. A successfully audited task clears that ID's failure counter. Scope/environment failures are not hard failures.
+- Codex actions are counted from JSONL command-execution events; AgY keeps native step/turn budgeting. Codex counts are an operational proxy, not a measure of reasoning steps.
 
-### 5.4 Hierarchical Progressive Exploration Protocol
+### 5.4 Restricted Closeout Continuation
+- When implementation is complete and verification/Git closeout remains, the Worker may emit `[CLOSEOUT_REQUIRED]`. Runtime may dispatch exactly one ghost closeout call; it is not a formal task and never affects the five-task scoring window.
+- The ghost may inspect, verify/test, report, and perform allowed Git finalization. Its prompt forbids implementation edits. Script snapshots project changes and rejects any closeout that alters file contents.
+- If the ghost finds implementation work remains, it stops. Runtime records failure against the original `TASK_ID`, not a ghost ID.
+
+### 5.5 Hierarchical Progressive Exploration Protocol
 For complex cross-module features and defects, Planner grooms and decides progressively from coarse to fine:
 1. **Stage 1 (Macro Survey)**: Issue `LEVEL: 1 [RESEARCH]` / `[DIAGNOSTIC]` to map affected subsystems and lifecycle pipelines.
 2. **Stage 2 (Meso Contract Trace)**: Issue `LEVEL: 2 [DIAGNOSTIC]` to examine inter-module communication protocols, event propagation, and contract breakages.
