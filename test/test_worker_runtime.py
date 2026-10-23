@@ -1096,14 +1096,15 @@ class WorkerIntegrationTests(unittest.TestCase):
                 "TASKS_FILE=queue/tasks.txt\nTASKS_DONE_FILE=queue/tasks.done\n"
                 "STATUS_FILE=queue/worker.json\nPROGRESS_FILE=queue/progress.log\n"
             )
-            (root / "queue/tasks.txt").write_text("TASK-NEW | LEVEL: 1\n")
+            (root / "queue/tasks.txt").write_text("")
             (root / "queue/tasks.done").write_text("[DONE] TASK-OLD\n")
             (root / "queue/progress.log").write_text(
                 "[MECHANICAL_AUDIT] Status: PASS | Task: TASK-OLD |\n"
             )
-            (root / "queue/worker.json").write_text(json.dumps({"state": "IDLE"}))
+            (root / "queue/worker.json").write_text(json.dumps({"state": "STOPPED"}))
             completion = (
-                "sleep 0.05; : > queue/tasks.txt; "
+                "sleep 0.05; printf 'TASK-NEW | LEVEL: 1\\n' > queue/tasks.txt; "
+                "sleep 0.10; : > queue/tasks.txt; "
                 "printf '[2026-01-01] [DONE] TASK-NEW\\n' >> queue/tasks.done; "
                 "printf '[MECHANICAL_AUDIT] Status: PASS | Task: TASK-NEW | Verify_Exit: 0\\n' >> queue/progress.log; "
                 "printf '{\\\"state\\\":\\\"IDLE\\\"}\\n' > queue/worker.json"
@@ -1112,7 +1113,7 @@ class WorkerIntegrationTests(unittest.TestCase):
                                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
             result = subprocess.run(
-                ["bash", str(root / "scripts/watch_worker.sh"), "1", "0.01", "TASK-NEW"],
+                ["bash", str(root / "scripts/watch_worker.sh"), "1", "0.01"],
                 cwd=root, capture_output=True, text=True, timeout=10,
             )
 
