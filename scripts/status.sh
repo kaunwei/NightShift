@@ -7,6 +7,7 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$SCRIPT_DIR" || exit 1
 if [ -f "$SCRIPT_DIR/.worker.env" ]; then
   # shellcheck source=/dev/null
   source "$SCRIPT_DIR/.worker.env"
@@ -15,9 +16,10 @@ STATUS_FILE="${STATUS_FILE:-worker.status}"
 if [ "${WORKER_ID:-default}" != "default" ]; then
   STATUS_FILE="worker.${WORKER_ID}.status"
 fi
-PROGRESS_FILE="progress.log"
-TASKS_FILE="tasks.txt"
-TASKS_DONE_FILE="tasks.done"
+PROGRESS_FILE="${PROGRESS_FILE:-progress.log}"
+TASKS_FILE="${TASKS_FILE:-tasks.txt}"
+TASKS_DONE_FILE="${TASKS_DONE_FILE:-tasks.done}"
+PAUSE_FILE="${PAUSE_FILE:-PAUSE}"
 
 echo "=============================================================================="
 echo "              24h Unattended Worker Status Dashboard"
@@ -39,7 +41,7 @@ if [ -f ".preview/version.json" ]; then
   echo "Preview Ready  : $PREV_TASK ($PREV_COMMIT) updated at $PREV_TIME"
 fi
 
-if [ -f "PAUSE" ]; then
+if [ -f "$PAUSE_FILE" ]; then
   echo "Pause Flag     : [PAUSED] (PAUSE file detected - worker will hold after current task)"
 fi
 

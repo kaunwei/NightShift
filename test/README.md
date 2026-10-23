@@ -4,13 +4,10 @@ Run `python3 -m unittest discover -s test -v` from the repository root. The suit
 uses only Python's standard library and a fake `codex` executable; it never
 contacts a model or consumes tokens.
 
-Keep new tests at public seams: the `worker_runtime.py` commands and the
-`worker.sh` entry point. For each behavior change, add a failing test with a
-fixed expected result, make the smallest implementation change, then run the
-whole suite. The integration fixture covers task claiming, Luna/none CLI
-arguments, wrapper commit, status, Git audit acceptance and rejection, rollback,
-polling states and budgets, and timeout exit-code/process-termination behavior.
-
-The staged migration leaves task execution and agy logic in Bash for now. Move
-one verified behavior at a
-time; do not remove an old path until its external contract is covered here.
+Keep new tests at public seams: the `worker_runtime.py` commands, the
+`worker.sh` launcher, and the status dashboard. For each behavior change, add a
+failing test with a fixed expected result, make the smallest implementation
+change, then run the whole suite. Coverage includes task claiming, Codex/agy
+CLI invocation, Luna/none settings, wrapper commits, mechanical and Git audit
+gates, report artifacts, rollback, polling states and budgets, and timeout
+exit-code/process-termination behavior.

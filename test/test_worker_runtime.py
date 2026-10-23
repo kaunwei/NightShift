@@ -287,6 +287,20 @@ class CliContractTests(unittest.TestCase):
                              "--output-file", output, "--timeout", "10")
             self.assertEqual(result.returncode, 124)
 
+    def test_task_cli_stream_timeout_stops_provider_and_preserves_partial_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            prompt, output = root / "prompt", root / "output"
+            prompt.write_text("task")
+            executable = root / "fake-cli"
+            executable.write_text("#!/bin/sh\necho started\nsleep 10\n")
+            executable.chmod(0o755)
+            result = runtime("task-cli", "--provider", "generic", "--executable", executable,
+                             "--work-dir", root, "--prompt-file", prompt,
+                             "--output-file", output, "--timeout", "0.5")
+            self.assertEqual(result.returncode, 124)
+            self.assertIn("started", output.read_text())
+
 
 class TimeoutContractTests(unittest.TestCase):
     def test_run_timeout_preserves_exit_code_and_streamed_output(self):
@@ -545,6 +559,145 @@ class RollbackContractTests(unittest.TestCase):
 
 
 class WorkerIntegrationTests(unittest.TestCase):
+    def test_status_dashboard_uses_project_paths_from_an_external_cwd(self):
+        with tempfile.TemporaryDirectory() as directory:
+            external = Path(directory)
+            root = external / "repo"
+            (root / "scripts").mkdir(parents=True)
+            shutil.copy2(ROOT / "scripts/status.sh", root / "scripts/status.sh")
+            shutil.copy2(ROOT / "worker_runtime.py", root / "worker_runtime.py")
+            (root / ".worker.env").write_text(
+                "STATUS_FILE=state/worker.json\nTASKS_FILE=queue/tasks.txt\n"
+                "TASKS_DONE_FILE=queue/tasks.done\nPROGRESS_FILE=queue/progress.log\n"
+            )
+            (root / "state").mkdir()
+            (root / "queue").mkdir()
+            (root / "state/worker.json").write_text(json.dumps({
+                "state": "IDLE", "pid": -1, "elapsed_seconds": 0,
+                "progress": {"bar": "[###]"}, "isolation": False,
+            }))
+            (root / "queue/tasks.txt").write_text("TASK-1\n")
+            (root / "queue/tasks.done").write_text("[DONE] TASK-0\n[DONE] TASK-9\n")
+            (root / "queue/progress.log").write_text("latest verified entry\n")
+            (root / ".preview").mkdir()
+            (root / ".preview/version.json").write_text(json.dumps({
+                "task_id": "TASK-0", "commit": "abc123", "updated_at": "now",
+            }))
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+
+            result = subprocess.run(["bash", str(root / "scripts/status.sh")], cwd=external,
+                                    capture_output=True, text=True, timeout=10)
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("Worker State   : IDLE", result.stdout)
+            self.assertIn("Completed: 2 | Remaining in Queue: 1", result.stdout)
+            self.assertIn("TASK-0 (abc123) updated at now", result.stdout)
+
+    def test_sentinel_watch_resolves_worker_status_from_external_cwd(self):
+        with tempfile.TemporaryDirectory() as directory:
+            external = Path(directory)
+            root = external / "repo"
+            (root / "scripts").mkdir(parents=True)
+            shutil.copy2(ROOT / "scripts/watch_worker.sh", root / "scripts/watch_worker.sh")
+            (root / ".worker.env").write_text(
+                "WORKER_ID=agent-2\nTASKS_FILE=queue/tasks.txt\n"
+                "PROGRESS_FILE=queue/progress.log\n"
+            )
+            (root / "queue").mkdir()
+            (root / "queue/tasks.txt").write_text("")
+            (root / "queue/progress.log").write_text("[MECHANICAL_AUDIT] Status: PASS\n")
+            (root / "worker.agent-2.status").write_text(json.dumps({"state": "STOPPED"}))
+
+            result = subprocess.run(["bash", str(root / "scripts/watch_worker.sh"), "2", "0.01"],
+                                    cwd=external, capture_output=True, text=True, timeout=10)
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("[SENTINEL_COMPLETED]", result.stdout)
+
+    def test_launcher_runs_python_daemon_and_cleans_pid_when_run_once_queue_is_empty(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "repo"
+            root.mkdir()
+            for name in ("worker.sh", "worker_runtime.py", ".gitignore"):
+                shutil.copy2(ROOT / name, root / name)
+            (root / ".worker.env").write_text(
+                "WORKER_ISOLATION=0\nRUN_ONCE=1\nPOLL_INTERVAL=0.01\nAI_CLI=codex\n"
+            )
+            (root / "tasks.txt").write_text("# no tasks\n")
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            subprocess.run(["git", "-C", str(root), "config", "user.name", "Worker Test"], check=True)
+            subprocess.run(["git", "-C", str(root), "config", "user.email", "worker@example.invalid"], check=True)
+            subprocess.run(["git", "-C", str(root), "add", "worker.sh", "worker_runtime.py", ".gitignore", "tasks.txt"], check=True)
+            subprocess.run(["git", "-C", str(root), "commit", "-qm", "fixture"], check=True)
+
+            result = subprocess.run(["bash", str(root / "worker.sh")], cwd=root,
+                                    capture_output=True, text=True, timeout=30)
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("RUN_ONCE", result.stdout)
+            self.assertEqual(json.loads((root / "worker.status").read_text())["state"], "STOPPED")
+            self.assertFalse((root / ".worker.pid").exists())
+
+    def test_launcher_refuses_a_live_pid_without_touching_runtime_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "repo"
+            root.mkdir()
+            for name in ("worker.sh", "worker_runtime.py", ".gitignore"):
+                shutil.copy2(ROOT / name, root / name)
+            (root / ".worker.env").write_text("WORKER_ISOLATION=0\n")
+            pid_file = root / ".worker.pid"
+            pid_file.write_text(f"{os.getpid()}\n")
+
+            result = subprocess.run(["bash", str(root / "worker.sh")], cwd=root,
+                                    capture_output=True, text=True, timeout=10)
+
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("already running", result.stderr)
+            self.assertEqual(pid_file.read_text(), f"{os.getpid()}\n")
+            self.assertFalse((root / "tasks.txt").exists())
+
+    def test_timed_out_task_is_recorded_and_dirty_workspace_is_preserved_then_rolled_back(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "repo"
+            root.mkdir()
+            for name in ("worker.sh", "worker_runtime.py", ".gitignore"):
+                shutil.copy2(ROOT / name, root / name)
+            (root / ".worker.env").write_text(
+                "AI_CLI=codex\nWORKER_ISOLATION=0\nRUN_ONCE=1\nPOLL_INTERVAL=0\nTASK_TIMEOUT=0.5\n"
+            )
+            (root / "output.txt").write_text("baseline\n")
+            (root / "tasks.txt").write_text(
+                "TASK-T | LEVEL: 1 | TARGET: output.txt | ACTION: [CODE: FIX] Timeout test | VERIFY: true\n"
+            )
+            bin_dir = Path(directory) / "bin"
+            bin_dir.mkdir()
+            fake = bin_dir / "codex"
+            fake.write_text(
+                "#!/bin/sh\nprintf 'partial\\n' > output.txt\n"
+                "printf 'started\\n'\n"
+                "sleep 10\n"
+            )
+            fake.chmod(0o755)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            subprocess.run(["git", "-C", str(root), "config", "user.name", "Worker Test"], check=True)
+            subprocess.run(["git", "-C", str(root), "config", "user.email", "worker@example.invalid"], check=True)
+            subprocess.run(["git", "-C", str(root), "add", "worker.sh", "worker_runtime.py", ".gitignore", "output.txt", "tasks.txt"], check=True)
+            subprocess.run(["git", "-C", str(root), "commit", "-qm", "fixture"], check=True)
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
+
+            result = subprocess.run(["bash", str(root / "worker.sh")], cwd=root,
+                                    env=env, capture_output=True, text=True, timeout=20)
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual((root / "output.txt").read_text(), "baseline\n")
+            self.assertIn("[FAILED]", (root / "tasks.done").read_text())
+            self.assertIn("[TIMEOUT]", (root / "tasks.done").read_text())
+            backups = list((root / ".scratch/failed_tasks").glob("TASK-T_*/changes.diff"))
+            self.assertEqual(len(backups), 1)
+            self.assertIn("partial", backups[0].read_text())
+            self.assertFalse((root / ".worker.pid").exists())
+
     def test_codex_task_keeps_queue_status_commit_and_guard_contract(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "repo"

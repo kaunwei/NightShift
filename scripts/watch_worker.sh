@@ -6,9 +6,19 @@
 
 set -uo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [ -f "$SCRIPT_DIR/.worker.env" ]; then
+  # shellcheck source=/dev/null
+  source "$SCRIPT_DIR/.worker.env"
+fi
+cd "$SCRIPT_DIR" || exit 1
+
 TASKS_FILE="${TASKS_FILE:-tasks.txt}"
 STATUS_FILE="${STATUS_FILE:-worker.status}"
 PROGRESS_FILE="${PROGRESS_FILE:-progress.log}"
+if [ "${WORKER_ID:-default}" != "default" ]; then
+  STATUS_FILE="worker.${WORKER_ID}.status"
+fi
 MAX_WAIT_SECONDS="${1:-3600}"
 POLL_INTERVAL="${2:-5}"
 

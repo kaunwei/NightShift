@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from io import BytesIO
 import json
 import os
+import platform
 from pathlib import Path
 import queue
 import re
@@ -236,6 +237,11 @@ def agy_args(args):
     return command
 
 
+def count_agy_steps(output):
+    pattern = re.compile(r"^\[EXEC\]|Tool Call|edit_file|write_file|run_command|read_file")
+    return sum(bool(pattern.search(line)) for line in output.splitlines())
+
+
 def run_with_timeout(seconds, command):
     """Run a command with inherited output and terminate its process group on timeout."""
     if not command:
@@ -300,7 +306,7 @@ def stream_with_timeout(seconds, command, cwd, environment, output_path, append=
     with open(output_path, "ab" if append else "wb") as output:
         while not finished_reading:
             remaining = deadline - time.monotonic()
-            if remaining <= 0 and process.poll() is None:
+            if remaining <= 0 and (process.poll() is None or reader.is_alive()):
                 timed_out = True
                 try:
                     if os.name == "nt":
@@ -348,8 +354,11 @@ def stream_with_timeout(seconds, command, cwd, environment, output_path, append=
 def execute_task_cli(args):
     prompt = Path(args.prompt_file).read_text(encoding="utf-8")
     environment = os.environ.copy()
-    environment.update(PORT=args.worker_port, TEST_PORT=args.worker_port,
-                       MAX_STEPS=str(args.step_budget), AGY_MAX_STEPS=str(args.step_budget))
+    environment.update(PORT=args.worker_port, TEST_PORT=args.worker_port)
+    if args.provider in ("codex", "agy"):
+        environment["MAX_STEPS"] = str(args.step_budget)
+    if args.provider == "agy":
+        environment["AGY_MAX_STEPS"] = str(args.step_budget)
     output = Path(args.output_file)
     result_code = 0
     last_message = Path(args.result_file) if args.result_file else None
@@ -399,9 +408,8 @@ def execute_task_cli(args):
         result_code = stream_with_timeout(args.timeout, command, args.work_dir,
                                           environment, output)
         text = output.read_text(encoding="utf-8", errors="replace")
-        matches = re.findall(r"^\[EXEC\]|Tool Call|edit_file|write_file|run_command|read_file",
-                             text, re.MULTILINE)
-        steps_used = max(len(matches), 17 if not matches else 0)
+        steps_used = count_agy_steps(text)
+        steps_used = max(steps_used, 17 if not steps_used else 0)
         while result_code == 0 and steps_used < args.step_budget:
             head = subprocess.run(["git", "-C", args.work_dir, "rev-parse", "HEAD"],
                                   capture_output=True, text=True, check=False).stdout.strip()
@@ -421,13 +429,11 @@ def execute_task_cli(args):
                                f"Inspect git diff, complete any remaining edits, run verification ({args.verify or 'build and test'}), prepend {args.progress_file}, and commit.")
             command = [args.executable, "-p", continue_prompt,
                        "--dangerously-skip-permissions", *agy_args(continuation)]
-            before = len(matches)
+            before = count_agy_steps(text)
             result_code = stream_with_timeout(args.timeout, command, args.work_dir,
                                               environment, output, append=True)
             text = output.read_text(encoding="utf-8", errors="replace")
-            matches = re.findall(r"^\[EXEC\]|Tool Call|edit_file|write_file|run_command|read_file",
-                                 text, re.MULTILINE)
-            added = len(matches) - before
+            added = count_agy_steps(text) - before
             steps_used += max(added, 17 if added < 1 else 0)
     else:
         result_code = stream_with_timeout(args.timeout, [args.executable, prompt],
@@ -436,6 +442,380 @@ def execute_task_cli(args):
             encoding="utf-8", errors="replace").lower():
         result_code = 124
     return result_code
+
+
+def build_task_prompt(task, task_id, level, target, verify, forbidden, constraints,
+                      max_steps, target_file_count, step_base, step_per_file, progress_file):
+    return f"""Execute this atomic task as the unattended Background Worker. Read and follow .skills/universal-build-verify.md and .worker.notes.md:
+- [CODE]: Follow .agents/skills/engineering/implement/SKILL.md (skip /code-review per task), .agents/skills/engineering/tdd/SKILL.md, and .agents/skills/engineering/codebase-design/SKILL.md.
+- [DIAGNOSTIC]: Follow .agents/skills/engineering/diagnosing-bugs/SKILL.md (compile-clean failing repro test or trace; product code locked).
+- [RESEARCH]: Follow .agents/skills/engineering/research/SKILL.md and .agents/skills/nightshift/explore/SKILL.md Tier 2 (SUMMARY.md <= 5KB + 03-micro.md).
+
+TASK:
+{task}
+STEP_BUDGET: {max_steps} steps (Base: {step_base} + {target_file_count} target files * {step_per_file}; reserve final 3 steps for verification and git commit)
+
+RULES:
+1. STEP LOGGING: Print "[EXEC] Modifying <file>...", "[EXEC] Running command: <cmd>", or "[EXEC] Running test: <cmd>" before every action.
+2. SCOPE & GATES:
+   - Touch ONLY declared TARGET paths ({target or 'target files'}).
+   - [CODE: FIX]: Tests/ read-only; never weaken assertions.
+   - [CODE: REFACTOR]: Tests/ and Mocks/ editable if in TARGET, subject to Assertion Non-Decrease (added assertions >= deleted).
+   - [DIAGNOSTIC]: Repro test must compile cleanly (0 syntax errors) and fail strictly on assertion; product code (Sources/, src/) locked.
+   - [SCOPE_BLOCKED]: On downstream compiler errors outside TARGET, halt without touching unlisted files and emit "[SCOPE_BLOCKED] (Need Target: <File>#L<Line>)".
+   - Blast Radius (max deletions): L3 <= 40 lines; L2 <= 150 lines; L1 TARGET-bounded.
+3. FORBIDDEN SHORTCUTS & HOST SAFETY:
+   - {forbidden or 'No thread sleeps/asyncAfter, no error swallowing (try?/empty catch), no optional-widening to dodge inits, no weakened assertions.'}
+   - Never run sudo, apt, yum, or global host commands.
+4. VERIFY, RETRIES & [DEAD_END]:
+   - Run verification: {verify or 'build and test'}.
+   - Proof of Negative: Declaring [DEAD_END] requires an isolated passing unit test or runtime log proving module health while global symptom persists.
+   - Max 3 attempts: if still failing after 3 fixes, restore the clean tree and report [BLOCKED] in the final response.
+5. COMMIT & PROGRESS (ON 100% PASS):
+   - Stage all changes (git status --porcelain must be 100% clean after commit).
+   - Do not edit {progress_file} directly; worker records the result outside the agent sandbox.
+   - End the final response with Attempts: <count> | Confidence: <HIGH|MED|LOW>.
+   - Commit with a clean two-part Conventional Commit (feat|fix|refactor|test|docs|perf; NEVER put raw "TASK-XXX | LEVEL: ..." pipe strings in title).
+
+   git commit -m "<type>(<scope>): <concise English action <= 60 chars> ({task_id})" -m "<1-3 summary bullets>
+
+Task: {task_id} (Level {level or '1'})
+Scope: {target or '<modified files>'}
+Verification: {verify or '<test command>'} (100% PASS)
+Attempts: <attempts_count> | Confidence: <HIGH|MED|LOW>"
+"""
+
+
+def env_bool(name, default="0"):
+    return os.environ.get(name, default).lower() in ("1", "true", "yes", "on")
+
+
+def acquire_worker_lock(path, pid):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    while True:
+        try:
+            descriptor = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        except FileExistsError:
+            try:
+                old_pid = int(path.read_text(encoding="utf-8").strip())
+                if old_pid > 0:
+                    os.kill(old_pid, 0)
+                    print(f"ERROR: Worker daemon already running with PID {old_pid}.", file=sys.stderr)
+                    return False
+            except ProcessLookupError:
+                pass
+            except PermissionError:
+                print("ERROR: Existing worker PID cannot be checked; assuming it is active.", file=sys.stderr)
+                return False
+            except (ValueError, FileNotFoundError):
+                pass
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+            continue
+        else:
+            try:
+                os.write(descriptor, f"{pid}\n".encode("ascii"))
+            finally:
+                os.close(descriptor)
+            return True
+
+
+def worker_daemon(root):
+    root = Path(root).resolve()
+    config = os.environ
+    worker_id = config.get("WORKER_ID", "default")
+
+    def resolve(name, default):
+        path = Path(config.get(name, default))
+        return path if path.is_absolute() else root / path
+
+    tasks_file = resolve("TASKS_FILE", "tasks.txt")
+    done_file = resolve("TASKS_DONE_FILE", "tasks.done")
+    progress_file = resolve("PROGRESS_FILE", "progress.log")
+    pause_file = resolve("PAUSE_FILE", "PAUSE")
+    status_file = (resolve("STATUS_FILE", "worker.status") if worker_id == "default"
+                   else root / f"worker.{worker_id}.status")
+    log_file = (resolve("LOG_FILE", ".worker.log") if worker_id == "default"
+                else root / f".worker.{worker_id}.log")
+    pid_file = (resolve("PID_FILE", ".worker.pid") if worker_id == "default"
+                else root / f".worker.{worker_id}.pid")
+    ai_cli = config.get("AI_CLI", "codex")
+    ai_model = config.get("AI_MODEL", "")
+    ai_effort = config.get("AI_EFFORT", "")
+    agy_mode = config.get("AGY_MODE", "accept-edits")
+    timeout_value = float(config.get("TASK_TIMEOUT", "1800"))
+    timeout = int(timeout_value) if timeout_value.is_integer() else timeout_value
+    step_base = int(config.get("STEP_BASE", "12"))
+    step_per_file = int(config.get("STEP_PER_FILE", "5"))
+    poll_interval = float(config.get("POLL_INTERVAL", "5"))
+    worker_port = config.get("WORKER_PORT", "3001")
+    isolated = env_bool("WORKER_ISOLATION", "1")
+    work_dir = root / ".worker-tree" if isolated else root
+    isolation_flag = "true" if isolated else "false"
+    system = platform.system()
+    linux_release = Path("/etc/os-release")
+    is_ubuntu = (linux_release.is_file()
+                 and "ubuntu" in linux_release.read_text(encoding="utf-8", errors="replace").lower())
+    detected_os = "mac" if system == "Darwin" else "ubuntu" if system == "Linux" and is_ubuntu else "linux" if system == "Linux" else "unknown"
+    active_os = config.get("OS_TYPE", "auto")
+    if not active_os or active_os == "auto":
+        active_os = detected_os
+    platform_name = ("macOS (Darwin)" if active_os in ("mac", "darwin") else
+                     "Linux (Ubuntu)" if active_os == "ubuntu" else f"Linux ({active_os})")
+    step_args = {"step_base": step_base, "step_per_file": step_per_file}
+
+    for name, default in (("CI", "1"), ("PAGER", "cat"), ("NO_COLOR", "1"),
+                          ("DEBIAN_FRONTEND", "noninteractive"), ("TERM", "dumb"),
+                          ("NIGHTSHIFT_WORKER", "1")):
+        os.environ[name] = config.get(name, default)
+
+    pid = os.getpid()
+    if not acquire_worker_lock(pid_file, pid):
+        return 1
+    stop_requested = threading.Event()
+    def request_stop(signum, frame):
+        stop_requested.set()
+    signal.signal(signal.SIGINT, request_stop)
+    signal.signal(signal.SIGTERM, request_stop)
+
+    def update_status(state, task="", elapsed=0, current=0, total=0, remaining=0,
+                      percentage="0%", bar=""):
+        status_args = argparse.Namespace(
+            path=str(status_file), worker_id=worker_id, os_name=active_os,
+            platform=platform_name, isolation=isolation_flag, work_dir=str(work_dir),
+            state=state, current_task=task, elapsed=int(elapsed),
+            current_index=int(current), total_tasks=int(total), remaining=int(remaining),
+            percentage=percentage, bar=bar or progress_bar(int(current), int(total)),
+            pid=pid, model=ai_model, cli=ai_cli, timeout=timeout,
+        )
+        write_status(status_args)
+
+    def append_line(path, line):
+        with Path(path).open("a", encoding="utf-8") as stream:
+            stream.write(line + "\n")
+
+    def stamp():
+        return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    try:
+        for path in (tasks_file, done_file, progress_file):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.touch(exist_ok=True)
+        (root / ".reports/.archive").mkdir(parents=True, exist_ok=True)
+        if isolated:
+            ensure_worktree(root)
+        inside = subprocess.run(["git", "-C", str(work_dir), "rev-parse", "--is-inside-work-tree"],
+                                capture_output=True, check=False).returncode == 0
+        if inside:
+            subprocess.run(["git", "-C", str(work_dir), "tag", "-f", "nightshift-session-base", "HEAD"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(["git", "-C", str(root), "tag", "-f", "nightshift-session-base", "HEAD"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        mode = (f"sandbox={config.get('CODEX_SANDBOX', 'workspace-write')},approval={config.get('CODEX_APPROVAL_MODE', 'auto')},ephemeral={config.get('CODEX_EPHEMERAL', '1')}"
+                if ai_cli == "codex" else agy_mode)
+        print("=" * 78)
+        print(" 24-Hour Unattended AI Worker Daemon Started")
+        print(f" Worker ID: {worker_id} | OS: {platform_name} (CPUs: {os.cpu_count() or 4})")
+        print(f" PID: {pid} | CLI: {ai_cli} | Model: {ai_model or 'configured default'} | Mode: {mode}")
+        print(f" WorkDir: {work_dir} | Isolation: {isolation_flag}")
+        print(f" Tasks: {tasks_file} | Status: {status_file}")
+        print(f" Progress: {progress_file} | Log: {log_file}")
+        print("=" * 78)
+        update_status("IDLE", bar="[------------------------------] 0%")
+        was_busy = False
+        idle_status_shown = False
+        run_once = env_bool("RUN_ONCE", "0")
+
+        while not stop_requested.is_set():
+            poll_args = argparse.Namespace(tasks=str(tasks_file), done=str(done_file),
+                                           pause=str(pause_file), work_dir=str(work_dir),
+                                           **step_args)
+            fields = poll_next(poll_args)
+            if fields[0] == "paused":
+                print(f"[{stamp()}] [PAUSED] Found {pause_file}. Sleeping...")
+                update_status("PAUSED", f"Paused via {pause_file} file", percentage="0%", bar="[PAUSED]")
+                stop_requested.wait(poll_interval)
+                continue
+            raw_task, done_count, remaining = fields[1], int(fields[2]), int(fields[3])
+            total, current = int(fields[4]), int(fields[5])
+            percent, bar = f"{fields[6]}%", fields[7]
+            if fields[0] == "idle":
+                update_status("IDLE", current=done_count, total=total, percentage="100%", bar=bar)
+                if was_busy:
+                    print(f"\n{'=' * 78}\n[{stamp()}] 🎉 [ALL TASKS COMPLETED] {bar}")
+                    print(f"[IDLE] Queue is empty (Total completed: {done_count} tasks).\n{'=' * 78}")
+                    was_busy, idle_status_shown = False, True
+                    if run_once:
+                        print("[WORKER] Exiting because RUN_ONCE is enabled.")
+                        break
+                elif not idle_status_shown:
+                    print(f"[{stamp()}] [IDLE] Queue is empty (Total completed: {done_count} tasks). Waiting for tasks in {tasks_file}...")
+                    idle_status_shown = True
+                    if run_once:
+                        print("[WORKER] Queue is empty and RUN_ONCE is enabled. Exiting.")
+                        break
+                stop_requested.wait(poll_interval)
+                continue
+
+            was_busy, idle_status_shown = True, False
+            task, task_id, level = raw_task, fields[8], fields[9]
+            target, verify, forbidden, constraints = fields[10], fields[11], fields[12], fields[13]
+            target_file_count, max_steps = int(fields[14]), int(fields[15])
+            head = subprocess.run(["git", "-C", str(work_dir), "rev-parse", "HEAD"],
+                                  capture_output=True, text=True, check=False)
+            base = head.stdout.strip() if head.returncode == 0 else "HEAD~1"
+            started = time.time()
+            is_research = bool(re.search(r"\[RESEARCH\]", f"{task} {constraints}", re.I))
+            is_diagnostic = bool(re.search(r"\[DIAGNOSTIC\]", f"{task} {constraints}", re.I))
+            if is_research:
+                archive_active_reports(root)
+            print(f"\n{'=' * 78}\n[{stamp()}] >>> [Task {current} of {total} (In Progress) | Completed: {done_count}/{total} ({fields[6]}%)]")
+            print(f">>> Progress: {bar}\n>>> Task: {task}")
+            print(f">>> Step Budget: {max_steps} steps (Base: {step_base} + {target_file_count} files * {step_per_file})\n{'=' * 78}")
+            update_status("RUNNING", task, current=current, total=total,
+                          remaining=max(0, remaining - 1), percentage=percent, bar=bar)
+            prompt = build_task_prompt(task, task_id, level, target, verify, forbidden,
+                                       constraints, max_steps, target_file_count,
+                                       step_base, step_per_file, progress_file)
+            with tempfile.TemporaryDirectory(prefix="nightshift-task-") as temporary:
+                prompt_path = Path(temporary) / "prompt.txt"
+                output_path = Path(temporary) / "cli-output.log"
+                result_path = Path(temporary) / "last-message.txt"
+                prompt_path.write_text(prompt, encoding="utf-8")
+                provider = ai_cli if ai_cli in ("codex", "agy") else "generic"
+                print(f"[WORKER] Launching {ai_cli} (Model: {ai_model or 'configured default'}, StepBudget: {max_steps}, WorkDir: {work_dir})...")
+                cli_args = argparse.Namespace(
+                    provider=provider, executable=ai_cli, work_dir=str(work_dir),
+                    prompt_file=str(prompt_path), output_file=str(output_path),
+                    result_file=str(result_path) if provider == "codex" else "",
+                    timeout=timeout, model=ai_model, effort=ai_effort,
+                    approval_mode=config.get("CODEX_APPROVAL_MODE", "auto"),
+                    sandbox=config.get("CODEX_SANDBOX", "workspace-write"),
+                    ephemeral=config.get("CODEX_EPHEMERAL", "1"),
+                    additional_dirs=config.get("ADDITIONAL_DIRS", ""),
+                    use_sandbox=config.get("USE_SANDBOX", "0"), agy_mode=agy_mode,
+                    step_budget=max_steps, worker_port=worker_port, target=target,
+                    task_id=task_id, title=task, level=level, verify=verify,
+                    base=base, progress_file=str(progress_file),
+                )
+                try:
+                    exit_code = execute_task_cli(cli_args)
+                except (OSError, ValueError, subprocess.CalledProcessError) as error:
+                    print(f"[WORKER] CLI execution failed: {error}", file=sys.stderr)
+                    exit_code = 2
+                result_output = result_path if result_path.is_file() and result_path.stat().st_size else output_path
+                duration = int(time.time() - started)
+                append_line(log_file, f"=== [{stamp()}] Task: {task} (Duration: {duration}s, Exit: {exit_code}) ===")
+                with Path(log_file).open("a", encoding="utf-8") as stream:
+                    stream.write(output_path.read_text(encoding="utf-8", errors="replace") if output_path.exists() else "")
+                    stream.write("\n")
+                result_text = result_output.read_text(encoding="utf-8", errors="replace") if result_output.exists() else ""
+
+                outcome = ("timeout" if exit_code == 124 else
+                           "scope" if "[SCOPE_BLOCKED]" in result_text else
+                           "guidance" if re.search(r"\[(?:NEED_GUIDANCE|NEED_DECOMPOSITION)\]", result_text) else
+                           "error" if exit_code else "success")
+                stamp_now = stamp()
+                if outcome == "timeout":
+                    print(f"[{stamp_now}] [TIMEOUT] Task exceeded {timeout}s limit!")
+                    rollback_failed_task(root, work_dir, task_id,
+                                         (tasks_file, done_file, progress_file))
+                    summary = ("=" * 80 + f"\n[BLOCKED] {task_id}: Timeout Exceeded ({timeout}s)\n"
+                               f"Time: {stamp_now} | Status: TIMEOUT\nFailure Reason: Task execution timed out after {timeout} seconds.\n"
+                               "Action Needed for Human: Task may be too complex. Split into smaller atomic tasks.\n" + "=" * 80)
+                    prepend_progress(progress_file, summary)
+                    append_line(done_file, f"[{stamp_now}] [FAILED] {task} [TIMEOUT]")
+                    update_status("BLOCKED", f"{task} (TIMEOUT)", duration, current, total,
+                                  max(0, remaining - 1), percent, bar)
+                elif outcome == "scope":
+                    print(f"[{stamp_now}] 🚧 [SCOPE BLOCKED] Worker honestly stopped at unannounced downstream boundaries.")
+                    rollback_failed_task(root, work_dir, task_id, (tasks_file, done_file, progress_file))
+                    summary = ("=" * 80 + f"\n[SCOPE_BLOCKED] {task_id}: Downstream Scope Boundary Reached\n"
+                               f"Time: {stamp_now} | Status: SCOPE_BLOCKED\nDetails: Compiler errors detected in files outside TARGET whitelist.\n"
+                               "Worker honestly stopped without violating boundaries. (No credit deduction).\n"
+                               "Action Needed for Human: Expand TARGET in tasks.txt or adopt Expand-Migrate-Contract.\n" + "=" * 80)
+                    prepend_progress(progress_file, summary)
+                    append_line(done_file, f"[{stamp_now}] [SCOPE_BLOCKED] {task}")
+                    update_status("SCOPE_BLOCKED", task, duration, current, total,
+                                  max(0, remaining - 1), percent, bar)
+                elif outcome == "guidance":
+                    print(f"[{stamp_now}] ✋ [AWAITING GUIDANCE] Worker honestly requested manager guidance.")
+                    rollback_failed_task(root, work_dir, task_id, (tasks_file, done_file, progress_file))
+                    append_line(done_file, f"[{stamp_now}] [GUIDANCE_REQUESTED] {task}")
+                    update_status("AWAITING_GUIDANCE", task, duration, current, total,
+                                  max(0, remaining - 1), percent, bar)
+                elif outcome == "error":
+                    print(f"[{stamp_now}] [ERROR] CLI exited with code {exit_code}")
+                    rollback_failed_task(root, work_dir, task_id, (tasks_file, done_file, progress_file))
+                    summary = ("=" * 80 + f"\n[BLOCKED] {task_id}: Execution Failed (Exit Code: {exit_code})\n"
+                               f"Time: {stamp_now} | Status: FAILED\nFailure Reason: Worker CLI returned non-zero exit status {exit_code}.\n"
+                               "Action Needed for Human: Inspect .worker.log for error details.\n" + "=" * 80)
+                    prepend_progress(progress_file, summary)
+                    append_line(done_file, f"[{stamp_now}] [FAILED] {task} [EXIT_{exit_code}]")
+                    update_status("BLOCKED", f"{task} (ERROR {exit_code})", duration, current, total,
+                                  max(0, remaining - 1), percent, bar)
+                else:
+                    audit_args = argparse.Namespace(
+                        work_dir=str(work_dir), base=base, target=target,
+                        constraints=constraints, title=task, level=int(level or 1),
+                        task_id=task_id, verify=verify, port=worker_port, verify_timeout=180,
+                    )
+                    audit = mechanical_audit(audit_args)
+                    for message in audit["messages"]:
+                        print(message)
+                    guard_status, guard_error = audit["status"], audit["error"]
+                    if guard_status:
+                        print(f"[{stamp()}] 🛑 [GUARD REJECTION] Post-flight validation failed: {guard_error}")
+                        rollback_failed_task(root, work_dir, task_id,
+                                             (tasks_file, done_file, progress_file))
+                        summary = (f"[MECHANICAL_AUDIT] Status: FAIL | Verify_Exit: {audit['verify_exit']} | Whitelist: {guard_status} | Tree: DIRTY\n"
+                                   + "=" * 80 + f"\n[BLOCKED] {task_id}: Guard Validation Failed\n"
+                                   f"Time: {stamp()} | Status: GUARD_VIOLATION\nFailure Reason: {guard_error}\n"
+                                   "Action Needed for Human: Inspect error and check target whitelist, forbidden shortcuts, or test assertions.\n"
+                                   + "=" * 80)
+                        prepend_progress(progress_file, summary)
+                        append_line(done_file, f"[{stamp()}] [FAILED] {task} [GUARD_VIOLATION]")
+                        update_status("BLOCKED", f"{task} (GUARD VIOLATION)", duration,
+                                      current, total, max(0, remaining - 1), percent, bar)
+                    else:
+                        attempts_match = re.search(r"Attempts:\s*(\d+)", result_text)
+                        if not attempts_match and progress_file.exists():
+                            attempts_match = re.search(r"Attempts:\s*(\d+)", progress_file.read_text(encoding="utf-8", errors="replace"))
+                        attempts = attempts_match.group(1) if attempts_match else "1"
+                        diff = subprocess.run(["git", "-C", str(work_dir), "diff", "--stat", base, "HEAD"],
+                                               capture_output=True, text=True, check=False).stdout.splitlines()
+                        diff_stat = diff[-1].strip() if diff else "0 files changed"
+                        prepend_progress(progress_file, f"[MECHANICAL_AUDIT] Status: PASS | Verify_Exit: 0 | Tests_Run: >=1 | Whitelist: PASS | Tree: CLEAN | Diff: {diff_stat} | Attempts: {attempts}")
+                        if not (is_research or is_diagnostic):
+                            archive_overlapping_reports(root, work_dir, base)
+                        if isolated:
+                            try:
+                                commit_hash = publish_preview(root, task_id, task)
+                                print(f"[WORKER] Staged preview drop-box at .preview/ (Commit: {commit_hash})")
+                            except (OSError, ValueError, subprocess.CalledProcessError) as error:
+                                print(f"[WORKER] Preview staging failed for {task_id}: {error}", file=sys.stderr)
+                        new_done = done_count + 1
+                        final_bar = progress_bar(new_done, total)
+                        print(f"[{stamp()}] [SUCCESS] Task completed in {duration}s | {final_bar}")
+                        append_line(done_file, f"[{stamp()}] [DONE] {task} (Duration: {duration}s)")
+                        update_status("IDLE", current=new_done, total=total,
+                                      remaining=max(0, remaining - 1),
+                                      percentage=f"{new_done * 100 // total if total else 0}%", bar=final_bar)
+            stop_requested.wait(poll_interval)
+        return 0
+    finally:
+        try:
+            pid_file.unlink(missing_ok=True)
+        except OSError:
+            pass
+        try:
+            update_status("STOPPED", bar="[------------------------------] 0%")
+        except (OSError, ValueError):
+            pass
 
 
 def git_audit(args):
@@ -788,7 +1168,11 @@ def rollback_failed_task(root, work_dir, task_id, runtime_paths):
     restore_paths = ["."]
     for runtime_path in runtime_paths:
         try:
-            relative = Path(runtime_path).resolve().relative_to(work_dir)
+            candidate = Path(runtime_path)
+            if not candidate.is_absolute():
+                candidate = work_dir / candidate
+            candidate = candidate.parent.resolve() / candidate.name
+            relative = candidate.relative_to(work_dir)
         except ValueError:
             continue
         if str(relative) != ".":
@@ -911,6 +1295,8 @@ def main(argv=None):
     poll.add_argument("--work-dir", required=True)
     poll.add_argument("--step-base", type=int, default=12)
     poll.add_argument("--step-per-file", type=int, default=5)
+    daemon = commands.add_parser("daemon")
+    daemon.add_argument("--root", required=True)
     args = parser.parse_args(argv)
     if args.command == "queue-pop":
         task = pop_task(args.path)
@@ -954,6 +1340,8 @@ def main(argv=None):
         print(json.dumps(result, ensure_ascii=False))
     elif args.command == "poll-next":
         sys.stdout.buffer.write(("\0".join(poll_next(args)) + "\0").encode("utf-8"))
+    elif args.command == "daemon":
+        return worker_daemon(args.root)
     else:
         write_status(args)
     return 0
