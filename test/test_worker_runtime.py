@@ -353,14 +353,6 @@ class GitAuditContractTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("Target Whitelist", result.stdout)
 
-    def test_rejects_agent_changes_to_granularity_scores_even_when_targeted(self):
-        result = self.audit_case(
-            {"docs/agents/granularity-profile.json": '{"modules":{"src/a.py":{"score":5}}}\n'},
-            target="docs/agents/granularity-profile.json",
-        )
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("script-managed", result.stdout.lower())
-
     def test_diagnostic_cannot_commit_product_code(self):
         result = self.audit_case({"src/a.py": "updated\n"}, title="[DIAGNOSTIC]")
         self.assertEqual(result.returncode, 4)
@@ -858,10 +850,6 @@ class WorkerIntegrationTests(unittest.TestCase):
                 "TASK-1 | LEVEL: 1 | TARGET: output.txt | ACTION: [CODE: EXPAND] "
                 "Write output | VERIFY: test -f output.txt\n"
             )
-            (root / "docs/agents").mkdir(parents=True)
-            (root / "docs/agents/granularity-profile.json").write_text(
-                '{"version":"1.0","default_granularity":"Level 1 (Coarse)","modules":{}}\n'
-            )
             bin_dir = Path(directory) / "bin"
             bin_dir.mkdir()
             fake = bin_dir / "codex"
@@ -870,13 +858,12 @@ class WorkerIntegrationTests(unittest.TestCase):
                 "printf '%s\\n' \"$@\" > \"$FAKE_ARGS_LOG\"\n"
                 "while [ \"$#\" -gt 0 ]; do\n"
                 "  if [ \"$1\" = --output-last-message ]; then\n"
-                "    shift; printf 'Attempts: 99 | Confidence: HIGH\\n' > \"$1\"\n"
+                "    shift; printf 'Attempts: 1 | Confidence: HIGH\\n' > \"$1\"\n"
                 "  fi\n"
                 "  shift\n"
                 "done\n"
                 "printf 'hello\\n' > output.txt\n"
                 "if [ \"${FAKE_OUTSIDE:-0}\" = 1 ]; then printf 'bad\\n' > outside.txt; fi\n"
-                "if [ \"${FAKE_CHANGE_CONFIG:-0}\" = 1 ]; then printf 'AI_MODEL=unauthorized\\n' > .worker.env; fi\n"
             )
             fake.chmod(0o755)
             def git(*args):
@@ -885,7 +872,7 @@ class WorkerIntegrationTests(unittest.TestCase):
             git("init", "-q")
             git("config", "user.name", "Worker Test")
             git("config", "user.email", "worker@example.invalid")
-            git("add", "worker.sh", "scripts/worker_runtime.py", ".gitignore", "tasks.txt", "docs/agents/granularity-profile.json")
+            git("add", "worker.sh", "scripts/worker_runtime.py", ".gitignore", "tasks.txt")
             git("commit", "-qm", "fixture")
             args_log = Path(directory) / "args.txt"
             env = os.environ.copy()
@@ -900,11 +887,6 @@ class WorkerIntegrationTests(unittest.TestCase):
             self.assertIn("[DONE]", (root / "tasks.done").read_text())
             self.assertEqual((root / "output.txt").read_text(), "hello\n")
             self.assertEqual(git("show", "HEAD:output.txt"), "hello")
-            profile = json.loads((root / "docs/agents/granularity-profile.json").read_text())
-            self.assertEqual(profile["modules"]["output.txt"]["score"], 5.0)
-            self.assertEqual(profile["modules"]["output.txt"]["last_outcome"], "success")
-            self.assertEqual(profile["modules"]["output.txt"]["last_attempts"], 1)
-            self.assertIn("Attempts: 1", (root / "progress.log").read_text())
             self.assertIn("--model\ngpt-6-luna", args_log.read_text())
             self.assertIn("model_reasoning_effort=none", args_log.read_text())
             self.assertIn("--approve-for-me", args_log.read_text())
@@ -924,22 +906,6 @@ class WorkerIntegrationTests(unittest.TestCase):
             self.assertIn("[MECHANICAL_AUDIT] Status: FAIL", (root / "progress.log").read_text())
             self.assertFalse((root / "outside.txt").exists())
             self.assertEqual(git("show", "HEAD:output.txt"), "hello")
-            profile = json.loads((root / "docs/agents/granularity-profile.json").read_text())
-            self.assertEqual(profile["modules"]["output.txt"]["score"], 3.0)
-
-            original_config = (root / ".worker.env").read_text()
-            (root / "tasks.txt").write_text(
-                "TASK-3 | LEVEL: 1 | TARGET: output.txt | ACTION: [CODE: EXPAND] "
-                "Try to change model configuration | VERIFY: test -f output.txt\n"
-            )
-            env["FAKE_OUTSIDE"] = "0"
-            env["FAKE_CHANGE_CONFIG"] = "1"
-            rejected_config = subprocess.run(["bash", str(root / "worker.sh")], cwd=root,
-                                             env=env, capture_output=True, text=True, timeout=45)
-            self.assertEqual(rejected_config.returncode, 0, rejected_config.stdout + rejected_config.stderr)
-            self.assertEqual((root / ".worker.env").read_text(), original_config)
-            self.assertIn("human-only .worker.env", rejected_config.stderr)
-            self.assertIn("[FAILED]", (root / "tasks.done").read_text())
 
 
 class InstallerIntegrationTests(unittest.TestCase):

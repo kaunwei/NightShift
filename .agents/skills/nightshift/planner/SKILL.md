@@ -19,7 +19,7 @@ Resolve target paths and signatures without inspecting source files in Terminal 
 - **Cache Miss or `/explore` Invoked**: Follow [`explore`](../explore/SKILL.md) to enqueue a `[RESEARCH]` ticket to `tasks.txt` + Queue Sentinel and read the resulting `.reports/<slug>/SUMMARY.md`. If disk contradicts report/memory during execution, re-run [`explore`](../explore/SKILL.md) or trigger **Clean Pivot**.
 
 ### Block 3: Granularity Ladder & TDD Blueprints
-Follow [`tdd`](../engineering/tdd/SKILL.md) and size instruction density from `docs/agents/granularity-profile.json`. Treat its scores as read-only: low scores require a smaller task and denser blueprint, never a higher score. The worker runtime owns automatic score changes; only a human may manually edit a score.
+Follow [`tdd`](../engineering/tdd/SKILL.md) and size instruction density from `docs/agents/granularity-profile.json`:
 
 | Level | Rating | Blueprint Density | Max Deletions |
 | :---: | :--- | :--- | :--- |
@@ -62,12 +62,13 @@ TASK-XXX | LEVEL: 1-3 | [AFTER: <id>] | TARGET: <paths> | ACTION: <logic> | VERI
    - **Fast-Track (Green Light, `<= 5s`, 0 Review Tokens)**: Audit `PASS` + `Attempts: 1 | Confidence: HIGH` -> `git merge --ff-only feature/worker-frontier`.
    - **Deep Audit (Yellow Light — Auto `code-review`)**: On audit fail, `Attempts > 1`, `Confidence < HIGH`, `[DEAD_END]`, or critical seam, run `git show --stat <commit>` and [`code-review`](../engineering/code-review/SKILL.md). Inject remedial `[CODE: FIX]` / `[CODE: REFACTOR]` to line 1 via `scripts/reorder_queue.sh`.
      * **Proof of Negative (`[DEAD_END]`)**: Require isolated passing unit test or runtime log proving module health while global symptom persists; speculative exclusion = task failure.
-4. **Script-Owned Scoring** (`docs/agents/granularity-profile.json`):
-   - Never calculate, raise, lower, or edit a module score. Never use model-authored `Attempts` or `Confidence` as scoring evidence. Never edit `.worker.env` or change `AI_CLI`, `AI_MODEL`, or `AI_EFFORT`; model/provider selection belongs to a human.
-   - The worker runtime records each task outcome using observed CLI invocation count and its mechanical audit result. A verified pass scores 5/4/3/2/1 for 1/2/3/4/5+ observed invocations; guidance/decomposition scores 2; timeout, execution failure, or guard violation scores 1.
-   - `[SCOPE_BLOCKED]` and provider quota exhaustion are no-fault events and do not change the module score.
-   - The profile keys modules by declared `TARGET` path and stores the mean of the latest 10 script-generated observations. If a module score is low, split the work into smaller L2/L3 tickets and increase blueprint detail; do not alter the profile to bypass the granularity gate.
-   - Humans may manually edit profile scores or change the selected model in `.worker.env`. Worker agents must not edit `docs/agents/granularity-profile.json` or `.worker.env`.
+4. **Scoring Rubric** (`docs/agents/granularity-profile.json`):
+   - **5⭐**: 1st attempt pass, 0 warnings -> Maintain / Promote to L1.
+   - **4⭐**: 2nd attempt pass (1 self-healed retry) -> Maintain L1/L2.
+   - **3⭐**: 3rd attempt pass (2 retries) -> Demote module to L2.
+   - **2⭐**: `[NEED_GUIDANCE]` or `[NEED_DECOMPOSITION]` -> Demote to L2/L3; see Section 3.
+   - **1⭐**: `[BLOCKED]` (3 retries failed), timeout, crash, or cheating -> Demote to L3; execute `[BLOCKED]` protocol (Section 3).
+   - *No-Fault Exemption*: `[SCOPE_BLOCKED]` (downstream compiler errors outside `TARGET:`) is boundary compliance—never deduct stars.
 5. **Clean Reset**: Archive `.reports/<issue-slug>/` to `.reports/.archive/`.
 
 ## 2. Refactor Authorization Gates

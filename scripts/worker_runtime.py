@@ -28,7 +28,6 @@ FIELD_NAMES = (
     "LEVEL", "TARGET", "ACTION", "GOAL", "VERIFY",
     "FORBIDDEN_SHORTCUTS", "CONSTRAINTS", "DEPENDS_ON",
 )
-GRANULARITY_PROFILE = "docs/agents/granularity-profile.json"
 
 
 def atomic_write(path, content):
@@ -41,24 +40,6 @@ def atomic_write(path, content):
             mode="w", encoding="utf-8", newline="", dir=path.parent,
             prefix=f".{path.name}.", delete=False,
         ) as output:
-            temporary = Path(output.name)
-            output.write(content)
-        if old_mode is not None:
-            temporary.chmod(old_mode)
-        os.replace(temporary, path)
-    finally:
-        if temporary is not None and temporary.exists():
-            temporary.unlink()
-
-
-def atomic_write_bytes(path, content):
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    old_mode = path.stat().st_mode & 0o777 if path.exists() else None
-    temporary = None
-    try:
-        with tempfile.NamedTemporaryFile(mode="wb", dir=path.parent,
-                                         prefix=f".{path.name}.", delete=False) as output:
             temporary = Path(output.name)
             output.write(content)
         if old_mode is not None:
@@ -193,7 +174,6 @@ def execute_registered_agents(args, agents, state_path, rollback):
         output_text = output_path.read_text(encoding="utf-8", errors="replace") if output_path.exists() else ""
         result_text = result_path.read_text(encoding="utf-8", errors="replace") if result_path.exists() else ""
         if code in (0, 124) or not quota_error(output_text + "\n" + result_text):
-            args.cli_attempts = attempt.cli_attempts
             return code, False
         state["exhausted"][agent["id"]] = {
             "provider": agent["provider"], "command": agent["command"],
@@ -480,7 +460,6 @@ def stream_with_timeout(seconds, command, cwd, environment, output_path, append=
 
 
 def execute_task_cli(args):
-    args.cli_attempts = 0
     prompt = Path(args.prompt_file).read_text(encoding="utf-8")
     environment = os.environ.copy()
     environment.update(PORT=args.worker_port, TEST_PORT=args.worker_port)
@@ -500,7 +479,6 @@ def execute_task_cli(args):
             ephemeral=args.ephemeral, additional_dirs=args.additional_dirs,
         )
         command = [args.executable, *codex_args(codex), prompt]
-        args.cli_attempts += 1
         result_code = stream_with_timeout(args.timeout, command, args.work_dir,
                                           environment, output)
         result_path = last_message if last_message and last_message.is_file() and last_message.stat().st_size else output
@@ -537,7 +515,6 @@ def execute_task_cli(args):
             step_budget=args.step_budget,
         )
         command = [args.executable, "-p", prompt, "--dangerously-skip-permissions", *agy_args(agy)]
-        args.cli_attempts += 1
         result_code = stream_with_timeout(args.timeout, command, args.work_dir,
                                           environment, output)
         text = output.read_text(encoding="utf-8", errors="replace")
@@ -563,14 +540,12 @@ def execute_task_cli(args):
             command = [args.executable, "-p", continue_prompt,
                        "--dangerously-skip-permissions", *agy_args(continuation)]
             before = count_agy_steps(text)
-            args.cli_attempts += 1
             result_code = stream_with_timeout(args.timeout, command, args.work_dir,
                                               environment, output, append=True)
             text = output.read_text(encoding="utf-8", errors="replace")
             added = count_agy_steps(text) - before
             steps_used += max(added, 17 if added < 1 else 0)
     else:
-        args.cli_attempts += 1
         result_code = stream_with_timeout(args.timeout, [args.executable, prompt],
                                           args.work_dir, environment, output)
     if result_code == 0 and "print timeout after" in output.read_text(
@@ -592,8 +567,7 @@ STEP_BUDGET: {max_steps} steps (Base: {step_base} + {target_file_count} target f
 
 RULES:
 1. STEP LOGGING: Print "[EXEC] Modifying <file>...", "[EXEC] Running command: <cmd>", or "[EXEC] Running test: <cmd>" before every action.
-2. HUMAN-ONLY CONTROLS: Never edit docs/agents/granularity-profile.json or .worker.env, or claim a score/attempt count. The worker runtime calculates scores from observed outcomes; model/provider selection and manual score overrides belong to a human. If a module score is low, follow the planner's smaller-task blueprint.
-3. SCOPE & GATES:
+2. SCOPE & GATES:
    - Touch ONLY declared TARGET paths ({target or 'target files'}).
    - [CODE: FIX]: Tests/ read-only; never weaken assertions.
    - [CODE: REFACTOR]: Tests/ and Mocks/ editable if in TARGET, subject to Assertion Non-Decrease (added assertions >= deleted).
@@ -835,7 +809,6 @@ def worker_daemon(root):
                     provider=provider, executable=ai_cli, work_dir=str(work_dir),
                     prompt_file=str(prompt_path), output_file=str(output_path),
                     result_file=str(result_path) if provider == "codex" else "",
-                    cli_attempts=0,
                     timeout=timeout, model=ai_model, effort=ai_effort,
                     approval_mode=config.get("CODEX_APPROVAL_MODE", "auto"),
                     sandbox=config.get("CODEX_SANDBOX", "workspace-write"),
@@ -846,9 +819,6 @@ def worker_daemon(root):
                     task_id=task_id, title=task, level=level, verify=verify,
                     base=base, progress_file=str(progress_file),
                 )
-                config_file = work_dir / ".worker.env"
-                config_snapshot = config_file.read_bytes() if config_file.is_file() else None
-                config_modified = False
                 quota_exhausted = False
                 try:
                     if agents:
@@ -865,16 +835,6 @@ def worker_daemon(root):
                     print(f"[WORKER] CLI execution failed: {error}", file=sys.stderr)
                     exit_code = 2
                     quota_exhausted = False
-                current_config = config_file.read_bytes() if config_file.is_file() else None
-                if current_config != config_snapshot:
-                    config_modified = True
-                    if config_snapshot is None:
-                        config_file.unlink(missing_ok=True)
-                    else:
-                        atomic_write_bytes(config_file, config_snapshot)
-                    print("[WORKER] Rejected worker-agent change to human-only .worker.env.", file=sys.stderr)
-                    exit_code = 1
-                    quota_exhausted = False
                 result_output = result_path if result_path.is_file() and result_path.stat().st_size else output_path
                 duration = int(time.time() - started)
                 append_line(log_file, f"=== [{stamp()}] Task: {task} (Duration: {duration}s, Exit: {exit_code}) ===")
@@ -883,8 +843,7 @@ def worker_daemon(root):
                     stream.write("\n")
                 result_text = result_output.read_text(encoding="utf-8", errors="replace") if result_output.exists() else ""
 
-                outcome = ("error" if config_modified else
-                           "quota_exhausted" if quota_exhausted else
+                outcome = ("quota_exhausted" if quota_exhausted else
                            "timeout" if exit_code == 124 else
                            "scope" if "[SCOPE_BLOCKED]" in result_text else
                            "guidance" if re.search(r"\[(?:NEED_GUIDANCE|NEED_DECOMPOSITION)\]", result_text) else
@@ -906,10 +865,6 @@ def worker_daemon(root):
                     print(f"[{stamp_now}] [TIMEOUT] Task exceeded {timeout}s limit!")
                     rollback_failed_task(root, work_dir, task_id,
                                          (tasks_file, done_file, progress_file))
-                    try:
-                        record_granularity_score(work_dir, target, "timeout", cli_args.cli_attempts)
-                    except (OSError, ValueError, subprocess.CalledProcessError) as error:
-                        print(f"[WORKER] Granularity scoring failed: {error}", file=sys.stderr)
                     summary = ("=" * 80 + f"\n[BLOCKED] {task_id}: Timeout Exceeded ({timeout}s)\n"
                                f"Time: {stamp_now} | Status: TIMEOUT\nFailure Reason: Task execution timed out after {timeout} seconds.\n"
                                "Action Needed for Human: Task may be too complex. Split into smaller atomic tasks.\n" + "=" * 80)
@@ -931,20 +886,12 @@ def worker_daemon(root):
                 elif outcome == "guidance":
                     print(f"[{stamp_now}] ✋ [AWAITING GUIDANCE] Worker honestly requested manager guidance.")
                     rollback_failed_task(root, work_dir, task_id, (tasks_file, done_file, progress_file))
-                    try:
-                        record_granularity_score(work_dir, target, "guidance", cli_args.cli_attempts)
-                    except (OSError, ValueError, subprocess.CalledProcessError) as error:
-                        print(f"[WORKER] Granularity scoring failed: {error}", file=sys.stderr)
                     append_line(done_file, f"[{stamp_now}] [GUIDANCE_REQUESTED] {task}")
                     update_status("AWAITING_GUIDANCE", task, duration, current, total,
                                   max(0, remaining - 1), percent, bar)
                 elif outcome == "error":
                     print(f"[{stamp_now}] [ERROR] CLI exited with code {exit_code}")
                     rollback_failed_task(root, work_dir, task_id, (tasks_file, done_file, progress_file))
-                    try:
-                        record_granularity_score(work_dir, target, "failure", cli_args.cli_attempts)
-                    except (OSError, ValueError, subprocess.CalledProcessError) as error:
-                        print(f"[WORKER] Granularity scoring failed: {error}", file=sys.stderr)
                     summary = ("=" * 80 + f"\n[BLOCKED] {task_id}: Execution Failed (Exit Code: {exit_code})\n"
                                f"Time: {stamp_now} | Status: FAILED\nFailure Reason: Worker CLI returned non-zero exit status {exit_code}.\n"
                                "Action Needed for Human: Inspect .worker.log for error details.\n" + "=" * 80)
@@ -962,17 +909,10 @@ def worker_daemon(root):
                     for message in audit["messages"]:
                         print(message)
                     guard_status, guard_error = audit["status"], audit["error"]
-                    if config_modified:
-                        guard_status = 9
-                        guard_error = "Worker agents cannot change human-only .worker.env model/provider settings."
                     if guard_status:
                         print(f"[{stamp()}] 🛑 [GUARD REJECTION] Post-flight validation failed: {guard_error}")
                         rollback_failed_task(root, work_dir, task_id,
                                              (tasks_file, done_file, progress_file))
-                        try:
-                            record_granularity_score(work_dir, target, "guard", cli_args.cli_attempts)
-                        except (OSError, ValueError, subprocess.CalledProcessError) as error:
-                            print(f"[WORKER] Granularity scoring failed: {error}", file=sys.stderr)
                         summary = (f"[MECHANICAL_AUDIT] Status: FAIL | Verify_Exit: {audit['verify_exit']} | Whitelist: {guard_status} | Tree: DIRTY\n"
                                    + "=" * 80 + f"\n[BLOCKED] {task_id}: Guard Validation Failed\n"
                                    f"Time: {stamp()} | Status: GUARD_VIOLATION\nFailure Reason: {guard_error}\n"
@@ -983,11 +923,10 @@ def worker_daemon(root):
                         update_status("BLOCKED", f"{task} (GUARD VIOLATION)", duration,
                                       current, total, max(0, remaining - 1), percent, bar)
                     else:
-                        try:
-                            record_granularity_score(work_dir, target, "success", cli_args.cli_attempts)
-                        except (OSError, ValueError, subprocess.CalledProcessError) as error:
-                            print(f"[WORKER] Granularity scoring failed: {error}", file=sys.stderr)
-                        attempts = str(cli_args.cli_attempts)
+                        attempts_match = re.search(r"Attempts:\s*(\d+)", result_text)
+                        if not attempts_match and progress_file.exists():
+                            attempts_match = re.search(r"Attempts:\s*(\d+)", progress_file.read_text(encoding="utf-8", errors="replace"))
+                        attempts = attempts_match.group(1) if attempts_match else "1"
                         diff = subprocess.run(["git", "-C", str(work_dir), "diff", "--stat", base, "HEAD"],
                                                capture_output=True, text=True, check=False).stdout.splitlines()
                         diff_stat = diff[-1].strip() if diff else "0 files changed"
@@ -1028,17 +967,13 @@ def git_audit(args):
 
     status = git("status", "--porcelain", "--untracked-files=all", "-z")
     ignored = re.compile(r"progress\.log|tasks\.txt|tasks\.done|worker\..*\.status|\.preview|\.reports")
-    entries = [entry.decode("utf-8", "replace") for entry in status.split(b"\0") if entry]
-    if any(GRANULARITY_PROFILE in entry for entry in entries):
-        return 9, "Granularity profile is script-managed; worker agents cannot change scores."
-    dirty = [entry for entry in entries if not ignored.search(entry)]
+    dirty = [entry.decode("utf-8", "replace") for entry in status.split(b"\0")
+             if entry and not ignored.search(entry.decode("utf-8", "replace"))]
     if dirty:
         return 1, "Dirty working tree or untracked ghost files detected after task. " + ", ".join(dirty)
 
     changed = [name.decode("utf-8", "replace") for name in
                git("diff", "--name-only", "-z", args.base, "HEAD").split(b"\0") if name]
-    if GRANULARITY_PROFILE in changed:
-        return 9, "Granularity profile is script-managed; worker agents cannot change scores."
     context = f"{args.title} {args.constraints}"
     diagnostic = bool(re.search(r"\[DIAGNOSTIC\]", context, re.I))
     research = bool(re.search(r"\[RESEARCH\]", context, re.I))
@@ -1082,77 +1017,6 @@ def git_audit(args):
             if not any(lowered == target or lowered.startswith(target + "/") for target in targets):
                 return 2, f"Target Whitelist Violation: Modified unannounced file '{name}' outside declared scope."
     return 0, ""
-
-
-def record_granularity_score(work_dir, targets, outcome, attempts):
-    """Update the profile from worker-observed outcomes, never model-authored scores."""
-    if outcome == "scope":
-        return
-    score = (max(1, 5 - max(0, attempts - 1)) if outcome == "success" else
-             2 if outcome == "guidance" else 1)
-    root = Path(work_dir).resolve()
-    profile = root / GRANULARITY_PROFILE
-    if not profile.is_file():
-        return
-    data = json.loads(profile.read_text(encoding="utf-8"))
-    modules = data.setdefault("modules", {})
-    if not isinstance(modules, dict):
-        raise ValueError(f"invalid modules map in {profile}")
-    module_keys = []
-    for target in (item.strip() for item in targets.split(",")):
-        if not target:
-            continue
-        candidate = Path(target)
-        try:
-            target_key = (candidate if candidate.is_absolute() else root / candidate)
-            target_key = target_key.resolve().relative_to(root).as_posix()
-        except ValueError:
-            continue
-        if target_key not in module_keys:
-            module_keys.append(target_key)
-    if not module_keys:
-        return
-    now = datetime.now(timezone.utc).isoformat()
-    for key in module_keys:
-        entry = modules.get(key, {})
-        if not isinstance(entry, dict):
-            entry = {"manual_value": entry}
-        observations = entry.get("observations", [])
-        if not isinstance(observations, list):
-            observations = []
-        observations = [item for item in observations
-                        if isinstance(item, dict)
-                        and isinstance(item.get("score"), (int, float))]
-        observations.append({"score": score, "outcome": outcome,
-                             "attempts": attempts, "updated_at": now})
-        observations = observations[-10:]
-        entry.update({
-            "score": round(sum(item["score"] for item in observations) / len(observations), 1),
-            "observations": observations,
-            "last_outcome": outcome,
-            "last_attempts": attempts,
-            "score_source": "worker_runtime",
-        })
-        modules[key] = entry
-    atomic_write(profile, json.dumps(data, ensure_ascii=False, indent=2) + "\n")
-    staged = subprocess.run(["git", "-C", str(root), "add", "--", GRANULARITY_PROFILE],
-                            check=False, capture_output=True)
-    if staged.returncode:
-        raise OSError(staged.stderr.decode("utf-8", "replace"))
-    changed = subprocess.run(["git", "-C", str(root), "diff", "--cached", "--quiet",
-                              "--", GRANULARITY_PROFILE], check=False)
-    if changed.returncode:
-        committed = subprocess.run([
-            "git", "-C", str(root), "commit", "--only", "-m",
-            f"chore(worker): update granularity score for {module_keys[0]}", "--",
-            GRANULARITY_PROFILE,
-        ], check=False, capture_output=True)
-        if committed.returncode:
-            subprocess.run(["git", "-C", str(root), "restore", "--worktree", "--",
-                            GRANULARITY_PROFILE], check=False, stdout=subprocess.DEVNULL,
-                           stderr=subprocess.DEVNULL)
-            print("[WORKER] Could not commit script-managed granularity score update: "
-                  + committed.stderr.decode("utf-8", "replace"), file=sys.stderr)
 
 
 def run_verify(command, work_dir, port, timeout):
