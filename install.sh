@@ -8,7 +8,7 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 TARGET_DIR="${1:-}"
 
 # Display banner
@@ -23,7 +23,16 @@ if [ -z "$TARGET_DIR" ]; then
   exit 1
 fi
 
-TARGET_DIR="$(cd "$TARGET_DIR" 2>/dev/null && pwd || echo "$TARGET_DIR")"
+if [ "$#" -ne 1 ]; then
+  echo "Error: Exactly one target repository path is required."
+  echo "Usage: $0 /path/to/target-project"
+  exit 1
+fi
+
+if ! TARGET_DIR="$(cd -P -- "$TARGET_DIR" 2>/dev/null && pwd -P)"; then
+  echo "Error: Target directory does not exist: $TARGET_DIR"
+  exit 1
+fi
 
 if [ ! -d "$TARGET_DIR" ]; then
   echo "Error: Target directory does not exist: $TARGET_DIR"
@@ -98,7 +107,11 @@ echo "  ✓ Deployed .skills/universal-build-verify.md"
 
 mkdir -p "$TARGET_DIR/.agents/skills"
 if [ -f "$SCRIPT_DIR/.agents/skills.json" ]; then
-  cp -f "$SCRIPT_DIR/.agents/skills.json" "$TARGET_DIR/.agents/skills.json"
+  if [ ! -e "$TARGET_DIR/.agents/skills.json" ]; then
+    cp "$SCRIPT_DIR/.agents/skills.json" "$TARGET_DIR/.agents/skills.json"
+  else
+    echo "  • Preserved existing .agents/skills.json"
+  fi
 fi
 
 # Clean up legacy paths if updating from older layout
@@ -116,7 +129,7 @@ done
 for category in nightshift engineering productivity misc in-progress; do
   if [ -d "$SCRIPT_DIR/.agents/skills/$category" ]; then
     mkdir -p "$TARGET_DIR/.agents/skills/$category"
-    cp -R "$SCRIPT_DIR/.agents/skills/$category/"* "$TARGET_DIR/.agents/skills/$category/" 2>/dev/null || true
+    cp -R "$SCRIPT_DIR/.agents/skills/$category/." "$TARGET_DIR/.agents/skills/$category/"
     echo "  ✓ Deployed .agents/skills/$category/"
   fi
 done
@@ -174,11 +187,6 @@ EOF
   echo "  ✓ Initialized docs/agents/granularity-profile.json"
 else
   echo "  • Preserved existing docs/agents/granularity-profile.json"
-fi
-
-if [ -f "$SCRIPT_DIR/docs/agents/TRIAGE_LABELS.md" ]; then
-  cp -f "$SCRIPT_DIR/docs/agents/TRIAGE_LABELS.md" "$TARGET_DIR/docs/agents/TRIAGE_LABELS.md"
-  echo "  ✓ Copied docs/agents/TRIAGE_LABELS.md"
 fi
 
 # ------------------------------------------------------------------------------

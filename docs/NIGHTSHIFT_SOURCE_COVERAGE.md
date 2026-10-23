@@ -1,6 +1,6 @@
 # NightShift source coverage index
 
-Baseline: 2026-10-23, working-tree sources after commit ef667e3. Companion to [NIGHTSHIFT_SPEC.md](NIGHTSHIFT_SPEC.md). This index records every NightShift-owned skill/reference, launcher, runtime, helper and installer/update entry. Matt skills are references only.
+Baseline: 2026-10-23, source inventory first recorded after commit ef667e3. The `install.sh` fingerprint was refreshed during the installer review; other fingerprints remain from the original inventory. Companion to [NIGHTSHIFT_SPEC.md](NIGHTSHIFT_SPEC.md). This index records every NightShift-owned skill/reference, launcher, runtime, helper and installer/update entry. Matt skills are references only.
 
 ## Preservation rule
 
@@ -15,7 +15,7 @@ For every later simplification, compare the changed source hashes and each affec
 | [.agents/skills/nightshift/planner/SKILL.md](../.agents/skills/nightshift/planner/SKILL.md) | 0dfd5bd3fba964469afb8ad150d1851052ecb0ad51628abd37fc2d2d238c7555 |
 | [.skills/universal-build-verify.md](../.skills/universal-build-verify.md) | de6f1940b3af14bf3310cafdcbf648b0230a13be4f9591de510e3aeb9dde6b31 |
 | [.worker.env.example](../.worker.env.example) | aa1ec275e45463667662bec7042ed2de0d388cd1510d4eb6072179bd7f279da2 |
-| [install.sh](../install.sh) | d42f5dad5a21ee69b7f5269191987f3423778a2a164d26ca025e78832a970563 |
+| [install.sh](../install.sh) | 2894789967807618c088776d0e0e756c4be5f4b3884c65e59e3a5896291d9ecf |
 | [scripts/extract_skeleton.sh](../scripts/extract_skeleton.sh) | 1ed2a93cee0194d1828336a50298ce3d7d8b981875dfaf36bd1adea469e5db01 |
 | [scripts/probe_line.sh](../scripts/probe_line.sh) | 6b56db490c2b82dc864617a88c82c49b75d0f759c3ace06dece014b2c2d87cd3 |
 | [scripts/reorder_queue.sh](../scripts/reorder_queue.sh) | 5cfc56907dafd4b22960199cfff8a413d8542a1251357867d7b5468bee88210a |

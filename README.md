@@ -1,145 +1,74 @@
-# NightShift: 24-Hour Unattended AI Development Framework
+# NightShift
 
-A plug-and-play, dual-terminal AI development framework combining **Matt Pocock's engineering skills** with an **unattended background worker daemon (`worker.sh`)** for 24-hour autonomous code generation, live `.preview/` testing, and double-funnel verification.
+NightShift is a queue-driven Planner/Worker toolkit for unattended development. A Planner skill turns a goal into bounded tickets and accepts the evidence; each Worker invocation handles one ticket through a configurable CLI. Explore supplies read-only codebase reports when the Planner needs evidence about ownership, callers, or public seams.
 
----
+The intended workflow can run continuously, but the runtime does not start or supervise a Planner agent. An interactive agent must follow the Planner skill and keep dispatching work. See the [complete behavior specification](docs/NIGHTSHIFT_SPEC.md) and [source coverage index](docs/NIGHTSHIFT_SOURCE_COVERAGE.md) for the contracts, implementation limits, and audited source inventory.
 
-## Architecture Overview
+## Components
 
-```
-┌────────────────────────────────────────────────────────────────────────┐
-│               Terminal A: Interactive Planner (/planner, /explore)     │
-│  • Domain & Seam Modeling: /domain-modeling, /codebase-design, /explore│
-│  • Tracer-Bullet Slicing (to-tickets): End-to-end vertical slices      │
-│    independently demoable in .preview/.                                │
-│  • Full-Horizon Dispatch: Enqueues 100% of discovered tasks at once    │
-│    (First-Time Alignment or Full-Auto Mode).                           │
-│  • 10-Task Cadence: Auto-runs /code-review & /improve-codebase-arch    │
-│    every 10 tasks and injects a [CODE: REFACTOR] ticket.               │
-│  • Double-Funnel Acceptance:                                           │
-│    - Green Light (Attempts=1, HIGH): <=5s 0-token FF-merge into main.  │
-│    - Yellow Light: Auto-triggers /code-review.                         │
-│    - [BLOCKED] (3 failed retries): Auto-triggers /retro & escalation.  │
-└───────────────────────────────────┬────────────────────────────────────┘
-                                    │ (FIFO tasks.txt with POSIX lock)
-┌───────────────────────────────────▼────────────────────────────────────┐
-│          Terminal B: Background Worker Daemon (./worker.sh)            │
-│  • Zero-argument daemon (auto-sources .worker.env & .worker.notes.md). │
-│  • Mode 1 (WORKER_ISOLATION=1): Persistent .worker-tree sandbox on     │
-│    branch feature/worker-frontier; stages PASS builds to .preview/.    │
-│  • Mode 2 (WORKER_ISOLATION=0): Direct in-place single-tree execution. │
-│  • Executes via /implement (skipping per-task /code-review), /tdd,     │
-│    /codebase-design, /diagnosing-bugs, and /research.                  │
-│  • Mechanical Audits: [CODE], [DIAGNOSTIC], [RESEARCH], Proof of       │
-│    Negative for [DEAD_END], Assertion Non-Decrease, Blast Radius.      │
-│  • Max 3 attempts -> auto Conventional Commit & <=15-line progress.log.│
-└────────────────────────────────────────────────────────────────────────┘
-```
+- `worker.sh` loads `.worker.env`, checks Python, and starts `scripts/worker_runtime.py`.
+- `.agents/skills/nightshift/planner/` defines ticket planning, dispatch, acceptance, and recovery.
+- `.agents/skills/nightshift/explore/` defines read-only seam research and report handoff.
+- `.skills/universal-build-verify.md` defines Worker execution, verification, and closeout expectations.
+- `scripts/` contains the runtime, status and queue controls, report helpers, and source inspection helpers.
+- `tasks.txt` is the FIFO queue. The runtime claims one ticket at a time and executes it sequentially. Dependency ordering and dispatch choices belong to the Planner; the runtime does not schedule a dependency graph or run a Planner.
+- `progress.log`, `tasks.done`, `worker.status`, `.worker.log`, and `.worker-score.json` record runtime outcomes, current state, diagnostics, and shared reliability feedback.
+- `docs/` contains the full behavior spec, source-to-spec coverage, deployment guide, and agent metadata; `docs/adr/` is reserved for architectural decisions.
 
----
+## Setup
 
-## Key Features
-
-1. **Clean Command Surface + Upstream Skill Integrity**:
-   - Exposes only **`/planner`** and **`/explore`** for NightShift orchestration, keeping Terminal A's `/` autocomplete clean.
-   - Preserves Matt Pocock's upstream skills (`.agents/skills/engineering/`, `productivity/`, `misc/`) 100% intact for frictionless `git pull` updates, binding them via direct file pointers.
-2. **Tracer-Bullet Slicing (`to-tickets`) & On-the-Fly Live Preview (`.preview/`)**:
-   - Tasks are sliced vertically end-to-end so every completed ticket stages a runnable snapshot and `.preview/version.json` into `.preview/`.
-   - Test new features live (e.g. `./.preview/bin/app`) on `main` (`PORT=3000`) while Worker continues building subsequent tasks in `.worker-tree` (`PORT=3001`).
-3. **Full-Horizon Batch Dispatch & Full-Auto Mode**:
-   - Once `/explore` verifies seams, Planner dispatches the entire discovered task queue in one shot (never drip-feeding 2–3 tasks at a time).
-   - Protected by live queue preemption (`scripts/reorder_queue.sh`), safe pause (`touch PAUSE`), and instant Git rollback (`git reset --hard nightshift-session-base`).
-4. **Double-Funnel Acceptance & Token Protection**:
-   - **Worker**: Runs fast unit/integration tests without spawning per-task `/code-review` sub-agents.
-   - **Green Light (`Attempts: 1 | Confidence: HIGH`)**: Zero review tokens; immediate `git merge --ff-only feature/worker-frontier`.
-   - **Yellow Light (`Attempts > 1`, low confidence, or critical seam)**: Automatically runs `/code-review`.
-   - **`[BLOCKED]` (3 failed retries)**: Automatically runs `/retro` on the failure trace to upgrade checks/standards and `.worker.notes.md`.
-5. **10-Task Architecture Deepening Cadence**:
-   - Every 10 tasks (`TASK-010`, `TASK-020`, ...), Planner automatically runs `/code-review` and `/improve-codebase-architecture` over recent commit hotspots (`git log --oneline -n 20`) and queues a `[CODE: REFACTOR]` ticket.
-6. **Dual-Worktree Persistent Isolation (`WORKER_ISOLATION=1`, Default)**:
-   - Eliminates IDE file flickering and compiler/linker locks (`ETXTBSY`) while symlinking heavy dependency caches (`node_modules`, `.venv`).
-   - Includes `WORKER_ISOLATION=0` fallback for hardware-locked or fixed-port projects.
-
----
-
-## File Structure
-
-- **`install.sh` / `update.sh`**: Unified non-destructive installer and updater (deploys scripts/skills, preserves user state, and prevents duplicate `.gitignore` entries).
-- **`worker.sh` + `scripts/worker_runtime.py`**: The Bash entry point only loads `.worker.env`, validates Python, and transfers control. Python 3 owns daemon lifecycle, polling, task execution (Codex/agy/generic CLI), timeout and continuation handling, Git and mechanical audits, rollback, report archiving, status, worktree isolation, and preview publishing.
-- **`.worker.env.example`**: Configuration template (model selection, effort level, timeout, `WORKER_ISOLATION`, `ADDITIONAL_DIRS`).
-- **Shared Worker score**: Runtime state starts at 5 stars, records compact Planner acceptance evidence, lowers after repeated same-task timeout/action-budget failures, and exposes the score/recommended task level in `scripts/status.sh`. Planner reads and records it through `python3 scripts/worker_runtime.py score-read ...` and `score-record ...`.
-
-The active low-cost test configuration is `AI_CLI=codex`, `AI_MODEL=gpt-6-luna`, and `AI_EFFORT=none`. The retained `test/` suite uses a fake Codex executable, so routine regression tests consume no model tokens:
-
-To enable ordered quota failover, set `AI_AGENTS_JSON` in `.worker.env` to a JSON array. The worker checks CLI output only after a failed call; there is no quota preflight request. For example:
+Install into another existing repository:
 
 ```sh
-AI_AGENTS_JSON='[{"id":"codex-main","provider":"codex","command":"codex","model":"gpt-6-luna","effort":"none"},{"id":"agy-backup","provider":"agy","command":"agy","model":"gemini-3.8-flash-low","effort":"low","agy_mode":"accept-edits"}]'
+./install.sh /path/to/target-project
 ```
 
-Registered entries are tried in order. Only recognized quota/rate-limit errors trigger a switch; timeouts and other failures follow the normal failure path. Quota exhaustion is remembered in the ignored `.worker-agent-state.<WORKER_ID>.json` file. If every registered agent is exhausted, the worker stops and returns the current task to `tasks.txt`; remove that state file after quota resets to make those agents eligible again.
+Update a deployment with the same installer interface:
+
+```sh
+./update.sh /path/to/target-project
+```
+
+The installer preserves an existing `.worker.env`, queue, history, and notes. To configure this repository directly, copy the example first:
+
+```sh
+cp .worker.env.example .worker.env
+```
+
+The example defaults to `AI_CLI=codex`, `AI_MODEL=gpt-6-luna`, and `AI_EFFORT=none`. Configure a different supported CLI/model in `.worker.env` as needed. Optional `AI_AGENTS_JSON` enables ordered provider failover after a failed CLI call reports a recognized quota or rate-limit error. The runtime does not query quotas in advance; when every registered agent is exhausted, it requeues the current ticket and stops.
+
+## Run and inspect
+
+Start the persistent worker:
+
+```sh
+./worker.sh
+```
+
+Run until the queue is empty:
+
+```sh
+RUN_ONCE=1 ./worker.sh
+```
+
+Useful controls:
+
+```sh
+./scripts/status.sh
+./scripts/reorder_queue.sh prepared-queue.txt  # replace queue from a prepared file
+touch PAUSE                         # pause before the next ticket
+rm PAUSE                            # resume
+```
+
+The queue reorder helper accepts a complete replacement queue from a file or standard input; it has no `prepend` subcommand. By default, the worker uses an isolated `.worker-tree` and publishes build/source artifacts to `.preview/` after a successful mechanical audit. Set `WORKER_ISOLATION=0` for in-place execution. A runtime audit PASS is not Planner acceptance, and preview publication does not merge work into the main checkout.
+
+## Regression tests
+
+Tests use the standard library and fake CLI executables; they do not call a live model:
 
 ```sh
 python3 -m unittest discover -s test -v
 bash -n worker.sh install.sh scripts/*.sh
 ```
-- **`.skills/universal-build-verify.md`**: Worker execution SOP and hard guardrails (Terminal B).
-- **`.agents/skills/nightshift/`**: NightShift orchestrator skills (`planner/SKILL.md` and `explore/SKILL.md`).
-- **`.agents/skills/{engineering,productivity,misc,in-progress}/`**: Matt Pocock's upstream skills catalog (unmodified).
-- **`.worker.notes.md`**: Shared compiler flags and toolchain quirks across stateless worker runs (`< 30 lines`).
-- **`tasks.txt`**: FIFO task queue (single-line English tracer-bullet contracts).
-- **`progress.log`**: Prepend-only verification journal (`<= 15 lines` per task, stamped with `[MECHANICAL_AUDIT]` at line 1).
-- **`scripts/`**:
-  - **`status.sh`**: Real-time dashboard of worker state, queue progress, and `.preview/` version.
-  - **`watch_worker.sh`**: Zero-token blocking waiter for Sentinel Subagents.
-  - **`reorder_queue.sh`**: Atomic queue reordering and hot preemption (`line 1` injection).
-  - **`extract_skeleton.sh`**: AST signature skeleton extractor for low-token exploration.
-  - **`probe_line.sh`**: File- and line-scoped code inspector.
-- **`docs/`**:
-  - **`SPEC.md`**: Technical specification of the dual-terminal architecture and audit gates.
-  - **`PORTING_GUIDE.md`**: Step-by-step guide for installing or updating NightShift in external repositories.
-  - **`agents/`**: Module granularity ratings (`granularity-profile.json`) and triage metadata.
 
----
-
-## Quick Start Guide
-
-### 1. Initialize Configuration
-```bash
-cp .worker.env.example .worker.env
-```
-
-### 2. Launch Terminal B (Background Worker)
-Open a separate terminal or tmux pane:
-```bash
-./worker.sh
-# Or run once until queue is empty:
-RUN_ONCE=1 ./worker.sh
-```
-
-### 3. Plan & Dispatch in Terminal A
-1. Run `/planner` (or `/explore` for seam discovery) in your interactive AI session.
-2. Approve the proposed full queue (or reply `auto` for uninterrupted Full-Auto dispatch into `tasks.txt`).
-3. Worker executes tasks in `.worker-tree`, stages passing builds to `.preview/`, and Sentinel wakes Planner to fast-forward merge into `main`.
-
-### 4. Live Status & Queue Control
-```bash
-./scripts/status.sh                                # Live dashboard & .preview/ info
-./scripts/reorder_queue.sh prepend "TASK-099 ..."  # Hot-preempt urgent task to line 1
-touch PAUSE                                        # Pause worker after current task
-rm PAUSE                                           # Resume worker
-```
-
----
-
-## Porting & Updating in Other Projects
-
-NightShift uses a **Pure Skills-Driven Architecture**—it never modifies your project's `AGENTS.md`, `CLAUDE.md`, or `README.md`.
-
-```bash
-./install.sh /path/to/target-project
-# Or update an existing deployment:
-./update.sh /path/to/target-project
-```
-
-The installer automatically detects fresh install vs. update, syncs `worker.sh`, `scripts/`, `.skills/`, and `.agents/skills/`, preserves your active `.worker.env`, `tasks.txt`, and `.worker.notes.md`, and keeps `.gitignore` clean without duplicate entries. See [docs/PORTING_GUIDE.md](docs/PORTING_GUIDE.md) for details.
+The installer deploys the suite under `test/nightshift_worker/` in target repositories. For porting details, see the [porting guide](docs/PORTING_GUIDE.md).

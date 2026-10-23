@@ -1109,9 +1109,13 @@ class InstallerIntegrationTests(unittest.TestCase):
             target = Path(directory) / "project"
             target.mkdir()
             subprocess.run(["git", "init", "-q", str(target)], check=True)
+            (target / ".agents").mkdir()
+            skills_manifest = target / ".agents/skills.json"
+            skills_manifest.write_text('{"entries":[{"path":"custom/skills"}]}\n')
             result = subprocess.run(["bash", str(ROOT / "install.sh"), str(target)],
                                     cwd=ROOT, capture_output=True, text=True, timeout=30)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(skills_manifest.read_text(), '{"entries":[{"path":"custom/skills"}]}\n')
             self.assertTrue((target / "scripts/worker_runtime.py").is_file())
             operations = ".agents/skills/nightshift/planner/OPERATIONS.md"
             self.assertEqual((target / operations).read_text(), (ROOT / operations).read_text())
@@ -1133,6 +1137,16 @@ class InstallerIntegrationTests(unittest.TestCase):
                 cwd=target, capture_output=True, text=True, timeout=45,
             )
             self.assertEqual(installed.returncode, 0, installed.stdout + installed.stderr)
+
+    @unittest.skipUnless((ROOT / "install.sh").exists(), "source checkout only")
+    def test_installer_resolves_symlink_target_before_self_install_guard(self):
+        with tempfile.TemporaryDirectory() as directory:
+            alias = Path(directory) / "nightshift-alias"
+            alias.symlink_to(ROOT, target_is_directory=True)
+            result = subprocess.run(["bash", str(ROOT / "install.sh"), str(alias)],
+                                    cwd=ROOT, capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("Cannot install/update NightShift into its own source directory.", result.stdout)
 
 
 if __name__ == "__main__":
