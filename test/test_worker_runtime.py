@@ -158,6 +158,26 @@ class CliContractTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("approval", result.stderr.lower())
 
+    def test_agy_args_preserve_mode_model_step_budget_and_existing_effort_suffix(self):
+        with tempfile.TemporaryDirectory() as directory:
+            executable = Path(directory) / "agy"
+            executable.write_text("#!/bin/sh\necho --max-turns\n")
+            executable.chmod(0o755)
+            extra = Path(directory) / "extra"
+            extra.mkdir()
+            result = runtime(
+                "agy-args", "--executable", executable, "--model", "model-low",
+                "--effort", "high", "--mode", "accept-edits", "--timeout", "90",
+                "--step-budget", "23", "--additional-dirs", f" {extra},/missing",
+                "--sandbox", "true",
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.split("\0")[:-1], [
+                "--sandbox", "--mode", "accept-edits", "--model", "model-low",
+                "--print-timeout", "90s", "--add-dir", str(extra),
+                "--max-turns", "23",
+            ])
+
 
 class TimeoutContractTests(unittest.TestCase):
     def test_run_timeout_preserves_exit_code_and_streamed_output(self):

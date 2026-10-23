@@ -199,6 +199,36 @@ def codex_args(args):
     return command
 
 
+def agy_args(args):
+    """Build agy's argv from worker settings without shell word splitting."""
+    command = []
+    if args.sandbox.lower() in ("1", "true"):
+        command.append("--sandbox")
+    if args.mode:
+        command.extend(("--mode", args.mode))
+    if args.model:
+        command.extend(("--model", args.model))
+    command.extend(("--print-timeout", f"{args.timeout}s"))
+    for directory in args.additional_dirs.split(","):
+        directory = directory.strip()
+        if directory and Path(directory).is_dir():
+            command.extend(("--add-dir", directory))
+    if args.effort and not re.search(r"-(?:low|medium|high|xhigh|max)$", args.model):
+        command.extend(("--effort", args.effort))
+    try:
+        help_text = subprocess.run([args.executable, "--help"], check=False,
+                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                   text=True).stdout
+        if "--max-turns" in help_text:
+            command.extend(("--max-turns", str(args.step_budget)))
+        elif "--max-steps" in help_text:
+            command.extend(("--max-steps", str(args.step_budget)))
+    except OSError:
+        # Preserve launch-time diagnostics; the actual invocation reports missing CLI.
+        pass
+    return command
+
+
 def run_with_timeout(seconds, command):
     """Run a command with inherited output and terminate its process group on timeout."""
     if not command:
@@ -399,6 +429,15 @@ def main(argv=None):
     codex.add_argument("--sandbox", default="workspace-write")
     codex.add_argument("--ephemeral", default="1")
     codex.add_argument("--additional-dirs", default="")
+    agy = commands.add_parser("agy-args")
+    agy.add_argument("--executable", default="agy")
+    agy.add_argument("--model", default="")
+    agy.add_argument("--effort", default="")
+    agy.add_argument("--mode", default="")
+    agy.add_argument("--timeout", default="1800")
+    agy.add_argument("--step-budget", type=int, default=17)
+    agy.add_argument("--additional-dirs", default="")
+    agy.add_argument("--sandbox", default="0")
     timeout = commands.add_parser("run-timeout")
     timeout.add_argument("seconds", type=float)
     timeout.add_argument("argv", nargs=argparse.REMAINDER)
@@ -434,6 +473,8 @@ def main(argv=None):
         display_status(args.path)
     elif args.command == "codex-args":
         sys.stdout.buffer.write(("\0".join(codex_args(args)) + "\0").encode("utf-8"))
+    elif args.command == "agy-args":
+        sys.stdout.buffer.write(("\0".join(agy_args(args)) + "\0").encode("utf-8"))
     elif args.command == "run-timeout":
         command = args.argv[1:] if args.argv[:1] == ["--"] else args.argv
         return run_with_timeout(args.seconds, command)

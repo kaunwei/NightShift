@@ -496,57 +496,34 @@ PROMPT_EOF
   EXIT_CODE=0
 
   if [ "$AI_CLI" = "agy" ]; then
-    EXTRA_CLI_ARGS=()
-    if [ "$USE_SANDBOX" = "1" ] || [ "$USE_SANDBOX" = "true" ]; then
-      EXTRA_CLI_ARGS+=("--sandbox")
+    AGY_ARGS_TMP=$(mktemp)
+    if ! "$PYTHON_BIN" "$SCRIPT_DIR/worker_runtime.py" agy-args \
+      --executable "$AI_CLI" --model "$AI_MODEL" --effort "$AI_EFFORT" \
+      --mode "$AGY_MODE" --timeout "$TASK_TIMEOUT" --step-budget "$TASK_MAX_STEPS" \
+      --additional-dirs "$ADDITIONAL_DIRS" --sandbox "$USE_SANDBOX" > "$AGY_ARGS_TMP"; then
+      EXIT_CODE=2
+    else
+      EXTRA_CLI_ARGS=()
+      while IFS= read -r -d '' agy_arg; do
+        EXTRA_CLI_ARGS+=("$agy_arg")
+      done < "$AGY_ARGS_TMP"
     fi
-    if [ -n "$AGY_MODE" ]; then
-      EXTRA_CLI_ARGS+=("--mode" "$AGY_MODE")
-    fi
-    if [ -n "$AI_MODEL" ]; then
-      EXTRA_CLI_ARGS+=("--model" "$AI_MODEL")
-    fi
-    EXTRA_CLI_ARGS+=("--print-timeout" "${TASK_TIMEOUT}s")
-    if [ -n "$ADDITIONAL_DIRS" ]; then
-      IFS=',' read -ra DIRS <<< "$ADDITIONAL_DIRS"
-      for d in "${DIRS[@]}"; do
-        d_trimmed=$(echo "$d" | xargs)
-        if [ -n "$d_trimmed" ] && [ -d "$d_trimmed" ]; then
-          EXTRA_CLI_ARGS+=("--add-dir" "$d_trimmed")
-        fi
-      done
-    fi
+    rm -f "$AGY_ARGS_TMP"
 
-    # Pass --effort only if AI_MODEL does not already include an effort suffix
-    if [ -n "$AI_EFFORT" ]; then
-      case "$AI_MODEL" in
-        *-low|*-medium|*-high|*-xhigh|*-max)
-          ;;
-        *)
-          EXTRA_CLI_ARGS+=("--effort" "$AI_EFFORT")
-          ;;
-      esac
+    if [ "$EXIT_CODE" -eq 0 ]; then
+      echo "[WORKER] Launching $AI_CLI (Model: $AI_MODEL, Mode: ${AGY_MODE:-default}, StepBudget: $TASK_MAX_STEPS, WorkDir: $WORK_DIR)..."
+      (
+        cd "$WORK_DIR" && \
+        export PORT="$WORKER_PORT" && \
+        export TEST_PORT="$WORKER_PORT" && \
+        export MAX_STEPS="$TASK_MAX_STEPS" && \
+        export AGY_MAX_STEPS="$TASK_MAX_STEPS" && \
+        run_with_timeout "$TASK_TIMEOUT" agy -p "$PROMPT_PAYLOAD" \
+          --dangerously-skip-permissions \
+          "${EXTRA_CLI_ARGS[@]}"
+      ) 2>&1 | tee "$CMD_OUTPUT_TMP"
+      EXIT_CODE="${PIPESTATUS[0]}"
     fi
-
-    # Pass dynamic step budget if supported by the CLI (--max-turns / --max-steps)
-    if agy --help 2>&1 | grep -q -- "--max-turns"; then
-      EXTRA_CLI_ARGS+=("--max-turns" "$TASK_MAX_STEPS")
-    elif agy --help 2>&1 | grep -q -- "--max-steps"; then
-      EXTRA_CLI_ARGS+=("--max-steps" "$TASK_MAX_STEPS")
-    fi
-
-    echo "[WORKER] Launching $AI_CLI (Model: $AI_MODEL, Mode: ${AGY_MODE:-default}, StepBudget: $TASK_MAX_STEPS, WorkDir: $WORK_DIR)..."
-    (
-      cd "$WORK_DIR" && \
-      export PORT="$WORKER_PORT" && \
-      export TEST_PORT="$WORKER_PORT" && \
-      export MAX_STEPS="$TASK_MAX_STEPS" && \
-      export AGY_MAX_STEPS="$TASK_MAX_STEPS" && \
-      run_with_timeout "$TASK_TIMEOUT" agy -p "$PROMPT_PAYLOAD" \
-        --dangerously-skip-permissions \
-        "${EXTRA_CLI_ARGS[@]}"
-    ) 2>&1 | tee "$CMD_OUTPUT_TMP"
-    EXIT_CODE="${PIPESTATUS[0]}"
 
     # Dynamic Step Budget Continuation: if CLI hit its internal per-invocation step ceiling (~17 steps)
     # before reaching TASK_MAX_STEPS and left uncommitted progress inside the worktree, resume until
