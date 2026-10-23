@@ -45,6 +45,9 @@ class WorkerPromptContractTests(unittest.TestCase):
         ):
             with self.subTest(required=required):
                 self.assertIn(required, prompt)
+        self.assertIn(str(ROOT / ".skills/universal-build-verify.md"), prompt)
+        self.assertIn((ROOT / ".skills/universal-build-verify.md").read_text(), prompt)
+        self.assertIn("Leave them untouched and unstaged", prompt)
 
     def test_prompt_does_not_request_self_scoring_or_destructive_retry_reset(self):
         prompt = build_task_prompt("task", "TASK-1", "1", "src/a.py", "test",
@@ -220,6 +223,7 @@ class WorkerScoreTests(unittest.TestCase):
             self.assertIn("TASK-7", text)
             self.assertIn("MUST NOT modify", text)
             self.assertIn("python3 -m unittest", text)
+            self.assertIn("they do not block verification", text)
 
     def test_codex_jsonl_command_execution_events_are_counted_against_budget(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -275,7 +279,7 @@ class WorkerScoreTests(unittest.TestCase):
                 "last='' prev=''\n"
                 "for arg in \"$@\"; do if [ \"$prev\" = --output-last-message ]; then last=\"$arg\"; fi; prev=\"$arg\"; done\n"
                 "case \"$*\" in\n"
-                "  *'CLOSEOUT ONLY'*) printf 'verified closeout\\n' > \"$last\"; git add output.txt; git commit -qm closeout ;;\n"
+                "  *'CLOSEOUT ONLY'*) printf '[CLOSEOUT_VERIFIED]\\n' > \"$last\" ;;\n"
                 "  *) printf '[CLOSEOUT_REQUIRED]\\n' > \"$last\"; printf 'after\\n' > output.txt ;;\n"
                 "esac\n"
                 "printf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"type\":\"command_execution\"}}'\n"
@@ -291,7 +295,7 @@ class WorkerScoreTests(unittest.TestCase):
                              "--task-id", "TASK-CLOSE", "--title", "[CODE: FIX] change output",
                              "--base", base, "--step-budget", "2")
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(git("log", "-1", "--pretty=%s"), "closeout")
+            self.assertEqual(git("log", "-1", "--pretty=%s"), "fix(worker): complete TASK-CLOSE")
             self.assertEqual(git("show", "HEAD:output.txt"), "after")
             self.assertEqual(git("status", "--porcelain"), "")
 

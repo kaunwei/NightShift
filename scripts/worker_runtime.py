@@ -133,6 +133,7 @@ def build_ghost_closeout_prompt(task_id, verify, progress_file):
 You MUST NOT modify source code, tests, documentation, configuration, or any other implementation files. Do not fix, refactor, create, delete, or rewrite files. Do not issue commands that alter project contents. If anything still requires implementation, stop immediately and report [CLOSEOUT_INCOMPLETE] with the reason; do not try a workaround.
 
 Allowed: inspect git status/diff/log, run the required verification command ({verify or 'the task verification command'}), and perform only the Git closeout explicitly allowed by the task. If verification passes, commit only the existing changes; never alter file contents. Do not commit if verification fails or if a code change would be needed. Report a concise evidence-based result for {task_id}. Do not create or count a separate task. The script attributes your outcome to {task_id} and enforces file-change checks.
+Runtime-owned changes to progress.log and tasks.done are expected. Leave them untouched and unstaged; they do not block verification or committing the declared task artifacts. Only unexpected implementation changes require [CLOSEOUT_INCOMPLETE].
 Progress log: {progress_file}
 """
 
@@ -163,6 +164,7 @@ def run_codex_closeout(args, environment, output, actions_used):
     original_message = Path(args.result_file) if args.result_file else Path(args.output_file)
     closeout_message = str(original_message.with_name("closeout-message.txt"))
     prompt = build_ghost_closeout_prompt(args.task_id, args.verify, args.progress_file)
+    prompt += "\nFor this Codex closeout, the host runtime owns all Git writes. Run verification only; do not stage or commit. After verification succeeds, report [CLOSEOUT_VERIFIED]. Git metadata sandbox restrictions are handled by the host and are not implementation failures.\n"
     codex = argparse.Namespace(
         last_message=closeout_message, model=args.model, effort=args.effort,
         approval_mode=args.approval_mode, sandbox=args.sandbox,
@@ -680,7 +682,9 @@ def execute_task_cli(args):
                 and not re.search(r"\[(?:SCOPE_BLOCKED|NEED_GUIDANCE|NEED_DECOMPOSITION|BLOCKED)\]",
                                   result_path.read_text(encoding="utf-8", errors="replace"))):
             closeout_requested = "[CLOSEOUT_REQUIRED]" in result_path.read_text(encoding="utf-8", errors="replace")
-            if not closeout_requested:
+            if closeout_requested:
+                result_code = run_codex_closeout(args, environment, output, actions_used)
+            if result_code == 0:
                 targets = [item.strip() for item in args.target.split(",") if item.strip()]
                 for target in targets:
                     subprocess.run(["git", "-C", args.work_dir, "add", "-A", "--", target],
@@ -703,8 +707,6 @@ def execute_task_cli(args):
                     if commit.returncode:
                         print(f"[WORKER] Failed to commit Codex changes for {args.task_id}.", file=sys.stderr)
                         result_code = 1
-            if result_code == 0 and closeout_requested:
-                result_code = run_codex_closeout(args, environment, output, actions_used)
     elif args.provider == "agy":
         agy = argparse.Namespace(
             sandbox=args.use_sandbox, mode=args.agy_mode, model=args.model,
@@ -763,14 +765,21 @@ def execute_task_cli(args):
 
 def build_task_prompt(task, task_id, level, target, verify, forbidden, constraints,
                       max_steps, target_file_count, step_base, step_per_file, progress_file):
-    return f"""Execute one unattended NightShift task. Read .skills/universal-build-verify.md and .worker.notes.md first; follow the applicable skill:
+    contract = Path(__file__).resolve().parent.parent / ".skills/universal-build-verify.md"
+    contract_text = contract.read_text(encoding="utf-8") if contract.is_file() else ""
+    return f"""Execute one unattended NightShift task. Read {contract} and .worker.notes.md first; follow the applicable skill:
 - [CODE]: .agents/skills/engineering/tdd/SKILL.md; consult .agents/skills/engineering/codebase-design/SKILL.md when changing an interface.
 - [DIAGNOSTIC]: .agents/skills/engineering/diagnosing-bugs/SKILL.md.
 - [RESEARCH]: .agents/skills/engineering/research/SKILL.md and .agents/skills/nightshift/explore/SKILL.md.
 
+AUTHORITATIVE WORKER CONTRACT ({contract}):
+{contract_text}
+Use this launcher-provided contract over any older copy in the isolated checkout.
+
 TASK:
 {task}
 TASK_ID: {task_id}
+Runtime-owned changes to progress.log and tasks.done may already exist. Leave them untouched and unstaged; continue verification and commit only declared task artifacts.
 
 LIMITS
 - Action budget: {max_steps} (base {step_base} + {target_file_count} target files × {step_per_file}). Keep the final 3 actions for verification and Git closeout. The runtime enforces this limit; do not evade it by combining actions.
