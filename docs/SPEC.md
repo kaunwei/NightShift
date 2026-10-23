@@ -11,7 +11,7 @@ The framework enforces a strict division of responsibilities:
   - Default Reflex: Grooms requirements, models domain, decomposes into atomic contracts in `tasks.txt` (`[CODE]`, `[DIAGNOSTIC]`, `[RESEARCH]`), and yields control. NEVER modifies application code directly for routine tasks (`Sources/`, `src/`, `app/`, `lib/`, `tests/`) and avoids unbounded in-session debugging loops.
   - Sovereign Exceptions:
     1. *Anti-Rubber-Stamp Audit*: Mandated deep inspections on `Attempts > 1`, `Confidence < 1.0`, or critical architectural seams.
-    2. *Level 3 Implementation Escalation*: Intervenes when a coding task was **already at Level 3 (Micro)** and Worker failed 3 retries, followed by a mandatory post-mortem allocation retro in `granularity-profile.json` and `.worker.notes.md`.
+    2. *Level 3 Implementation Escalation*: Intervenes when a coding task was **already at Level 3 (Micro)** and Worker failed 3 retries, followed by a post-mortem allocation retro in `.worker.notes.md`. The worker runtime owns automatic changes to `granularity-profile.json`; only a human may manually adjust its scores.
     3. *Diagnostic Evasion & Bogus Report Intervention*: Intervenes when Worker repeatedly produces vague/hallucinated reports or fails to isolate the issue after 2-3 retries without verifiable evidence. Planner directly isolates the root cause and logs quirks in `.worker.notes.md`.
     4. *Explicit User Mandate*: User explicitly asks Planner to modify code directly.
   - Active Skills: `/planner`, `/explore`, `/domain-modeling`, `/codebase-design`, `/tdd`, `/to-tickets`, `/code-review`, `/improve-codebase-architecture`, `/retro`.
@@ -137,10 +137,8 @@ TASK-XXX | LEVEL: 1 | AFTER: <task_id> | TARGET: <file_paths> | ACTION: <concret
    - When a task is **ALREADY at Level 3 (Micro)** and Worker still blocks/fails after 3 retries, this indicates deep architectural contradictions, environment quirks, or subtle bugs beyond the smaller model's scope.
    - **Planner Steps In**: Planner reads `.worker.log`, inspects target code directly, applies the surgical fix, runs verification tests, and commits.
 3. **Post-Mortem Allocation Retro**:
-   - Planner **MUST record why the allocation failed** in:
-     - `docs/agents/granularity-profile.json` (subsystem score & notes)
-     - `.worker.notes.md` (compiler traps / repo quirks discovered)
-   - Permanently enhances future task allocation efficiency.
+   - Planner records why the allocation failed in `.worker.notes.md` (compiler traps / repo quirks discovered) and creates smaller, more explicit follow-up tasks.
+   - Planner never edits scores in `docs/agents/granularity-profile.json`; the worker runtime derives them from observed CLI attempts and mechanical outcomes, while a human may manually adjust a score.
 
 ### 5.4 Hierarchical Progressive Exploration Protocol
 For complex cross-module features and defects, Planner grooms and decides progressively from coarse to fine:
