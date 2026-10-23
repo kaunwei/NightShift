@@ -237,13 +237,8 @@ trap cleanup SIGINT SIGTERM EXIT
 
 prepend_progress_log() {
   local entry="$1"
-  local temp_file
-  temp_file=$(mktemp)
-  echo "$entry" > "$temp_file"
-  if [ -f "$PROGRESS_FILE" ]; then
-    cat "$PROGRESS_FILE" >> "$temp_file"
-  fi
-  mv "$temp_file" "$PROGRESS_FILE"
+  "$PYTHON_BIN" "$SCRIPT_DIR/worker_runtime.py" progress-prepend \
+    --path "$PROGRESS_FILE" --entry "$entry"
 }
 
 isolate_and_rollback_dirty_tree() {
@@ -392,7 +387,8 @@ while true; do
   update_status "RUNNING" "$TASK_TITLE" "0" "$CURRENT_IDX" "$TOTAL_COUNT" "$((REMAINING_COUNT - 1))" "${PERCENT_START}%" "$BAR_START"
 
   # Construct Prompt for the CLI Process
-  PROMPT_PAYLOAD=$(cat <<PROMPT_EOF
+  PROMPT_TMP=$(mktemp)
+  cat > "$PROMPT_TMP" <<PROMPT_EOF
 Execute this atomic task as the unattended Background Worker. Read and follow .skills/universal-build-verify.md and .worker.notes.md:
 - [CODE]: Follow .agents/skills/engineering/implement/SKILL.md (skip /code-review per task), .agents/skills/engineering/tdd/SKILL.md, and .agents/skills/engineering/codebase-design/SKILL.md.
 - [DIAGNOSTIC]: Follow .agents/skills/engineering/diagnosing-bugs/SKILL.md (compile-clean failing repro test or trace; product code locked).
@@ -431,7 +427,6 @@ Scope: ${TASK_TARGET:-<modified files>}
 Verification: ${TASK_VERIFY:-<test command>} (100% PASS)
 Attempts: <attempts_count> | Confidence: <HIGH|MED|LOW>"
 PROMPT_EOF
-)
 
   # Execute CLI with Timeout Guard
   CMD_OUTPUT_TMP=$(mktemp)
@@ -439,147 +434,30 @@ PROMPT_EOF
   CODEX_LAST_MESSAGE_TMP=""
   EXIT_CODE=0
 
-  if [ "$AI_CLI" = "agy" ]; then
-    AGY_ARGS_TMP=$(mktemp)
-    if ! "$PYTHON_BIN" "$SCRIPT_DIR/worker_runtime.py" agy-args \
-      --executable "$AI_CLI" --model "$AI_MODEL" --effort "$AI_EFFORT" \
-      --mode "$AGY_MODE" --timeout "$TASK_TIMEOUT" --step-budget "$TASK_MAX_STEPS" \
-      --additional-dirs "$ADDITIONAL_DIRS" --sandbox "$USE_SANDBOX" > "$AGY_ARGS_TMP"; then
-      EXIT_CODE=2
-    else
-      EXTRA_CLI_ARGS=()
-      while IFS= read -r -d '' agy_arg; do
-        EXTRA_CLI_ARGS+=("$agy_arg")
-      done < "$AGY_ARGS_TMP"
-    fi
-    rm -f "$AGY_ARGS_TMP"
-
-    if [ "$EXIT_CODE" -eq 0 ]; then
-      echo "[WORKER] Launching $AI_CLI (Model: $AI_MODEL, Mode: ${AGY_MODE:-default}, StepBudget: $TASK_MAX_STEPS, WorkDir: $WORK_DIR)..."
-      (
-        cd "$WORK_DIR" && \
-        export PORT="$WORKER_PORT" && \
-        export TEST_PORT="$WORKER_PORT" && \
-        export MAX_STEPS="$TASK_MAX_STEPS" && \
-        export AGY_MAX_STEPS="$TASK_MAX_STEPS" && \
-        run_with_timeout "$TASK_TIMEOUT" agy -p "$PROMPT_PAYLOAD" \
-          --dangerously-skip-permissions \
-          "${EXTRA_CLI_ARGS[@]}"
-      ) 2>&1 | tee "$CMD_OUTPUT_TMP"
-      EXIT_CODE="${PIPESTATUS[0]}"
-    fi
-
-    # Dynamic Step Budget Continuation: if CLI hit its internal per-invocation step ceiling (~17 steps)
-    # before reaching TASK_MAX_STEPS and left uncommitted progress inside the worktree, resume until
-    # TASK_MAX_STEPS is reached or the task finishes cleanly.
-    STEPS_USED=$(grep -cE '^\[EXEC\]|Tool Call|edit_file|write_file|run_command|read_file' "$CMD_OUTPUT_TMP" 2>/dev/null || true)
-    STEPS_USED="${STEPS_USED//[^0-9]/}"
-    [ "${STEPS_USED:-0}" -lt 1 ] && STEPS_USED=17
-    while [ "$EXIT_CODE" -eq 0 ] && [ "$STEPS_USED" -lt "$TASK_MAX_STEPS" ]; do
-      CURRENT_HEAD_SHA=$(git -C "$WORK_DIR" rev-parse HEAD 2>/dev/null || echo "")
-      DIRTY_WORKTREE=$(git -C "$WORK_DIR" status --porcelain 2>/dev/null | grep -vE "(progress\.log|tasks\.txt|tasks\.done|worker\..*\.status|\.preview|\.worker\..*|\.reports/|\.reports)" || true)
-      if [ "$CURRENT_HEAD_SHA" = "$TASK_BASE_SHA" ] && [ -n "$DIRTY_WORKTREE" ]; then
-        REMAINING_STEPS=$(( TASK_MAX_STEPS - STEPS_USED ))
-        echo "[WORKER] ⏩ Step budget remaining ($STEPS_USED/$TASK_MAX_STEPS used; $REMAINING_STEPS left). Resuming in-progress changes..."
-        CONTINUE_TMP=$(mktemp)
-        (
-          cd "$WORK_DIR" && \
-          export PORT="$WORKER_PORT" && \
-          export TEST_PORT="$WORKER_PORT" && \
-          export MAX_STEPS="$REMAINING_STEPS" && \
-          export AGY_MAX_STEPS="$REMAINING_STEPS" && \
-          run_with_timeout "$TASK_TIMEOUT" agy -p "Continue $TASK_ID from the current modified working tree ($REMAINING_STEPS steps remaining in budget of $TASK_MAX_STEPS). Inspect git diff, complete any remaining edits, run verification (${TASK_VERIFY:-build and test}), prepend $PROGRESS_FILE, and commit." \
-            --dangerously-skip-permissions \
-            "${EXTRA_CLI_ARGS[@]}"
-        ) 2>&1 | tee "$CONTINUE_TMP"
-        EXIT_CODE="${PIPESTATUS[0]}"
-        cat "$CONTINUE_TMP" >> "$CMD_OUTPUT_TMP"
-        ADD_STEPS=$(grep -cE '^\[EXEC\]|Tool Call|edit_file|write_file|run_command|read_file' "$CONTINUE_TMP" 2>/dev/null || true)
-        ADD_STEPS="${ADD_STEPS//[^0-9]/}"
-        [ "${ADD_STEPS:-0}" -lt 1 ] && ADD_STEPS=17
-        STEPS_USED=$(( STEPS_USED + ADD_STEPS ))
-        rm -f "$CONTINUE_TMP"
-      else
-        break
-      fi
-    done
-  elif [ "$AI_CLI" = "codex" ]; then
+  # Execute provider adapters, timeout handling, output capture, and trusted commit in Python.
+  RESULT_OUTPUT_TMP="$CMD_OUTPUT_TMP"
+  CODEX_LAST_MESSAGE_TMP=""
+  CLI_PROVIDER="generic"
+  [ "$AI_CLI" = "agy" ] && CLI_PROVIDER="agy"
+  if [ "$AI_CLI" = "codex" ]; then
+    CLI_PROVIDER="codex"
     CODEX_LAST_MESSAGE_TMP=$(mktemp)
-    CODEX_ARGS_TMP=$(mktemp)
-    if ! "$PYTHON_BIN" "$SCRIPT_DIR/worker_runtime.py" codex-args \
-      --last-message "$CODEX_LAST_MESSAGE_TMP" --model "$AI_MODEL" \
-      --effort "$AI_EFFORT" --approval-mode "$CODEX_APPROVAL_MODE" \
-      --sandbox "$CODEX_SANDBOX" --ephemeral "$CODEX_EPHEMERAL" \
-      --additional-dirs "$ADDITIONAL_DIRS" > "$CODEX_ARGS_TMP"; then
-      EXIT_CODE=2
-    else
-      CODEX_ARGS=()
-      while IFS= read -r -d '' codex_arg; do
-        CODEX_ARGS+=("$codex_arg")
-      done < "$CODEX_ARGS_TMP"
-    fi
-    rm -f "$CODEX_ARGS_TMP"
-
-    if [ "$EXIT_CODE" -eq 0 ]; then
-      echo "[WORKER] Launching codex (Model: ${AI_MODEL:-configured default}, Effort: ${AI_EFFORT:-configured default}, StepBudget: $TASK_MAX_STEPS, WorkDir: $WORK_DIR)..."
-      (
-        cd "$WORK_DIR" && \
-        export PORT="$WORKER_PORT" && \
-        export TEST_PORT="$WORKER_PORT" && \
-        export MAX_STEPS="$TASK_MAX_STEPS" && \
-        run_with_timeout "$TASK_TIMEOUT" codex "${CODEX_ARGS[@]}" "$PROMPT_PAYLOAD"
-      ) 2>&1 | tee "$CMD_OUTPUT_TMP"
-      EXIT_CODE="${PIPESTATUS[0]}"
-      if [ -s "$CODEX_LAST_MESSAGE_TMP" ]; then
-        RESULT_OUTPUT_TMP="$CODEX_LAST_MESSAGE_TMP"
-      fi
-
-      # Codex automatic review intentionally keeps Git metadata read-only.
-      # After a successful turn, stage only declared TARGET paths and let the
-      # trusted wrapper create the commit before the existing post-flight audit.
-      if [ "$EXIT_CODE" -eq 0 ] && { [ "$CODEX_APPROVAL_MODE" = "auto" ] || [ "$CODEX_APPROVAL_MODE" = "approve-for-me" ]; }; then
-        if ! grep -q '\[SCOPE_BLOCKED\]\|\[NEED_GUIDANCE\]\|\[NEED_DECOMPOSITION\]\|\[BLOCKED\]' "$RESULT_OUTPUT_TMP" 2>/dev/null; then
-          IFS=',' read -ra CODEX_TARGETS <<< "$TASK_TARGET"
-          for target_path in "${CODEX_TARGETS[@]}"; do
-            target_path=$(echo "$target_path" | xargs)
-            if [ -n "$target_path" ]; then
-              git -C "$WORK_DIR" add -A -- "$target_path" 2>/dev/null || true
-            fi
-          done
-
-          if ! git -C "$WORK_DIR" diff --cached --quiet 2>/dev/null; then
-            case "$TASK_TITLE" in
-              *"[CODE: FIX]"*) COMMIT_TYPE="fix" ;;
-              *"[CODE: REFACTOR]"*) COMMIT_TYPE="refactor" ;;
-              *"[RESEARCH]"*) COMMIT_TYPE="docs" ;;
-              *"[DIAGNOSTIC]"*) COMMIT_TYPE="test" ;;
-              *) COMMIT_TYPE="feat" ;;
-            esac
-            if ! git -C "$WORK_DIR" commit -m "$COMMIT_TYPE(worker): complete $TASK_ID" -m "Task: $TASK_ID (Level ${TASK_LEVEL:-1})
-Scope: ${TASK_TARGET:-<modified files>}
-Verification: ${TASK_VERIFY:-<worker post-flight>}
-Attempts: wrapper-managed | Confidence: pending audit"; then
-              echo "[WORKER] Failed to commit Codex changes for $TASK_ID."
-              EXIT_CODE=1
-            fi
-          fi
-        fi
-      fi
-    fi
-  else
-    echo "[WORKER] Launching $AI_CLI (WorkDir: $WORK_DIR)..."
-    (
-      cd "$WORK_DIR" && \
-      export PORT="$WORKER_PORT" && \
-      export TEST_PORT="$WORKER_PORT" && \
-      run_with_timeout "$TASK_TIMEOUT" "$AI_CLI" "$PROMPT_PAYLOAD"
-    ) 2>&1 | tee "$CMD_OUTPUT_TMP"
-    EXIT_CODE="${PIPESTATUS[0]}"
   fi
-
-  # Detect native print-timeout message in CLI output
-  if [ $EXIT_CODE -eq 0 ] && grep -q "print timeout after" "$CMD_OUTPUT_TMP" 2>/dev/null; then
-    EXIT_CODE=124
+  echo "[WORKER] Launching $AI_CLI (Model: ${AI_MODEL:-configured default}, StepBudget: $TASK_MAX_STEPS, WorkDir: $WORK_DIR)..."
+  "$PYTHON_BIN" "$SCRIPT_DIR/worker_runtime.py" task-cli \
+    --provider "$CLI_PROVIDER" --executable "$AI_CLI" --work-dir "$WORK_DIR" \
+    --prompt-file "$PROMPT_TMP" --output-file "$CMD_OUTPUT_TMP" \
+    --result-file "$CODEX_LAST_MESSAGE_TMP" --timeout "$TASK_TIMEOUT" \
+    --model "$AI_MODEL" --effort "$AI_EFFORT" --approval-mode "$CODEX_APPROVAL_MODE" \
+    --sandbox "$CODEX_SANDBOX" --ephemeral "$CODEX_EPHEMERAL" \
+    --additional-dirs "$ADDITIONAL_DIRS" --use-sandbox "$USE_SANDBOX" \
+    --agy-mode "$AGY_MODE" --step-budget "$TASK_MAX_STEPS" --worker-port "$WORKER_PORT" \
+    --target "$TASK_TARGET" --task-id "$TASK_ID" --title "$TASK_TITLE" \
+    --level "${TASK_LEVEL:-1}" --verify "$TASK_VERIFY" --base "$TASK_BASE_SHA" \
+    --progress-file "$PROGRESS_FILE"
+  EXIT_CODE=$?
+  if [ -s "$CODEX_LAST_MESSAGE_TMP" ]; then
+    RESULT_OUTPUT_TMP="$CODEX_LAST_MESSAGE_TMP"
   fi
 
   END_TIME=$(date +%s)
@@ -844,5 +722,6 @@ BLOCK_EOF
 
   rm -f "$CMD_OUTPUT_TMP"
   [ -n "$CODEX_LAST_MESSAGE_TMP" ] && rm -f "$CODEX_LAST_MESSAGE_TMP"
+  rm -f "$PROMPT_TMP"
   sleep "$POLL_INTERVAL"
 done

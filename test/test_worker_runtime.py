@@ -134,6 +134,15 @@ class StatusContractTests(unittest.TestCase):
             self.assertEqual(display.returncode, 0, display.stderr)
             self.assertIn(task, display.stdout)
 
+    def test_progress_prepend_keeps_new_record_before_existing_history(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "progress.log"
+            path.write_text("older result\n")
+            result = runtime("progress-prepend", "--path", path,
+                             "--entry", "new result\nsecond detail")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(path.read_text(), "new result\nsecond detail\nolder result\n")
+
 
 class CliContractTests(unittest.TestCase):
     def test_codex_args_keep_low_cost_model_and_safe_auto_policy(self):
@@ -177,6 +186,106 @@ class CliContractTests(unittest.TestCase):
                 "--print-timeout", "90s", "--add-dir", str(extra),
                 "--max-turns", "23",
             ])
+
+    def test_task_cli_streams_output_selects_last_message_and_commits_only_target(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            def git(*args):
+                return subprocess.run(["git", "-C", str(root), *args], check=True,
+                                      capture_output=True, text=True).stdout.strip()
+            git("config", "user.name", "CLI Test")
+            git("config", "user.email", "cli@example.invalid")
+            (root / "output.txt").write_text("before\n")
+            (root / ".gitignore").write_text("cli.log\ncodex\nmessage.txt\nprompt.txt\n")
+            git("add", "output.txt", ".gitignore")
+            git("commit", "-qm", "baseline")
+            base = git("rev-parse", "HEAD")
+            prompt = root / "prompt.txt"
+            prompt.write_text("perform the task")
+            output, last_message = root / "cli.log", root / "message.txt"
+            executable = root / "codex"
+            executable.write_text(
+                "#!/bin/sh\n"
+                "while [ \"$#\" -gt 0 ]; do\n"
+                "  if [ \"$1\" = --output-last-message ]; then shift; printf 'Attempts: 2\\n' > \"$1\"; fi\n"
+                "  shift\n"
+                "done\n"
+                "printf 'finished\\n'\n"
+                "printf 'after\\n' > output.txt\n"
+            )
+            executable.chmod(0o755)
+
+            result = runtime(
+                "task-cli", "--provider", "codex", "--executable", executable,
+                "--work-dir", root, "--prompt-file", prompt, "--output-file", output,
+                "--result-file", last_message, "--timeout", "15", "--model", "gpt-6-luna",
+                "--effort", "none", "--approval-mode", "auto", "--target", "output.txt",
+                "--task-id", "TASK-1", "--title", "[CODE: FIX] update output",
+                "--base", base,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("finished", result.stdout)
+            self.assertEqual(output.read_text(), "finished\n")
+            self.assertEqual(last_message.read_text(), "Attempts: 2\n")
+            self.assertEqual(git("show", "HEAD:output.txt"), "after")
+            self.assertEqual(git("status", "--porcelain"), "")
+
+    def test_agy_task_cli_resumes_dirty_uncommitted_work_with_remaining_budget(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            def git(*args):
+                return subprocess.run(["git", "-C", str(root), *args], check=True,
+                                      capture_output=True, text=True).stdout.strip()
+            git("config", "user.name", "agy Test")
+            git("config", "user.email", "agy@example.invalid")
+            (root / "output.txt").write_text("before\n")
+            git("add", "output.txt")
+            git("commit", "-qm", "baseline")
+            base = git("rev-parse", "HEAD")
+            prompt = root / "prompt.txt"
+            prompt.write_text("perform the task")
+            output, calls = root / "cli.log", root / "calls.log"
+            executable = root / "agy"
+            executable.write_text(
+                "#!/bin/sh\n"
+                "if [ \"${1:-}\" = --help ]; then echo --max-turns; exit 0; fi\n"
+                "printf '%s %s\\n' \"$MAX_STEPS\" \"$*\" >> \"$CALLS_LOG\"\n"
+                "printf '[EXEC] step\\n'\n"
+                "printf 'after\\n' > output.txt\n"
+            )
+            executable.chmod(0o755)
+            env = os.environ.copy()
+            env["CALLS_LOG"] = str(calls)
+
+            result = runtime(
+                "task-cli", "--provider", "agy", "--executable", executable,
+                "--work-dir", root, "--prompt-file", prompt, "--output-file", output,
+                "--timeout", "15", "--step-budget", "2", "--task-id", "TASK-2",
+                "--base", base, env=env,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(len(calls.read_text().splitlines()), 2)
+            self.assertTrue(calls.read_text().splitlines()[0].startswith("2 "))
+            self.assertTrue(calls.read_text().splitlines()[1].startswith("1 "))
+            self.assertIn("Continue TASK-2", calls.read_text())
+            self.assertEqual(output.read_text().count("[EXEC] step"), 2)
+
+    def test_task_cli_converts_provider_print_timeout_to_timeout_exit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            prompt, output = root / "prompt", root / "output"
+            prompt.write_text("task")
+            executable = root / "fake-cli"
+            executable.write_text("#!/bin/sh\necho 'print timeout after 90s'\n")
+            executable.chmod(0o755)
+            result = runtime("task-cli", "--provider", "generic", "--executable", executable,
+                             "--work-dir", root, "--prompt-file", prompt,
+                             "--output-file", output, "--timeout", "10")
+            self.assertEqual(result.returncode, 124)
 
 
 class TimeoutContractTests(unittest.TestCase):

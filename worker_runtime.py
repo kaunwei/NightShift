@@ -11,6 +11,7 @@ from io import BytesIO
 import json
 import os
 from pathlib import Path
+import queue
 import re
 import shutil
 import signal
@@ -19,6 +20,7 @@ import subprocess
 import tarfile
 import tempfile
 import time
+import threading
 
 
 FIELD_NAMES = (
@@ -45,6 +47,11 @@ def atomic_write(path, content):
     finally:
         if temporary is not None and temporary.exists():
             temporary.unlink()
+
+
+def prepend_progress(path, entry):
+    history = Path(path).read_text(encoding="utf-8") if Path(path).exists() else ""
+    atomic_write(path, f"{entry}\n{history}")
 
 
 def pop_task(queue_path):
@@ -262,6 +269,173 @@ def run_with_timeout(seconds, command):
             process.wait()
         return 124
     return 128 + abs(return_code) if return_code < 0 else return_code
+
+
+def stream_with_timeout(seconds, command, cwd, environment, output_path, append=False):
+    """Stream combined CLI output to the worker console and its audit log."""
+    options = {"cwd": cwd, "env": environment, "stdout": subprocess.PIPE,
+              "stderr": subprocess.STDOUT, "bufsize": 0}
+    if os.name == "nt":
+        options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        options["start_new_session"] = True
+    process = subprocess.Popen(command, **options)
+    chunks = queue.Queue()
+
+    def read_output():
+        try:
+            while True:
+                chunk = process.stdout.read(4096)
+                if not chunk:
+                    break
+                chunks.put(chunk)
+        finally:
+            chunks.put(None)
+
+    reader = threading.Thread(target=read_output, daemon=True)
+    reader.start()
+    deadline = time.monotonic() + seconds
+    timed_out = False
+    finished_reading = False
+    with open(output_path, "ab" if append else "wb") as output:
+        while not finished_reading:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 and process.poll() is None:
+                timed_out = True
+                try:
+                    if os.name == "nt":
+                        process.send_signal(signal.CTRL_BREAK_EVENT)
+                    else:
+                        os.killpg(process.pid, signal.SIGTERM)
+                except (OSError, ValueError):
+                    process.terminate()
+                try:
+                    process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    if os.name == "nt":
+                        process.kill()
+                    else:
+                        try:
+                            os.killpg(process.pid, signal.SIGKILL)
+                        except OSError:
+                            process.kill()
+                    process.wait()
+                remaining = 0.1
+            try:
+                chunk = chunks.get(timeout=min(0.1, max(0.01, remaining)))
+            except queue.Empty:
+                if process.poll() is not None and not reader.is_alive():
+                    finished_reading = True
+                continue
+            if chunk is None:
+                finished_reading = True
+                continue
+            output.write(chunk)
+            output.flush()
+            try:
+                sys.stdout.buffer.write(chunk)
+                sys.stdout.buffer.flush()
+            except (AttributeError, OSError):
+                sys.stdout.write(chunk.decode("utf-8", "replace"))
+                sys.stdout.flush()
+    reader.join(timeout=1)
+    if timed_out:
+        return 124
+    code = process.wait()
+    return 128 + abs(code) if code < 0 else code
+
+
+def execute_task_cli(args):
+    prompt = Path(args.prompt_file).read_text(encoding="utf-8")
+    environment = os.environ.copy()
+    environment.update(PORT=args.worker_port, TEST_PORT=args.worker_port,
+                       MAX_STEPS=str(args.step_budget), AGY_MAX_STEPS=str(args.step_budget))
+    output = Path(args.output_file)
+    result_code = 0
+    last_message = Path(args.result_file) if args.result_file else None
+    if args.provider == "codex":
+        codex = argparse.Namespace(
+            last_message=str(last_message), model=args.model, effort=args.effort,
+            approval_mode=args.approval_mode, sandbox=args.sandbox,
+            ephemeral=args.ephemeral, additional_dirs=args.additional_dirs,
+        )
+        command = [args.executable, *codex_args(codex), prompt]
+        result_code = stream_with_timeout(args.timeout, command, args.work_dir,
+                                          environment, output)
+        result_path = last_message if last_message and last_message.is_file() and last_message.stat().st_size else output
+        if (result_code == 0 and args.approval_mode in ("auto", "approve-for-me")
+                and not re.search(r"\[(?:SCOPE_BLOCKED|NEED_GUIDANCE|NEED_DECOMPOSITION|BLOCKED)\]",
+                                  result_path.read_text(encoding="utf-8", errors="replace"))):
+            targets = [item.strip() for item in args.target.split(",") if item.strip()]
+            for target in targets:
+                subprocess.run(["git", "-C", args.work_dir, "add", "-A", "--", target],
+                               check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            staged = subprocess.run(["git", "-C", args.work_dir, "diff", "--cached", "--quiet"],
+                                    check=False)
+            if staged.returncode:
+                title = args.title
+                commit_type = ("fix" if "[CODE: FIX]" in title else
+                               "refactor" if "[CODE: REFACTOR]" in title else
+                               "docs" if "[RESEARCH]" in title else
+                               "test" if "[DIAGNOSTIC]" in title else "feat")
+                commit = subprocess.run([
+                    "git", "-C", args.work_dir, "commit", "-m",
+                    f"{commit_type}(worker): complete {args.task_id}", "-m",
+                    f"Task: {args.task_id} (Level {args.level})\nScope: {args.target or '<modified files>'}\n"
+                    f"Verification: {args.verify or '<worker post-flight>'}\n"
+                    "Attempts: wrapper-managed | Confidence: pending audit",
+                ], check=False)
+                if commit.returncode:
+                    print(f"[WORKER] Failed to commit Codex changes for {args.task_id}.", file=sys.stderr)
+                    result_code = 1
+    elif args.provider == "agy":
+        agy = argparse.Namespace(
+            sandbox=args.use_sandbox, mode=args.agy_mode, model=args.model,
+            timeout=str(args.timeout), additional_dirs=args.additional_dirs,
+            effort=args.effort, executable=args.executable,
+            step_budget=args.step_budget,
+        )
+        command = [args.executable, "-p", prompt, "--dangerously-skip-permissions", *agy_args(agy)]
+        result_code = stream_with_timeout(args.timeout, command, args.work_dir,
+                                          environment, output)
+        text = output.read_text(encoding="utf-8", errors="replace")
+        matches = re.findall(r"^\[EXEC\]|Tool Call|edit_file|write_file|run_command|read_file",
+                             text, re.MULTILINE)
+        steps_used = max(len(matches), 17 if not matches else 0)
+        while result_code == 0 and steps_used < args.step_budget:
+            head = subprocess.run(["git", "-C", args.work_dir, "rev-parse", "HEAD"],
+                                  capture_output=True, text=True, check=False).stdout.strip()
+            dirty = subprocess.run(["git", "-C", args.work_dir, "status", "--porcelain"],
+                                   capture_output=True, text=True, check=False).stdout
+            dirty = "\n".join(line for line in dirty.splitlines()
+                              if not re.search(r"progress\.log|tasks\.txt|tasks\.done|worker\..*\.status|\.preview|\.worker\..*|\.reports/|\.reports", line))
+            if head != args.base or not dirty:
+                break
+            remaining = args.step_budget - steps_used
+            print(f"[WORKER] ⏩ Step budget remaining ({steps_used}/{args.step_budget} used; {remaining} left). Resuming in-progress changes...")
+            environment["MAX_STEPS"] = str(remaining)
+            environment["AGY_MAX_STEPS"] = str(remaining)
+            continuation = argparse.Namespace(**vars(agy))
+            continuation.step_budget = remaining
+            continue_prompt = (f"Continue {args.task_id} from the current modified working tree ({remaining} steps remaining in budget of {args.step_budget}). "
+                               f"Inspect git diff, complete any remaining edits, run verification ({args.verify or 'build and test'}), prepend {args.progress_file}, and commit.")
+            command = [args.executable, "-p", continue_prompt,
+                       "--dangerously-skip-permissions", *agy_args(continuation)]
+            before = len(matches)
+            result_code = stream_with_timeout(args.timeout, command, args.work_dir,
+                                              environment, output, append=True)
+            text = output.read_text(encoding="utf-8", errors="replace")
+            matches = re.findall(r"^\[EXEC\]|Tool Call|edit_file|write_file|run_command|read_file",
+                                 text, re.MULTILINE)
+            added = len(matches) - before
+            steps_used += max(added, 17 if added < 1 else 0)
+    else:
+        result_code = stream_with_timeout(args.timeout, [args.executable, prompt],
+                                          args.work_dir, environment, output)
+    if result_code == 0 and "print timeout after" in output.read_text(
+            encoding="utf-8", errors="replace").lower():
+        result_code = 124
+    return result_code
 
 
 def git_audit(args):
@@ -524,6 +698,31 @@ def main(argv=None):
     agy.add_argument("--step-budget", type=int, default=17)
     agy.add_argument("--additional-dirs", default="")
     agy.add_argument("--sandbox", default="0")
+    task_cli = commands.add_parser("task-cli")
+    task_cli.add_argument("--provider", choices=("codex", "agy", "generic"), required=True)
+    task_cli.add_argument("--executable", required=True)
+    task_cli.add_argument("--work-dir", required=True)
+    task_cli.add_argument("--prompt-file", required=True)
+    task_cli.add_argument("--output-file", required=True)
+    task_cli.add_argument("--result-file", default="")
+    task_cli.add_argument("--timeout", type=float, default=1800)
+    task_cli.add_argument("--model", default="")
+    task_cli.add_argument("--effort", default="")
+    task_cli.add_argument("--approval-mode", default="auto")
+    task_cli.add_argument("--sandbox", default="workspace-write")
+    task_cli.add_argument("--ephemeral", default="1")
+    task_cli.add_argument("--additional-dirs", default="")
+    task_cli.add_argument("--use-sandbox", default="0")
+    task_cli.add_argument("--agy-mode", default="")
+    task_cli.add_argument("--step-budget", type=int, default=17)
+    task_cli.add_argument("--worker-port", default="3001")
+    task_cli.add_argument("--target", default="")
+    task_cli.add_argument("--task-id", default="TASK-UNKNOWN")
+    task_cli.add_argument("--title", default="")
+    task_cli.add_argument("--level", default="1")
+    task_cli.add_argument("--verify", default="")
+    task_cli.add_argument("--base", default="")
+    task_cli.add_argument("--progress-file", default="progress.log")
     timeout = commands.add_parser("run-timeout")
     timeout.add_argument("seconds", type=float)
     timeout.add_argument("argv", nargs=argparse.REMAINDER)
@@ -554,6 +753,9 @@ def main(argv=None):
     rollback.add_argument("--tasks", required=True)
     rollback.add_argument("--tasks-done", default="")
     rollback.add_argument("--progress", default="")
+    progress = commands.add_parser("progress-prepend")
+    progress.add_argument("--path", required=True)
+    progress.add_argument("--entry", required=True)
     poll = commands.add_parser("poll-next")
     poll.add_argument("--tasks", required=True)
     poll.add_argument("--done", required=True)
@@ -574,6 +776,8 @@ def main(argv=None):
         sys.stdout.buffer.write(("\0".join(codex_args(args)) + "\0").encode("utf-8"))
     elif args.command == "agy-args":
         sys.stdout.buffer.write(("\0".join(agy_args(args)) + "\0").encode("utf-8"))
+    elif args.command == "task-cli":
+        return execute_task_cli(args)
     elif args.command == "run-timeout":
         command = args.argv[1:] if args.argv[:1] == ["--"] else args.argv
         return run_with_timeout(args.seconds, command)
@@ -593,6 +797,8 @@ def main(argv=None):
     elif args.command == "rollback-failed-task":
         paths = [path for path in (args.tasks, args.tasks_done, args.progress) if path]
         print(rollback_failed_task(args.root, args.work_dir, args.task_id, paths))
+    elif args.command == "progress-prepend":
+        prepend_progress(args.path, args.entry)
     elif args.command == "poll-next":
         sys.stdout.buffer.write(("\0".join(poll_next(args)) + "\0").encode("utf-8"))
     else:
