@@ -1,8 +1,5 @@
 #!/usr/bin/env bash
-# ==============================================================================
-# Watch Worker Sentinel Helper (Zero-Token Blocking Waiter)
-# Used by Watcher Subagent to monitor Terminal B background worker.sh
-# ==============================================================================
+# Wait for a specific worker task to finish and pass its mechanical audit.
 
 set -uo pipefail
 
@@ -14,6 +11,7 @@ fi
 cd "$SCRIPT_DIR" || exit 1
 
 TASKS_FILE="${TASKS_FILE:-tasks.txt}"
+TASKS_DONE_FILE="${TASKS_DONE_FILE:-tasks.done}"
 STATUS_FILE="${STATUS_FILE:-worker.status}"
 PROGRESS_FILE="${PROGRESS_FILE:-progress.log}"
 if [ "${WORKER_ID:-default}" != "default" ]; then
@@ -21,37 +19,106 @@ if [ "${WORKER_ID:-default}" != "default" ]; then
 fi
 MAX_WAIT_SECONDS="${1:-3600}"
 POLL_INTERVAL="${2:-5}"
+EXPECTED_TASK_ID="${3:-${WATCH_TASK_ID:-}}"
 
 START_TIME=$(date +%s)
+LAST_DONE_BYTES=0
+BASELINE_AUDITS=$(mktemp "${TMPDIR:-/tmp}/nightshift-audit-baseline.XXXXXX") || exit 1
+trap 'rm -f "$BASELINE_AUDITS"' EXIT
+if [ -f "$PROGRESS_FILE" ]; then
+  grep -E '^\[MECHANICAL_AUDIT\] Status: PASS \| Task: TASK-' "$PROGRESS_FILE" > "$BASELINE_AUDITS" || true
+fi
+if [ -f "$TASKS_DONE_FILE" ]; then
+  LAST_DONE_BYTES=$(wc -c < "$TASKS_DONE_FILE" | tr -d '[:space:]')
+fi
+TRACKED_TASKS=""
 
-echo "[SENTINEL] Watching background worker (Timeout: ${MAX_WAIT_SECONDS}s, Interval: ${POLL_INTERVAL}s)..."
+track_task() {
+  local task_id="$1"
+  [ -n "$task_id" ] || return 0
+  case " $TRACKED_TASKS " in
+    *" $task_id "*) ;;
+    *) TRACKED_TASKS="${TRACKED_TASKS}${TRACKED_TASKS:+ }$task_id" ;;
+  esac
+}
+
+contains_task() {
+  local task_id="$1" list="$2"
+  case " $list " in *" $task_id "*) return 0 ;; *) return 1 ;; esac
+}
+
+task_ids_from_file() {
+  local file="$1"
+  [ -f "$file" ] || return 0
+  sed -nE 's/^[[:space:]]*(TASK-[[:alnum:]_.-]+).*/\1/p' "$file"
+}
+
+track_task "$EXPECTED_TASK_ID"
+echo "[SENTINEL] Watching background worker (Timeout: ${MAX_WAIT_SECONDS}s, Interval: ${POLL_INTERVAL}s${EXPECTED_TASK_ID:+, Task: ${EXPECTED_TASK_ID}})..."
 
 while true; do
   NOW=$(date +%s)
   ELAPSED=$(( NOW - START_TIME ))
 
   if [ "$ELAPSED" -ge "$MAX_WAIT_SECONDS" ]; then
-    echo "[SENTINEL_TIMEOUT] Exceeded ${MAX_WAIT_SECONDS}s waiting for worker."
+    echo "[SENTINEL_TIMEOUT] Exceeded ${MAX_WAIT_SECONDS}s waiting for task completion."
     exit 2
   fi
 
-  # Check remaining tasks in tasks.txt safely
-  REMAINING_TASKS=0
-  if [ -f "$TASKS_FILE" ]; then
-    RAW_COUNT=$(grep -v '^[[:space:]]*#' "$TASKS_FILE" 2>/dev/null | grep -v '^[[:space:]]*$' | wc -l) || true
-    REMAINING_TASKS=$(echo "$RAW_COUNT" | tr -dc '0-9')
-  fi
-  if [ -z "$REMAINING_TASKS" ]; then
-    REMAINING_TASKS=0
-  fi
-  
+  while IFS= read -r task_id; do track_task "$task_id"; done < <(task_ids_from_file "$TASKS_FILE")
+
   STATE="UNKNOWN"
+  CURRENT_TASK=""
   if [ -f "$STATUS_FILE" ]; then
     STATE=$(grep -o '"state":[[:space:]]*"[^"]*"' "$STATUS_FILE" 2>/dev/null | cut -d'"' -f4 || true)
+    CURRENT_TASK=$(grep -o '"current_task":[[:space:]]*"[^"]*"' "$STATUS_FILE" 2>/dev/null | grep -Eo 'TASK-[[:alnum:]_.-]+' | head -n 1 || true)
     [ -z "$STATE" ] && STATE="UNKNOWN"
   fi
+  track_task "$CURRENT_TASK"
 
-  # Check for terminal/blocking states
+  NEW_DONE=""
+  if [ -f "$TASKS_DONE_FILE" ]; then
+    CURRENT_DONE_BYTES=$(wc -c < "$TASKS_DONE_FILE" | tr -d '[:space:]')
+    if [ "$CURRENT_DONE_BYTES" -lt "$LAST_DONE_BYTES" ]; then
+      # The ledger was rotated. Treat its current contents as new evidence.
+      LAST_DONE_BYTES=0
+    fi
+    if [ "$CURRENT_DONE_BYTES" -gt "$LAST_DONE_BYTES" ]; then
+      NEW_DONE=$(tail -c +$((LAST_DONE_BYTES + 1)) "$TASKS_DONE_FILE" 2>/dev/null || true)
+      LAST_DONE_BYTES="$CURRENT_DONE_BYTES"
+    fi
+  fi
+
+  NEW_DONE_IDS=$(printf '%s\n' "$NEW_DONE" | grep -Eo '\[DONE\][[:space:]]+TASK-[[:alnum:]_.-]+' | awk '{print $2}' || true)
+  NEW_FAILED_IDS=$(printf '%s\n' "$NEW_DONE" | grep -Eo '\[(FAILED|SCOPE_BLOCKED|GUIDANCE_REQUESTED)\][[:space:]]+TASK-[[:alnum:]_.-]+' | awk '{print $2}' || true)
+  while IFS= read -r task_id; do track_task "$task_id"; done <<< "$NEW_DONE_IDS"
+  while IFS= read -r task_id; do track_task "$task_id"; done <<< "$NEW_FAILED_IDS"
+
+  for task_id in $TRACKED_TASKS; do
+    if contains_task "$task_id" "$NEW_FAILED_IDS"; then
+      echo "[SENTINEL_FAILED] Task $task_id received a failure result after ${ELAPSED}s."
+      exit 1
+    fi
+    if contains_task "$task_id" "$NEW_DONE_IDS"; then
+      MATCHING_AUDITS=$(grep -E "^\\[MECHANICAL_AUDIT\\] Status: PASS \\| Task: ${task_id} \\|" "$PROGRESS_FILE" 2>/dev/null || true)
+      FRESH_AUDIT=0
+      while IFS= read -r audit_line; do
+        [ -n "$audit_line" ] || continue
+        if ! grep -Fqx -- "$audit_line" "$BASELINE_AUDITS"; then
+          FRESH_AUDIT=1
+          break
+        fi
+      done <<< "$MATCHING_AUDITS"
+      if [ "$FRESH_AUDIT" -eq 1 ]; then
+        if [ "$(grep -v '^[[:space:]]*#' "$TASKS_FILE" 2>/dev/null | grep -v '^[[:space:]]*$' | wc -l | tr -d '[:space:]')" -eq 0 ] \
+          && { [ "$STATE" = "IDLE" ] || [ "$STATE" = "STOPPED" ]; }; then
+          echo "[SENTINEL_COMPLETED] Task $task_id completed with a task-scoped mechanical audit PASS in ${ELAPSED}s."
+          exit 0
+        fi
+      fi
+    fi
+  done
+
   if [ "$STATE" = "SCOPE_BLOCKED" ]; then
     echo "[SENTINEL_SCOPE_BLOCKED] Worker encountered unannounced downstream scope after ${ELAPSED}s. (No-fault escalation)."
     exit 3
@@ -59,16 +126,6 @@ while true; do
   if [ "$STATE" = "BLOCKED" ] || [ "$STATE" = "AWAITING_GUIDANCE" ]; then
     echo "[SENTINEL_BLOCKED] Worker entered state: $STATE after ${ELAPSED}s."
     exit 1
-  fi
-
-  # Check for completion (queue is empty and worker is in IDLE or STOPPED state)
-  if [ "$REMAINING_TASKS" -eq 0 ] && { [ "$STATE" = "IDLE" ] || [ "$STATE" = "STOPPED" ]; }; then
-    if grep -q "\[MECHANICAL_AUDIT\] Status: PASS" "$PROGRESS_FILE" 2>/dev/null; then
-      echo "[SENTINEL_COMPLETED] All tasks completed successfully in ${ELAPSED}s. Mechanical Audit: PASS."
-    else
-      echo "[SENTINEL_COMPLETED] All tasks completed in ${ELAPSED}s. Note: Top progress.log lacks passing MECHANICAL_AUDIT."
-    fi
-    exit 0
   fi
 
   sleep "$POLL_INTERVAL"

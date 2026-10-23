@@ -890,6 +890,8 @@ class WorkerIntegrationTests(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("[DONE] TASK-REPORT", (root / "tasks.done").read_text())
+            self.assertIn("[MECHANICAL_AUDIT] Status: PASS | Task: TASK-REPORT",
+                          (root / "progress.log").read_text())
             summary = root / ".reports/fake/SUMMARY.md"
             self.assertIn("Task=TASK-REPORT", summary.read_text().splitlines()[0])
             self.assertEqual((root / ".reports/fake/03-micro.md").read_text(), "# Fresh details\n")
@@ -1060,26 +1062,129 @@ class WorkerIntegrationTests(unittest.TestCase):
             self.assertIn("Completed: 2 | Remaining in Queue: 1", result.stdout)
             self.assertIn("TASK-0 (abc123) updated at now", result.stdout)
 
-    def test_sentinel_watch_resolves_worker_status_from_external_cwd(self):
+    def test_sentinel_does_not_treat_historical_pass_as_new_completion(self):
         with tempfile.TemporaryDirectory() as directory:
             external = Path(directory)
             root = external / "repo"
             (root / "scripts").mkdir(parents=True)
             shutil.copy2(ROOT / "scripts/watch_worker.sh", root / "scripts/watch_worker.sh")
             (root / ".worker.env").write_text(
-                "WORKER_ID=agent-2\nTASKS_FILE=queue/tasks.txt\n"
-                "PROGRESS_FILE=queue/progress.log\n"
+                "TASKS_FILE=queue/tasks.txt\n"
+                "TASKS_DONE_FILE=queue/tasks.done\n"
+                "STATUS_FILE=queue/worker.json\nPROGRESS_FILE=queue/progress.log\n"
             )
             (root / "queue").mkdir()
             (root / "queue/tasks.txt").write_text("")
+            (root / "queue/tasks.done").write_text("[DONE] TASK-0\n")
             (root / "queue/progress.log").write_text("[MECHANICAL_AUDIT] Status: PASS\n")
-            (root / "worker.agent-2.status").write_text(json.dumps({"state": "STOPPED"}))
+            (root / "queue/worker.json").write_text(json.dumps({"state": "STOPPED"}))
 
-            result = subprocess.run(["bash", str(root / "scripts/watch_worker.sh"), "2", "0.01"],
-                                    cwd=external, capture_output=True, text=True, timeout=10)
+            result = subprocess.run(["bash", str(root / "scripts/watch_worker.sh"), "1", "0.01"],
+                                    cwd=external, capture_output=True, text=True, timeout=5)
+
+            self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+            self.assertIn("[SENTINEL_TIMEOUT]", result.stdout)
+            self.assertNotIn("[SENTINEL_COMPLETED]", result.stdout)
+
+    def test_sentinel_requires_a_fresh_task_scoped_audit_pass(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "repo"
+            (root / "scripts").mkdir(parents=True)
+            (root / "queue").mkdir()
+            shutil.copy2(ROOT / "scripts/watch_worker.sh", root / "scripts/watch_worker.sh")
+            (root / ".worker.env").write_text(
+                "TASKS_FILE=queue/tasks.txt\nTASKS_DONE_FILE=queue/tasks.done\n"
+                "STATUS_FILE=queue/worker.json\nPROGRESS_FILE=queue/progress.log\n"
+            )
+            (root / "queue/tasks.txt").write_text("TASK-NEW | LEVEL: 1\n")
+            (root / "queue/tasks.done").write_text("[DONE] TASK-OLD\n")
+            (root / "queue/progress.log").write_text(
+                "[MECHANICAL_AUDIT] Status: PASS | Task: TASK-OLD |\n"
+            )
+            (root / "queue/worker.json").write_text(json.dumps({"state": "IDLE"}))
+            completion = (
+                "sleep 0.05; : > queue/tasks.txt; "
+                "printf '[2026-01-01] [DONE] TASK-NEW\\n' >> queue/tasks.done; "
+                "printf '[MECHANICAL_AUDIT] Status: PASS | Task: TASK-NEW | Verify_Exit: 0\\n' >> queue/progress.log; "
+                "printf '{\\\"state\\\":\\\"IDLE\\\"}\\n' > queue/worker.json"
+            )
+            completer = subprocess.Popen(["bash", "-c", completion], cwd=root,
+                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+            result = subprocess.run(
+                ["bash", str(root / "scripts/watch_worker.sh"), "1", "0.01", "TASK-NEW"],
+                cwd=root, capture_output=True, text=True, timeout=10,
+            )
 
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("TASK-NEW", result.stdout)
             self.assertIn("[SENTINEL_COMPLETED]", result.stdout)
+            completer.wait(timeout=5)
+
+    def test_sentinel_reports_fresh_task_failure_even_when_old_pass_exists(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "repo"
+            (root / "scripts").mkdir(parents=True)
+            (root / "queue").mkdir()
+            shutil.copy2(ROOT / "scripts/watch_worker.sh", root / "scripts/watch_worker.sh")
+            (root / ".worker.env").write_text(
+                "TASKS_FILE=queue/tasks.txt\nTASKS_DONE_FILE=queue/tasks.done\n"
+                "STATUS_FILE=queue/worker.json\nPROGRESS_FILE=queue/progress.log\n"
+            )
+            (root / "queue/tasks.txt").write_text("")
+            (root / "queue/tasks.done").write_text("[DONE] TASK-RETRY\n")
+            (root / "queue/progress.log").write_text(
+                "[MECHANICAL_AUDIT] Status: PASS | Task: TASK-RETRY | Verify_Exit: 0 | Attempts: 1\n"
+            )
+            (root / "queue/worker.json").write_text(json.dumps({"state": "STOPPED"}))
+            completion = (
+                "sleep 0.05; printf '[2026-01-01] [FAILED] TASK-RETRY [EXIT_1]\\n' >> queue/tasks.done"
+            )
+            completer = subprocess.Popen(["bash", "-c", completion], cwd=root,
+                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+            result = subprocess.run(
+                ["bash", str(root / "scripts/watch_worker.sh"), "1", "0.01", "TASK-RETRY"],
+                cwd=root, capture_output=True, text=True, timeout=10,
+            )
+
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            self.assertIn("[SENTINEL_FAILED] Task TASK-RETRY", result.stdout)
+            completer.wait(timeout=5)
+
+    def test_sentinel_rejects_old_same_task_audit_for_a_new_done_attempt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "repo"
+            (root / "scripts").mkdir(parents=True)
+            (root / "queue").mkdir()
+            shutil.copy2(ROOT / "scripts/watch_worker.sh", root / "scripts/watch_worker.sh")
+            (root / ".worker.env").write_text(
+                "TASKS_FILE=queue/tasks.txt\nTASKS_DONE_FILE=queue/tasks.done\n"
+                "STATUS_FILE=queue/worker.json\nPROGRESS_FILE=queue/progress.log\n"
+            )
+            (root / "queue/tasks.txt").write_text("TASK-RETRY | LEVEL: 1\n")
+            (root / "queue/tasks.done").write_text("[FAILED] TASK-RETRY [EXIT_1]\n")
+            (root / "queue/progress.log").write_text(
+                "[MECHANICAL_AUDIT] Status: PASS | Task: TASK-RETRY | Verify_Exit: 0 | Attempts: 1\n"
+            )
+            (root / "queue/worker.json").write_text(json.dumps({"state": "IDLE"}))
+            completion = (
+                "sleep 0.05; : > queue/tasks.txt; "
+                "printf '[2026-01-01] [DONE] TASK-RETRY\\n' >> queue/tasks.done; "
+                "printf '{\\\"state\\\":\\\"IDLE\\\"}\\n' > queue/worker.json"
+            )
+            completer = subprocess.Popen(["bash", "-c", completion], cwd=root,
+                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+            result = subprocess.run(
+                ["bash", str(root / "scripts/watch_worker.sh"), "1", "0.01", "TASK-RETRY"],
+                cwd=root, capture_output=True, text=True, timeout=5,
+            )
+
+            self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+            self.assertIn("[SENTINEL_TIMEOUT]", result.stdout)
+            self.assertNotIn("[SENTINEL_COMPLETED]", result.stdout)
+            completer.wait(timeout=5)
 
     def test_launcher_runs_python_daemon_and_cleans_pid_when_run_once_queue_is_empty(self):
         with tempfile.TemporaryDirectory() as directory:

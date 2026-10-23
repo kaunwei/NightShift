@@ -13,8 +13,8 @@ Read before slicing, dispatching, accepting, or recovering a queue. These rules 
 
 ## Waiting and acceptance
 
-- Delegate a Queue Sentinel to run `bash scripts/watch_worker.sh 3600`, then read the first 15 lines of `progress.log` and report completed/blocked status. Use the available subagent interface; the watcher itself does not call a model while waiting.
-- Audit line 1 must show `[MECHANICAL_AUDIT] Status: PASS | Verify_Exit: 0 | Tests_Run: >=1 | Whitelist: PASS | Tree: CLEAN`.
+- Delegate a Queue Sentinel to run `bash scripts/watch_worker.sh 3600 5 TASK-ID` for the task being watched, then read its task-scoped result and report completed/blocked status. The watcher returns success only after a fresh `[DONE]` ledger entry and a matching `[MECHANICAL_AUDIT] Status: PASS | Task: TASK-ID` record; stale PASS entries cannot complete a watch. Use the available subagent interface; the watcher itself does not call a model while waiting.
+- Audit line 1 must show `[MECHANICAL_AUDIT] Status: PASS | Task: TASK-ID | Verify_Exit: 0 | Tests_Run: >=1 | Whitelist: PASS | Tree: CLEAN`.
 - Audit PASS + Attempts 1 + Confidence HIGH is the fast track (target ≤5 seconds, no model review): integrate the isolated frontier with `git merge --ff-only feature/worker-frontier` in the authorized integration checkout.
 - Audit failure, retries, confidence below HIGH, `[DEAD_END]`, or a critical seam requires `git show --stat <commit>` and `code-review`. Preempt remedial FIX/REFACTOR tickets to queue line 1 with `scripts/reorder_queue.sh`. Negative claims need isolated passing evidence.
 - After acceptance, archive the issue report under `.reports/.archive/`. Keep score arithmetic and ghost attribution as defined in the main skill.

@@ -1162,7 +1162,7 @@ def worker_daemon(root):
                         diff = subprocess.run(["git", "-C", str(work_dir), "diff", "--stat", base, "HEAD"],
                                                capture_output=True, text=True, check=False).stdout.splitlines()
                         diff_stat = diff[-1].strip() if diff else "0 files changed"
-                        prepend_progress(progress_file, f"[MECHANICAL_AUDIT] Status: PASS | Verify_Exit: 0 | Tests_Run: >=1 | Whitelist: PASS | Tree: CLEAN | Diff: {diff_stat} | Attempts: {attempts}")
+                        prepend_progress(progress_file, f"[MECHANICAL_AUDIT] Status: PASS | Task: {task_id} | Verify_Exit: 0 | Tests_Run: >=1 | Whitelist: PASS | Tree: CLEAN | Diff: {diff_stat} | Attempts: {attempts} | Audit_NS: {time.time_ns()}")
                         if not (is_research or is_diagnostic):
                             archive_overlapping_reports(root, work_dir, base)
                         if isolated:
