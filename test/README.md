@@ -9,7 +9,7 @@ Keep new tests at public seams: the `worker_runtime.py` commands and the
 fixed expected result, make the smallest implementation change, then run the
 whole suite. The integration fixture covers task claiming, Luna/none CLI
 arguments, wrapper commit, status, Git audit acceptance and rejection, rollback,
-and timeout exit-code/process-termination behavior.
+polling states and budgets, and timeout exit-code/process-termination behavior.
 
 The staged migration leaves task execution and agy logic in Bash for now. Move
 one verified behavior at a

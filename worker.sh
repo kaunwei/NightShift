@@ -282,10 +282,6 @@ prepend_progress_log() {
   mv "$temp_file" "$PROGRESS_FILE"
 }
 
-extract_task_field() {
-  "$PYTHON_BIN" "$SCRIPT_DIR/worker_runtime.py" task-field "$1" "$2"
-}
-
 isolate_and_rollback_dirty_tree() {
   local task_id="$1"
   local backup_dir="$SCRIPT_DIR/.scratch/failed_tasks/${task_id}_$(date +%Y%m%d_%H%M%S)"
@@ -365,32 +361,38 @@ IDLE_STATUS_SHOWN=0
 # Main Polling Loop
 # ------------------------------------------------------------------------------
 while true; do
-  # Check for physical pause switch
-  if [ -f "$PAUSE_FILE" ]; then
+  POLL_TMP=$(mktemp)
+  if ! "$PYTHON_BIN" "$SCRIPT_DIR/worker_runtime.py" poll-next \
+    --tasks "$TASKS_FILE" --done "$TASKS_DONE_FILE" --pause "$PAUSE_FILE" \
+    --work-dir "$WORK_DIR" --step-base "$STEP_BASE" \
+    --step-per-file "$STEP_PER_FILE" > "$POLL_TMP"; then
+    rm -f "$POLL_TMP"
+    echo "[WORKER] Failed to poll the task queue; leaving it for inspection." >&2
+    exit 2
+  fi
+  POLL_FIELDS=()
+  while IFS= read -r -d '' field; do
+    POLL_FIELDS+=("$field")
+  done < "$POLL_TMP"
+  rm -f "$POLL_TMP"
+
+  if [ "${POLL_FIELDS[0]}" = "paused" ]; then
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] [PAUSED] Found $PAUSE_FILE. Sleeping..."
     update_status "PAUSED" "Paused via $PAUSE_FILE file" "0" "0" "0" "0" "0%" "[PAUSED]"
     sleep "$POLL_INTERVAL"
     continue
   fi
 
-  # Pop while holding the queue lock; never act on a stale pre-lock peek.
-  if ! RAW_TASK=$("$PYTHON_BIN" "$SCRIPT_DIR/worker_runtime.py" queue-pop "$TASKS_FILE"); then
-    echo "[WORKER] Failed to read the task queue; leaving it for inspection." >&2
-    exit 2
-  fi
+  RAW_TASK="${POLL_FIELDS[1]}"
+  DONE_COUNT="${POLL_FIELDS[2]}"
+  REMAINING_COUNT="${POLL_FIELDS[3]}"
+  TOTAL_COUNT="${POLL_FIELDS[4]}"
+  CURRENT_IDX="${POLL_FIELDS[5]}"
+  PERCENT_START="${POLL_FIELDS[6]}"
+  BAR_START="${POLL_FIELDS[7]}"
 
-  DONE_COUNT=$(grep -v '^[[:space:]]*#' "$TASKS_DONE_FILE" 2>/dev/null | grep -v '^[[:space:]]*$' | wc -l | tr -dc '0-9')
-  [ -z "$DONE_COUNT" ] && DONE_COUNT=0
-  REMAINING_COUNT=$(grep -v '^[[:space:]]*#' "$TASKS_FILE" 2>/dev/null | grep -v '^[[:space:]]*$' | wc -l | tr -dc '0-9')
-  [ -z "$REMAINING_COUNT" ] && REMAINING_COUNT=0
-  # The claimed task is still in progress, so include it in progress totals.
-  if [ -n "$RAW_TASK" ]; then
-    REMAINING_COUNT=$(( REMAINING_COUNT + 1 ))
-  fi
-  TOTAL_COUNT=$(( DONE_COUNT + REMAINING_COUNT ))
-
-  if [ -z "$RAW_TASK" ]; then
-    BAR=$(render_progress_bar "$DONE_COUNT" "$TOTAL_COUNT" 30)
+  if [ "${POLL_FIELDS[0]}" = "idle" ]; then
+    BAR="$BAR_START"
     update_status "IDLE" "" "0" "$DONE_COUNT" "$TOTAL_COUNT" "0" "100%" "$BAR"
 
     if [ $WAS_BUSY -eq 1 ]; then
@@ -413,46 +415,23 @@ while true; do
         exit 0
       fi
     fi
-
     sleep "$POLL_INTERVAL"
     continue
   fi
 
   WAS_BUSY=1
   IDLE_STATUS_SHOWN=0
-
-  CURRENT_IDX=$(( DONE_COUNT + 1 ))
-  PERCENT_START=$(( (DONE_COUNT * 100) / TOTAL_COUNT ))
-  BAR_START=$(render_progress_bar "$DONE_COUNT" "$TOTAL_COUNT" 30)
-
   TASK_TITLE="$RAW_TASK"
-  TASK_ID=$(echo "$RAW_TASK" | awk -F'|' '{print $1}' | tr -d ' ' || echo "TASK-UNKNOWN")
-  TASK_LEVEL=$(echo "$RAW_TASK" | grep -o 'LEVEL:[[:space:]]*[0-9]' | awk '{print $2}' || echo "1")
-  TASK_TARGET=$(extract_task_field "$RAW_TASK" "TARGET")
-  TASK_VERIFY=$(extract_task_field "$RAW_TASK" "VERIFY")
-  TASK_FORBIDDEN=$(extract_task_field "$RAW_TASK" "FORBIDDEN_SHORTCUTS")
-  TASK_CONSTRAINTS=$(extract_task_field "$RAW_TASK" "CONSTRAINTS")
+  TASK_ID="${POLL_FIELDS[8]}"
+  TASK_LEVEL="${POLL_FIELDS[9]}"
+  TASK_TARGET="${POLL_FIELDS[10]}"
+  TASK_VERIFY="${POLL_FIELDS[11]}"
+  TASK_FORBIDDEN="${POLL_FIELDS[12]}"
+  TASK_CONSTRAINTS="${POLL_FIELDS[13]}"
+  TARGET_FILE_COUNT="${POLL_FIELDS[14]}"
+  TASK_MAX_STEPS="${POLL_FIELDS[15]}"
   TASK_BASE_SHA=$(git -C "$WORK_DIR" rev-parse HEAD 2>/dev/null || echo "HEAD~1")
   START_TIME=$(date +%s)
-
-  # Dynamic Step Budget Formula: TASK_MAX_STEPS = STEP_BASE + (TARGET_FILE_COUNT * STEP_PER_FILE)
-  TARGET_FILE_COUNT=0
-  if [ -n "$TASK_TARGET" ]; then
-    IFS=',' read -ra RAW_TARGETS <<< "$TASK_TARGET"
-    for rt in "${RAW_TARGETS[@]}"; do
-      rt_trimmed=$(echo "$rt" | xargs)
-      [ -z "$rt_trimmed" ] && continue
-      if [ -d "$WORK_DIR/$rt_trimmed" ]; then
-        dir_count=$(find "$WORK_DIR/$rt_trimmed" -type f 2>/dev/null | wc -l | tr -dc '0-9')
-        [ "${dir_count:-0}" -lt 1 ] && dir_count=1
-        TARGET_FILE_COUNT=$(( TARGET_FILE_COUNT + dir_count ))
-      else
-        TARGET_FILE_COUNT=$(( TARGET_FILE_COUNT + 1 ))
-      fi
-    done
-  fi
-  [ "$TARGET_FILE_COUNT" -lt 1 ] && TARGET_FILE_COUNT=1
-  TASK_MAX_STEPS=$(( STEP_BASE + (TARGET_FILE_COUNT * STEP_PER_FILE) ))
 
   if echo "$TASK_TITLE $TASK_CONSTRAINTS" | grep -iqE "\[RESEARCH\]"; then
     archive_active_reports

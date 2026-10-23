@@ -72,6 +72,50 @@ def pop_task(queue_path):
         lock.rmdir()
 
 
+def progress_bar(current, total, width=30):
+    if total <= 0:
+        return "[------------------------------] 0% (0/0)"
+    filled = current * width // total
+    return f"[{'#' * filled}{'-' * (width - filled)}] {current * 100 // total}% ({current}/{total})"
+
+
+def poll_next(args):
+    """Claim one queue item and return the scheduler's external state as fields."""
+    fields = [""] * 16
+    if Path(args.pause).exists():
+        fields[0] = "paused"
+        return fields
+    raw = pop_task(args.tasks)
+    def count(path):
+        source = Path(path)
+        if not source.exists():
+            return 0
+        return sum(bool(line.strip()) and not line.lstrip().startswith("#")
+                   for line in source.read_text(encoding="utf-8").splitlines())
+    done = count(args.done)
+    remaining = count(args.tasks) + bool(raw)
+    total = done + remaining
+    fields[:8] = ["task" if raw else "idle", raw, str(done), str(remaining),
+                  str(total), str(done + 1 if raw else done),
+                  str(done * 100 // total if total else 0), progress_bar(done, total)]
+    if raw:
+        fields[8] = raw.split("|", 1)[0].replace(" ", "") or "TASK-UNKNOWN"
+        level = re.search(r"LEVEL:\s*([0-9])", raw)
+        fields[9] = level.group(1) if level else "1"
+        for index, key in ((10, "TARGET"), (11, "VERIFY"),
+                           (12, "FORBIDDEN_SHORTCUTS"), (13, "CONSTRAINTS")):
+            fields[index] = task_field(raw, key)
+        targets = [item.strip() for item in fields[10].split(",") if item.strip()]
+        file_count = 0
+        for target in targets:
+            path = Path(args.work_dir) / target
+            file_count += max(1, sum(1 for item in path.rglob("*") if item.is_file())) if path.is_dir() else 1
+        file_count = max(1, file_count)
+        fields[14] = str(file_count)
+        fields[15] = str(args.step_base + file_count * args.step_per_file)
+    return fields
+
+
 def task_field(raw, key):
     if key not in FIELD_NAMES:
         raise ValueError(f"unknown task field: {key}")
@@ -372,6 +416,13 @@ def main(argv=None):
     preview.add_argument("--root", required=True)
     preview.add_argument("--task-id", required=True)
     preview.add_argument("--title", required=True)
+    poll = commands.add_parser("poll-next")
+    poll.add_argument("--tasks", required=True)
+    poll.add_argument("--done", required=True)
+    poll.add_argument("--pause", required=True)
+    poll.add_argument("--work-dir", required=True)
+    poll.add_argument("--step-base", type=int, default=12)
+    poll.add_argument("--step-per-file", type=int, default=5)
     args = parser.parse_args(argv)
     if args.command == "queue-pop":
         task = pop_task(args.path)
@@ -395,6 +446,8 @@ def main(argv=None):
         print(ensure_worktree(args.root, args.branch))
     elif args.command == "publish-preview":
         print(publish_preview(args.root, args.task_id, args.title))
+    elif args.command == "poll-next":
+        sys.stdout.buffer.write(("\0".join(poll_next(args)) + "\0").encode("utf-8"))
     else:
         write_status(args)
     return 0

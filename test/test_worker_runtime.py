@@ -68,6 +68,50 @@ class QueueContractTests(unittest.TestCase):
         self.assertEqual(result.stdout.strip(), "python -c 'print(1 | 2)'")
 
 
+class PollContractTests(unittest.TestCase):
+    def test_empty_queue_reports_idle_without_modification(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            tasks, done = root / "tasks.txt", root / "tasks.done"
+            tasks.write_text("# no work\n")
+            done.write_text("[DONE] TASK-1\n")
+            result = runtime("poll-next", "--tasks", tasks, "--done", done,
+                             "--pause", root / "PAUSE", "--work-dir", root)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.split("\0")[:5], ["idle", "", "1", "0", "1"])
+            self.assertEqual(tasks.read_text(), "# no work\n")
+
+    def test_pause_does_not_claim_task(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            tasks, done, pause = root / "tasks.txt", root / "tasks.done", root / "PAUSE"
+            tasks.write_text("TASK-1 | TARGET: src/a.py\n")
+            done.write_text("")
+            pause.touch()
+            result = runtime("poll-next", "--tasks", tasks, "--done", done,
+                             "--pause", pause, "--work-dir", root)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.split("\0")[0], "paused")
+            self.assertIn("TASK-1", tasks.read_text())
+
+    def test_claim_calculates_progress_and_budget(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            tasks, done = root / "tasks.txt", root / "tasks.done"
+            tasks.write_text("# queued\nTASK-2 | LEVEL: 2 | TARGET: a.py,b.py | VERIFY: true\n")
+            done.write_text("[DONE] TASK-1\n")
+            result = runtime("poll-next", "--tasks", tasks, "--done", done,
+                             "--pause", root / "PAUSE", "--work-dir", root,
+                             "--step-base", "12", "--step-per-file", "5")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            fields = result.stdout.split("\0")
+            self.assertEqual(fields[:7], ["task", "TASK-2 | LEVEL: 2 | TARGET: a.py,b.py | VERIFY: true",
+                                          "1", "1", "2", "2", "50"])
+            self.assertEqual(fields[8], "TASK-2")
+            self.assertEqual(fields[15], "22")
+            self.assertEqual(tasks.read_text(), "# queued\n")
+
+
 class StatusContractTests(unittest.TestCase):
     def test_status_is_valid_json_for_quoted_task_and_path(self):
         with tempfile.TemporaryDirectory() as directory:
