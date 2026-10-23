@@ -1370,7 +1370,8 @@ class InstallerIntegrationTests(unittest.TestCase):
                                     cwd=ROOT, capture_output=True, text=True, timeout=30)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertEqual(skills_manifest.read_text(), '{"entries":[{"path":"custom/skills"}]}\n')
-            self.assertTrue((target / "scripts/worker_runtime.py").is_file())
+            deployed_runtime = target / "scripts/worker_runtime.py"
+            self.assertEqual(deployed_runtime.read_bytes(), (ROOT / "scripts/worker_runtime.py").read_bytes())
             operations = target / ".agents/skills/nightshift/planner/OPERATIONS.md"
             self.assertFalse(operations.exists())
             operations.parent.mkdir(parents=True, exist_ok=True)
@@ -1383,16 +1384,19 @@ class InstallerIntegrationTests(unittest.TestCase):
             self.assertIn(".worker-score*.json", (target / ".gitignore").read_text())
             self.assertIn(".worker-score*.json.lock/", (target / ".gitignore").read_text())
             (target / ".worker.env").write_text("AI_CLI=agy\nCUSTOM_SETTING=preserve\n")
+            deployed_runtime.write_text("stale runtime\n")
             update = subprocess.run(["bash", str(ROOT / "install.sh"), str(target)],
                                     cwd=ROOT, capture_output=True, text=True, timeout=30)
             self.assertEqual(update.returncode, 0, update.stdout + update.stderr)
+            self.assertIn("Deployed scripts/worker_runtime.py", update.stdout)
+            self.assertEqual(deployed_runtime.read_bytes(), (ROOT / "scripts/worker_runtime.py").read_bytes())
             self.assertFalse(operations.exists(), "updates must remove retired skill sidecars")
             planner_skill = (target / ".agents/skills/nightshift/planner/SKILL.md").read_text()
             worker_contract = (target / ".skills/universal-build-verify.md").read_text()
             self.assertNotIn("OPERATIONS.md", planner_skill + worker_contract)
             self.assertIn("full discovered graph", planner_skill)
             self.assertEqual((target / ".worker.env").read_text(), "AI_CLI=agy\nCUSTOM_SETTING=preserve\n")
-            self.assertTrue((target / "scripts/worker_runtime.py").is_file())
+            self.assertEqual(deployed_runtime.read_bytes(), (ROOT / "scripts/worker_runtime.py").read_bytes())
             installed = subprocess.run(
                 [sys.executable, "-m", "unittest", "discover", "-s", "test", "-v"],
                 cwd=target, capture_output=True, text=True, timeout=45,
