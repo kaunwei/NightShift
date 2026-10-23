@@ -498,6 +498,146 @@ def git_audit(args):
     return 0, ""
 
 
+def run_verify(command, work_dir, port, timeout):
+    environment = os.environ.copy()
+    environment.update(PORT=str(port), TEST_PORT=str(port))
+    options = {"cwd": work_dir, "env": environment, "stdout": subprocess.PIPE,
+               "stderr": subprocess.STDOUT}
+    if os.name == "nt":
+        options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        options["start_new_session"] = True
+    process = subprocess.Popen(["bash", "-c", command], **options)
+    try:
+        output, _ = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            if os.name == "nt":
+                process.send_signal(signal.CTRL_BREAK_EVENT)
+            else:
+                os.killpg(process.pid, signal.SIGTERM)
+        except (OSError, ValueError):
+            process.terminate()
+        try:
+            output, _ = process.communicate(timeout=2)
+        except subprocess.TimeoutExpired:
+            if os.name == "nt":
+                process.kill()
+            else:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except OSError:
+                    process.kill()
+            output, _ = process.communicate()
+        return 124, output.decode("utf-8", "replace")
+    else:
+        return process.returncode, output.decode("utf-8", "replace")
+
+
+def first_report(root, target):
+    target_path = Path(root) / target if target else None
+    if target_path and target_path.is_file():
+        return target_path
+    reports = Path(root) / ".reports"
+    if reports.exists():
+        for current, directories, files in os.walk(reports, followlinks=True):
+            if "SUMMARY.md" in files:
+                return Path(current) / "SUMMARY.md"
+    research = Path(root) / "docs/research"
+    if research.exists():
+        for current, directories, files in os.walk(research):
+            for name in files:
+                if name.endswith(".md"):
+                    return Path(current) / name
+    return None
+
+
+def mechanical_audit(args):
+    guard_status, reason = git_audit(args)
+    verify_exit = 0
+    messages = []
+    if guard_status:
+        return {"status": guard_status, "error": reason, "verify_exit": verify_exit,
+                "messages": messages}
+
+    context = f"{args.title} {args.constraints}"
+    diagnostic = bool(re.search(r"\[DIAGNOSTIC\]", context, re.I))
+    research = bool(re.search(r"\[RESEARCH\]", context, re.I))
+    verify = args.verify
+
+    if diagnostic:
+        messages.append(f"[WORKER_GUARD] 🔍 Executing Mechanical Audit ([DIAGNOSTIC]): {verify or 'None'}")
+        if verify:
+            verify_exit, output = run_verify(verify, args.work_dir, args.port, args.verify_timeout)
+            if re.search(r"error: cannot find|syntax error|compilation failed|build failed|undefined symbol",
+                         output, re.I):
+                guard_status = 4
+                reason = "False Red-Light Detected: Repro failed on compilation/syntax error instead of test assertion."
+    elif research:
+        messages.append("[WORKER_GUARD] 🔍 Executing Mechanical Audit ([RESEARCH])...")
+        status = subprocess.run(["git", "-C", args.work_dir, "status", "--porcelain"],
+                                check=False, capture_output=True, text=True).stdout
+        dirty = [line for line in status.splitlines() if not re.search(
+            r"progress\.log|tasks\.txt|tasks\.done|worker\..*\.status|\.preview|\.worker\..*|\.reports/|\.reports", line)]
+        if dirty:
+            guard_status = 12
+            reason = "Research Zero-Touch Violation: Uncommitted/modified files detected after research (" + "\n".join(dirty) + ")."
+        report = first_report(args.work_dir, args.target) if guard_status == 0 else None
+        if guard_status == 0:
+            if report is None or not report.is_file() or report.stat().st_size == 0:
+                guard_status = 11
+                reason = "Research Artifact Missing: No non-empty SUMMARY.md found in .reports/ or declared TARGET."
+            else:
+                content = report.read_text(encoding="utf-8", errors="replace")
+                if not re.search(r"^#+\s+", content, re.M):
+                    guard_status = 11
+                    reason = f"Research Artifact Invalid: Report '{report}' lacks standard markdown headings."
+                else:
+                    if not content.splitlines()[0].find("REPORT_META:") >= 0:
+                        commit = subprocess.run(["git", "-C", args.work_dir, "rev-parse", "--short", "HEAD"],
+                                                check=False, capture_output=True, text=True).stdout.strip() or "HEAD"
+                        stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                        atomic_write(report, f"<!-- REPORT_META: Task={args.task_id} | Commit={commit} | Time={stamp} -->\n{content}")
+                        content = report.read_text(encoding="utf-8", errors="replace")
+                    messages.append(f"[WORKER_GUARD] ✅ Artifact verified: {report} ({report.stat().st_size} bytes)")
+                    pointers = re.findall(r"[a-zA-Z0-9_./-]+\.[a-zA-Z0-9]+#L[0-9]+", content)[:5]
+                    for pointer in pointers:
+                        file_name, line_number = pointer.rsplit("#L", 1)
+                        source = Path(args.work_dir) / file_name
+                        if source.is_file():
+                            total_lines = source.read_bytes().count(b"\n")
+                            if int(line_number) > total_lines:
+                                guard_status = 13
+                                reason = (f"Pointer Validity Violation: Line {line_number} in pointer '{pointer}' "
+                                          f"exceeds total file lines ({total_lines}).")
+                                break
+                            messages.append(f"[WORKER_GUARD] 🔍 Verified pointer target: {file_name}#L{line_number} (Total lines: {total_lines})")
+        if guard_status == 0 and verify and not re.match(r"^(REPORT_ONLY|none)$", verify, re.I):
+            messages.append(f"[WORKER_GUARD] 🔍 Executing Custom Research VERIFY: {verify}")
+            verify_exit, _ = run_verify(verify, args.work_dir, args.port, args.verify_timeout)
+            if verify_exit:
+                guard_status = 6
+                reason = f"Mechanical Verification Failed: '{verify}' returned exit code {verify_exit} (Expected 0)."
+    else:
+        messages.append(f"[WORKER_GUARD] 🔍 Executing Mechanical Audit ([CODE]): {verify or 'None'}")
+        if verify:
+            verify_exit, output = run_verify(verify, args.work_dir, args.port, args.verify_timeout)
+            if verify_exit:
+                guard_status = 6
+                reason = f"Mechanical Verification Failed: '{verify}' returned exit code {verify_exit} (Expected 0)."
+            elif re.search(r"(0 tests passed|0 passed|ran 0 tests|0 suites passed|No matching tests)", output, re.I):
+                guard_status = 9
+                reason = "Empty Test Run Detected (Anti-Idle): VERIFY ran 0 tests. Possible test filter typo."
+            elif (Path(args.work_dir) / "Package.swift").is_file():
+                messages.append("[WORKER_GUARD] 🔍 Executing Regression Check (swift test)...")
+                regression, _ = run_verify("swift test", args.work_dir, args.port, args.verify_timeout)
+                if regression:
+                    guard_status = 10
+                    reason = "Regression Check Failed: Whole-suite regression tests failed."
+    return {"status": guard_status, "error": reason, "verify_exit": verify_exit,
+            "messages": messages}
+
+
 def git_at(directory, *argv, check=True):
     return subprocess.run(["git", "-C", str(directory), *argv],
                           check=check, capture_output=True)
@@ -756,6 +896,14 @@ def main(argv=None):
     progress = commands.add_parser("progress-prepend")
     progress.add_argument("--path", required=True)
     progress.add_argument("--entry", required=True)
+    audit = commands.add_parser("mechanical-audit")
+    for name in ("work-dir", "base", "task-id"):
+        audit.add_argument(f"--{name}", required=True)
+    for name in ("target", "constraints", "title", "verify"):
+        audit.add_argument(f"--{name}", default="")
+    audit.add_argument("--level", type=int, default=1)
+    audit.add_argument("--port", default="3001")
+    audit.add_argument("--verify-timeout", type=float, default=180)
     poll = commands.add_parser("poll-next")
     poll.add_argument("--tasks", required=True)
     poll.add_argument("--done", required=True)
@@ -799,6 +947,11 @@ def main(argv=None):
         print(rollback_failed_task(args.root, args.work_dir, args.task_id, paths))
     elif args.command == "progress-prepend":
         prepend_progress(args.path, args.entry)
+    elif args.command == "mechanical-audit":
+        result = mechanical_audit(args)
+        for message in result["messages"]:
+            print(message, file=sys.stderr)
+        print(json.dumps(result, ensure_ascii=False))
     elif args.command == "poll-next":
         sys.stdout.buffer.write(("\0".join(poll_next(args)) + "\0").encode("utf-8"))
     else:

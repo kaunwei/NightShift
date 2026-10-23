@@ -363,6 +363,60 @@ class GitAuditContractTests(unittest.TestCase):
         self.assertEqual(result.returncode, 8)
 
 
+class MechanicalAuditContractTests(unittest.TestCase):
+    def test_research_audit_adds_metadata_and_rejects_invalid_pointers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            def git(*args):
+                return subprocess.run(["git", "-C", str(root), *args], check=True,
+                                      capture_output=True, text=True).stdout.strip()
+            git("config", "user.name", "Audit Test")
+            git("config", "user.email", "audit@example.invalid")
+            (root / ".gitignore").write_text(".reports/\n")
+            (root / "src.py").write_text("one\ntwo\n")
+            git("add", ".gitignore", "src.py")
+            git("commit", "-qm", "baseline")
+            base = git("rev-parse", "HEAD")
+            report = root / ".reports" / "SUMMARY.md"
+            report.parent.mkdir()
+            report.write_text("# Findings\nInvalid location: src.py#L9\n")
+
+            result = runtime("mechanical-audit", "--work-dir", root, "--base", base,
+                             "--target", ".reports/SUMMARY.md", "--title", "[RESEARCH] inspect",
+                             "--task-id", "TASK-R1", "--verify", "REPORT_ONLY")
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            audit = json.loads(result.stdout)
+            self.assertEqual(audit["status"], 13)
+            self.assertIn("Pointer Validity", audit["error"])
+            self.assertIn("REPORT_META:", report.read_text().splitlines()[0])
+
+    def test_code_verification_timeout_is_a_guard_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            def git(*args):
+                return subprocess.run(["git", "-C", str(root), *args], check=True,
+                                      capture_output=True, text=True).stdout.strip()
+            git("config", "user.name", "Audit Test")
+            git("config", "user.email", "audit@example.invalid")
+            (root / "source.txt").write_text("baseline\n")
+            git("add", "source.txt")
+            git("commit", "-qm", "baseline")
+            base = git("rev-parse", "HEAD")
+
+            result = runtime("mechanical-audit", "--work-dir", root, "--base", base,
+                             "--target", "source.txt", "--title", "[CODE: FIX] verify",
+                             "--task-id", "TASK-C1", "--verify", "sleep 10",
+                             "--verify-timeout", "0.1")
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            audit = json.loads(result.stdout)
+            self.assertEqual(audit["status"], 6)
+            self.assertEqual(audit["verify_exit"], 124)
+
+
 class IsolationPreviewContractTests(unittest.TestCase):
     def test_worktree_setup_mirrors_config_and_preview_publishes_commit(self):
         with tempfile.TemporaryDirectory() as directory:
