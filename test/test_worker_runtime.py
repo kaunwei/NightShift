@@ -299,7 +299,7 @@ class WorkerScoreTests(unittest.TestCase):
                 "for arg in \"$@\"; do if [ \"$prev\" = --output-last-message ]; then last=\"$arg\"; fi; prev=\"$arg\"; done\n"
                 "case \"$*\" in\n"
                 "  *'CLOSEOUT ONLY'*) printf '%s\\n' \"${CLOSEOUT_REPLY:-[CLOSEOUT_VERIFIED]}\" > \"$last\" ;;\n"
-                "  *) if [ \"$OMIT_INITIAL_RESULT\" = 1 ]; then rm -f \"$last\"; printf '[CLOSEOUT_REQUIRED]\\n'; else printf '[CLOSEOUT_REQUIRED]\\n' > \"$last\"; fi; printf 'after\\n' > output.txt ;;\n"
+                "  *) if [ \"$OMIT_INITIAL_RESULT\" = 1 ]; then rm -f \"$last\"; printf '%s\\n' \"${INITIAL_REPLY:-[CLOSEOUT_REQUIRED]}\"; else printf '%s\\n' \"${INITIAL_REPLY:-[CLOSEOUT_REQUIRED]}\" > \"$last\"; fi; printf 'after\\n' > output.txt ;;\n"
                 "esac\n"
                 "printf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"type\":\"command_execution\"}}'\n"
             )
@@ -307,14 +307,15 @@ class WorkerScoreTests(unittest.TestCase):
             git("add", "codex")
             git("commit", "-qm", "add fake cli")
             base = git("rev-parse", "HEAD")
-            def invoke(reply="[CLOSEOUT_VERIFIED]", omit_initial=False):
+            def invoke(reply="[CLOSEOUT_VERIFIED]", omit_initial=False, mode="auto", initial="[CLOSEOUT_REQUIRED]"):
                 env = os.environ.copy()
                 env["CLOSEOUT_REPLY"] = reply
+                env["INITIAL_REPLY"] = initial
                 env["OMIT_INITIAL_RESULT"] = "1" if omit_initial else "0"
                 return runtime("task-cli", "--provider", "codex", "--executable", executable,
                              "--work-dir", root, "--prompt-file", prompt, "--output-file", output,
                              "--result-file", last_message, "--timeout", "10", "--model", "gpt-6-luna",
-                             "--effort", "none", "--approval-mode", "auto", "--target", "output.txt",
+                             "--effort", "none", "--approval-mode", mode, "--target", "output.txt",
                              "--task-id", "TASK-CLOSE", "--title", "[CODE: FIX] change output",
                              "--base", base, "--step-budget", "2", env=env)
 
@@ -323,6 +324,15 @@ class WorkerScoreTests(unittest.TestCase):
             self.assertEqual(git("log", "-1", "--pretty=%s"), "fix(worker): complete TASK-CLOSE")
             self.assertEqual(git("show", "HEAD:output.txt"), "after")
             self.assertEqual(git("status", "--porcelain"), "")
+            for mode in ("auto", "approve-for-me", "prompt", "default", "", "bypass"):
+                for initial in ("[CLOSEOUT_REQUIRED]", "Attempts: 1 | Confidence: HIGH"):
+                    with self.subTest(mode=mode, initial=initial):
+                        git("reset", "--hard", base)
+                        result = invoke(mode=mode, initial=initial)
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertNotEqual(git("rev-parse", "HEAD"), base)
+                        self.assertEqual(git("show", "HEAD:output.txt"), "after")
+                        self.assertEqual(git("status", "--porcelain"), "")
             for reply, omit_initial in ((reply, missing) for missing in (False, True)
                                          for reply in ("[BLOCKED]", "[NEED_GUIDANCE]", "[NEED_DECOMPOSITION]", "[SCOPE_BLOCKED]", "[CLOSEOUT_INCOMPLETE]", "unverified")):
                 with self.subTest(reply=reply):

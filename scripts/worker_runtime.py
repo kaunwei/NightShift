@@ -757,7 +757,7 @@ def _execute_task_cli(args, adapter_prompt):
             print(f"[WORKER] Codex action budget exceeded ({actions_used}/{args.step_budget}).")
             return 125
         result_path = last_message if last_message and last_message.is_file() and last_message.stat().st_size else output
-        if (result_code == 0 and args.approval_mode in ("auto", "approve-for-me")
+        if (result_code == 0
                 and not blocking_outcome(result_path.read_text(encoding="utf-8", errors="replace"))):
             closeout_requested = "[CLOSEOUT_REQUIRED]" in result_path.read_text(encoding="utf-8", errors="replace")
             if closeout_requested:
