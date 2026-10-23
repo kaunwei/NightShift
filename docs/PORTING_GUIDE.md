@@ -57,7 +57,7 @@ deploys or upgrades the complete Pure Skills-Driven architecture non-destructive
 | :--- | :---: | :--- |
 | `install.sh` / `update.sh` | `chmod +x` | Unified installer & updater (deploys scripts, skills, state files, and protects `.gitignore` without duplication). |
 | `worker.sh` | `chmod +x` | Background daemon (supports isolation modes, zero-arg execution). |
-| `worker_runtime.py` | Python 3 | Atomic queue pop, task-field parsing, JSON status reader/writer, Codex argument builder, timeout, and Git audit used by the daemon and dashboard. |
+| `worker_runtime.py` | Python 3.9+ | Atomic queue pop, task-field parsing, JSON status reader/writer, Codex argument builder, timeout, Git audit, worktree isolation, and preview publishing. |
 | `.worker.env.example` | Read-only template | Config template with OS detection, model flags, and `WORKER_ISOLATION`. |
 | `.worker.env` | Config file | Active config initialized from `.worker.env.example` in target root. |
 | `scripts/` | `chmod +x` | Helper suite: `status.sh`, `watch_worker.sh`, `reorder_queue.sh`, `extract_skeleton.sh`, `probe_line.sh`. |

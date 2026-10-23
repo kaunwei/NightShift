@@ -190,6 +190,55 @@ class GitAuditContractTests(unittest.TestCase):
         self.assertEqual(result.returncode, 8)
 
 
+class IsolationPreviewContractTests(unittest.TestCase):
+    def test_worktree_setup_mirrors_config_and_preview_publishes_commit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "repo"
+            root.mkdir()
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            def git(*args):
+                return subprocess.run(["git", "-C", str(root), *args],
+                                      check=True, capture_output=True, text=True).stdout.strip()
+            git("config", "user.name", "Preview Test")
+            git("config", "user.email", "preview@example.invalid")
+            (root / "source.txt").write_text("baseline\n")
+            (root / ".env").write_text("SAMPLE=1\n")
+            (root / ".gitignore").write_text(".env\n.worker.env\n.reports\n")
+            git("add", "source.txt", ".gitignore")
+            git("commit", "-qm", "baseline")
+
+            setup = runtime("ensure-worktree", "--root", root)
+            self.assertEqual(setup.returncode, 0, setup.stderr)
+            tree = root / ".worker-tree"
+            self.assertEqual((tree / "source.txt").read_text(), "baseline\n")
+            self.assertEqual((tree / ".env").read_text(), "SAMPLE=1\n")
+            self.assertTrue((tree / ".reports").exists())
+            self.assertEqual(runtime("ensure-worktree", "--root", root).returncode, 0)
+
+            (root / "source.txt").write_text("new baseline\n")
+            git("add", "source.txt")
+            git("commit", "-qm", "advance root")
+            advanced = runtime("ensure-worktree", "--root", root)
+            self.assertEqual(advanced.returncode, 0, advanced.stderr)
+            self.assertEqual((tree / "source.txt").read_text(), "new baseline\n")
+
+            (tree / "source.txt").write_text("worker result\n")
+            (tree / "source-link.txt").symlink_to("source.txt")
+            subprocess.run(["git", "-C", str(tree), "add", "source.txt", "source-link.txt"], check=True)
+            subprocess.run(["git", "-C", str(tree), "commit", "-qm", "result"], check=True)
+            (tree / "build/bin").mkdir(parents=True)
+            (tree / "build/bin/app").write_text("compiled\n")
+            preview = runtime("publish-preview", "--root", root,
+                              "--task-id", "TASK-1", "--title", 'A "quoted" task')
+            self.assertEqual(preview.returncode, 0, preview.stderr)
+            self.assertEqual((root / ".preview/source.txt").read_text(), "worker result\n")
+            self.assertTrue((root / ".preview/source-link.txt").is_symlink())
+            self.assertEqual((root / ".preview/build/bin/app").read_text(), "compiled\n")
+            metadata = json.loads((root / ".preview/version.json").read_text())
+            self.assertEqual(metadata["task_id"], "TASK-1")
+            self.assertEqual(metadata["summary"], 'A "quoted" task')
+
+
 class WorkerIntegrationTests(unittest.TestCase):
     def test_codex_task_keeps_queue_status_commit_and_guard_contract(self):
         with tempfile.TemporaryDirectory() as directory:

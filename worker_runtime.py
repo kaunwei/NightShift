@@ -7,13 +7,16 @@ Each command receives explicit inputs so callers and tests exercise the same sea
 
 import argparse
 from datetime import datetime, timezone
+from io import BytesIO
 import json
 import os
 from pathlib import Path
 import re
+import shutil
 import signal
 import sys
 import subprocess
+import tarfile
 import tempfile
 import time
 
@@ -247,6 +250,81 @@ def git_audit(args):
     return 0, ""
 
 
+def git_at(directory, *argv, check=True):
+    return subprocess.run(["git", "-C", str(directory), *argv],
+                          check=check, capture_output=True)
+
+
+def ensure_worktree(root, branch="feature/worker-frontier"):
+    root = Path(root).resolve()
+    target = root / ".worker-tree"
+    if not (target / ".git").is_file():
+        if target.exists():
+            raise ValueError(f"worktree target exists but is not a Git worktree: {target}")
+        present = git_at(root, "show-ref", "--verify", "--quiet", f"refs/heads/{branch}", check=False)
+        if present.returncode:
+            git_at(root, "worktree", "add", "-b", branch, str(target), "HEAD")
+        else:
+            git_at(root, "worktree", "add", str(target), branch)
+    # Only advance the worker branch when the user's branch is ahead and the tree is clean.
+    ancestor = git_at(root, "merge-base", "--is-ancestor", branch, "HEAD", check=False)
+    if ancestor.returncode == 0 and not git_at(target, "status", "--porcelain").stdout:
+        source_head = git_at(root, "rev-parse", "HEAD").stdout.decode().strip()
+        git_at(target, "merge", "--ff-only", source_head)
+    for name in (".env", ".worker.env"):
+        source = root / name
+        if source.is_file():
+            shutil.copy2(source, target / name)
+    for name in ("node_modules", ".venv"):
+        source = root / name
+        destination = target / name
+        if source.is_dir() and not destination.exists() and not destination.is_symlink():
+            destination.symlink_to(source, target_is_directory=True)
+    reports = root / ".reports"
+    (reports / ".archive").mkdir(parents=True, exist_ok=True)
+    link = target / ".reports"
+    if not link.exists() and not link.is_symlink():
+        link.symlink_to(reports, target_is_directory=True)
+    return target
+
+
+def publish_preview(root, task_id, title):
+    root = Path(root).resolve()
+    worktree = root / ".worker-tree"
+    preview = root / ".preview"
+    preview.mkdir(parents=True, exist_ok=True)
+    archive = git_at(worktree, "archive", "--format=tar", "HEAD").stdout
+    with tarfile.open(fileobj=BytesIO(archive)) as content:
+        for member in content:
+            destination = preview / member.name
+            if not destination.resolve().is_relative_to(preview.resolve()):
+                raise ValueError(f"unsafe archive path: {member.name}")
+            if member.isdir():
+                destination.mkdir(parents=True, exist_ok=True)
+            elif member.isfile():
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                with content.extractfile(member) as source, destination.open("wb") as output:
+                    shutil.copyfileobj(source, output)
+                destination.chmod(member.mode & 0o777)
+            elif member.issym():
+                link_target = (destination.parent / member.linkname).resolve()
+                if not link_target.is_relative_to(preview.resolve()):
+                    raise ValueError(f"unsafe archive link: {member.name}")
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                if destination.exists() or destination.is_symlink():
+                    destination.unlink()
+                destination.symlink_to(member.linkname)
+    for name in ("build/bin", "target/debug", "bin", "dist"):
+        source = worktree / name
+        if source.is_dir():
+            shutil.copytree(source, preview / name, dirs_exist_ok=True, symlinks=True)
+    commit = git_at(worktree, "rev-parse", "--short", "HEAD").stdout.decode().strip()
+    metadata = {"task_id": task_id, "commit": commit, "summary": title,
+                "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+    atomic_write(preview / "version.json", json.dumps(metadata, ensure_ascii=False, indent=2) + "\n")
+    return commit
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -287,6 +365,13 @@ def main(argv=None):
     audit.add_argument("--constraints", default="")
     audit.add_argument("--title", default="")
     audit.add_argument("--level", type=int, default=1)
+    setup = commands.add_parser("ensure-worktree")
+    setup.add_argument("--root", required=True)
+    setup.add_argument("--branch", default="feature/worker-frontier")
+    preview = commands.add_parser("publish-preview")
+    preview.add_argument("--root", required=True)
+    preview.add_argument("--task-id", required=True)
+    preview.add_argument("--title", required=True)
     args = parser.parse_args(argv)
     if args.command == "queue-pop":
         task = pop_task(args.path)
@@ -306,6 +391,10 @@ def main(argv=None):
         if reason:
             print(reason)
         return code
+    elif args.command == "ensure-worktree":
+        print(ensure_worktree(args.root, args.branch))
+    elif args.command == "publish-preview":
+        print(publish_preview(args.root, args.task_id, args.title))
     else:
         write_status(args)
     return 0

@@ -11,6 +11,6 @@ whole suite. The integration fixture covers task claiming, Luna/none CLI
 arguments, wrapper commit, status, Git audit acceptance and rejection, rollback,
 and timeout exit-code/process-termination behavior.
 
-The staged migration leaves task execution, agy, isolation, and preview logic
-in Bash for now. Move one verified behavior at a
+The staged migration leaves task execution and agy logic in Bash for now. Move
+one verified behavior at a
 time; do not remove an old path until its external contract is covered here.

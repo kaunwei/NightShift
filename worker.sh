@@ -146,34 +146,7 @@ ensure_worker_tree() {
   if [ "$WORKER_ISOLATION" != "1" ] && [ "$WORKER_ISOLATION" != "true" ]; then
     return 0
   fi
-
-  local target_dir="$SCRIPT_DIR/.worker-tree"
-  local branch_name="feature/worker-frontier"
-
-  if [ ! -d "$target_dir" ] || [ ! -f "$target_dir/.git" ]; then
-    echo "[WORKER] Initializing persistent worker worktree at $target_dir (Branch: $branch_name)..."
-    if ! git show-ref --verify --quiet "refs/heads/$branch_name"; then
-      git branch "$branch_name" HEAD 2>/dev/null || true
-    fi
-    git worktree add -B "$branch_name" "$target_dir" "$branch_name" 2>/dev/null || true
-  fi
-
-  # Fast-forward worker-frontier if main is ahead and worker tree is clean
-  if git merge-base --is-ancestor "$branch_name" HEAD 2>/dev/null; then
-    git -C "$target_dir" merge --ff-only HEAD 2>/dev/null || true
-  fi
-
-  # Mirror untracked environment configs
-  [ -f "$SCRIPT_DIR/.env" ] && cp "$SCRIPT_DIR/.env" "$target_dir/.env" 2>/dev/null || true
-  [ -f "$SCRIPT_DIR/.worker.env" ] && cp "$SCRIPT_DIR/.worker.env" "$target_dir/.worker.env" 2>/dev/null || true
-
-  # Mirror heavy dependency caches
-  [ -d "$SCRIPT_DIR/node_modules" ] && [ ! -e "$target_dir/node_modules" ] && ln -sf "$SCRIPT_DIR/node_modules" "$target_dir/node_modules" 2>/dev/null || true
-  [ -d "$SCRIPT_DIR/.venv" ] && [ ! -e "$target_dir/.venv" ] && ln -sf "$SCRIPT_DIR/.venv" "$target_dir/.venv" 2>/dev/null || true
-
-  # Share untracked ephemeral reports directory
-  mkdir -p "$SCRIPT_DIR/.reports/.archive"
-  [ ! -e "$target_dir/.reports" ] && ln -sf "$SCRIPT_DIR/.reports" "$target_dir/.reports" 2>/dev/null || true
+  "$PYTHON_BIN" "$SCRIPT_DIR/worker_runtime.py" ensure-worktree --root "$SCRIPT_DIR" >/dev/null
 }
 
 archive_active_reports() {
@@ -223,35 +196,10 @@ archive_overlapping_reports() {
 }
 
 publish_preview_artifact() {
-  local task_id="$1"
-  local task_title="$2"
-  mkdir -p "$PREVIEW_DIR"
-
-  # Clean git archive of feature/worker-frontier into .preview/
-  if command -v tar >/dev/null 2>&1; then
-    ( cd "$SCRIPT_DIR" && git archive feature/worker-frontier 2>/dev/null | tar -x -C "$PREVIEW_DIR" 2>/dev/null || true )
-  fi
-
-  # Copy compiled binary directories if present
-  for bin_dir in build/bin target/debug bin dist; do
-    if [ -d "$WORK_DIR/$bin_dir" ]; then
-      mkdir -p "$PREVIEW_DIR/$bin_dir"
-      cp -R "$WORK_DIR/$bin_dir/"* "$PREVIEW_DIR/$bin_dir/" 2>/dev/null || true
-    fi
-  done
-
-  # Record version metadata
   local commit_hash
-  commit_hash=$(git -C "$WORK_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")
-  cat <<JSON > "$PREVIEW_DIR/version.json"
-{
-  "task_id": "$task_id",
-  "commit": "$commit_hash",
-  "summary": "$task_title",
-  "updated_at": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-}
-JSON
-  echo "[WORKER] Staged immutable preview drop-box at .preview/ (Commit: $commit_hash)"
+  commit_hash=$("$PYTHON_BIN" "$SCRIPT_DIR/worker_runtime.py" publish-preview \
+    --root "$SCRIPT_DIR" --task-id "$1" --title "$2") || return $?
+  echo "[WORKER] Staged preview drop-box at .preview/ (Commit: $commit_hash)"
 }
 
 # ------------------------------------------------------------------------------
@@ -385,7 +333,7 @@ validate_post_flight() {
 # ------------------------------------------------------------------------------
 touch "$TASKS_FILE" "$TASKS_DONE_FILE" "$PROGRESS_FILE"
 mkdir -p "$SCRIPT_DIR/.reports/.archive"
-ensure_worker_tree
+ensure_worker_tree || exit 2
 
 # Clean Pivot Checkpoint (Mechanism 4)
 if git -C "$WORK_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
@@ -983,7 +931,8 @@ BLOCK_EOF
         archive_overlapping_reports "$TASK_BASE_SHA"
       fi
       if [ "$WORKER_ISOLATION" = "1" ] || [ "$WORKER_ISOLATION" = "true" ]; then
-        publish_preview_artifact "$TASK_ID" "$TASK_TITLE"
+        publish_preview_artifact "$TASK_ID" "$TASK_TITLE" || \
+          echo "[WORKER] Preview staging failed for $TASK_ID" >&2
       fi
       NEW_DONE_COUNT=$(( DONE_COUNT + 1 ))
       FINAL_BAR=$(render_progress_bar "$NEW_DONE_COUNT" "$TOTAL_COUNT" 30)
