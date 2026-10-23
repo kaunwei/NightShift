@@ -65,28 +65,14 @@ case "$ACTIVE_OS" in
   mac|darwin)
     NUM_CPUS=$(sysctl -n hw.ncpu 2>/dev/null || echo 4)
     PLATFORM_NAME="macOS (Darwin)"
-    TIMEOUT_BIN=""
-    if command -v gtimeout >/dev/null 2>&1; then
-      TIMEOUT_BIN="gtimeout"
-    elif command -v timeout >/dev/null 2>&1; then
-      TIMEOUT_BIN="timeout"
-    fi
     ;;
   ubuntu)
     NUM_CPUS=$(nproc 2>/dev/null || echo 4)
     PLATFORM_NAME="Linux (Ubuntu)"
-    TIMEOUT_BIN=""
-    if command -v timeout >/dev/null 2>&1; then
-      TIMEOUT_BIN="timeout"
-    fi
     ;;
   *)
     NUM_CPUS=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
     PLATFORM_NAME="Linux ($ACTIVE_OS)"
-    TIMEOUT_BIN=""
-    if command -v timeout >/dev/null 2>&1; then
-      TIMEOUT_BIN="timeout"
-    fi
     ;;
 esac
 
@@ -291,35 +277,7 @@ render_progress_bar() {
 run_with_timeout() {
   local timeout_sec="$1"
   shift
-  if [ -n "$TIMEOUT_BIN" ] && command -v "$TIMEOUT_BIN" >/dev/null 2>&1; then
-    "$TIMEOUT_BIN" "$timeout_sec" "$@"
-  elif command -v timeout >/dev/null 2>&1; then
-    timeout "$timeout_sec" "$@"
-  elif command -v gtimeout >/dev/null 2>&1; then
-    gtimeout "$timeout_sec" "$@"
-  else
-    # Fallback for systems without timeout/gtimeout
-    "$@" &
-    local child_pid=$!
-    (
-      sleep "$timeout_sec"
-      if kill -0 "$child_pid" 2>/dev/null; then
-        kill -TERM "$child_pid" 2>/dev/null || true
-        sleep 2
-        kill -KILL "$child_pid" 2>/dev/null || true
-      fi
-    ) </dev/null >/dev/null 2>&1 &
-    local watchdog_pid=$!
-    wait "$child_pid"
-    local exit_code=$?
-    pkill -P "$watchdog_pid" 2>/dev/null || true
-    kill -9 "$watchdog_pid" 2>/dev/null || true
-    wait "$watchdog_pid" 2>/dev/null || true
-    if [ $exit_code -eq 137 ] || [ $exit_code -eq 143 ]; then
-      return 124
-    fi
-    return "$exit_code"
-  fi
+  "$PYTHON_BIN" "$SCRIPT_DIR/worker_runtime.py" run-timeout "$timeout_sec" -- "$@"
 }
 
 update_status() {

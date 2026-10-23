@@ -115,6 +115,20 @@ class CliContractTests(unittest.TestCase):
         self.assertIn("approval", result.stderr.lower())
 
 
+class TimeoutContractTests(unittest.TestCase):
+    def test_run_timeout_preserves_exit_code_and_streamed_output(self):
+        result = runtime("run-timeout", "5", "--", sys.executable, "-c",
+                         "import sys; print('started', flush=True); sys.exit(7)")
+        self.assertEqual(result.returncode, 7)
+        self.assertIn("started", result.stdout)
+
+    def test_run_timeout_returns_124_and_terminates_child(self):
+        result = runtime("run-timeout", "0.1", "--", sys.executable, "-c",
+                         "import time; print('started', flush=True); time.sleep(10)")
+        self.assertEqual(result.returncode, 124)
+        self.assertIn("started", result.stdout)
+
+
 class WorkerIntegrationTests(unittest.TestCase):
     def test_codex_task_keeps_queue_status_commit_and_guard_contract(self):
         with tempfile.TemporaryDirectory() as directory:

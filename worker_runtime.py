@@ -11,7 +11,9 @@ import json
 import os
 from pathlib import Path
 import re
+import signal
 import sys
+import subprocess
 import tempfile
 import time
 
@@ -150,6 +152,41 @@ def codex_args(args):
     return command
 
 
+def run_with_timeout(seconds, command):
+    """Run a command with inherited output and terminate its process group on timeout."""
+    if not command:
+        raise ValueError("run-timeout requires a command after --")
+    options = {}
+    if os.name == "nt":
+        options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        options["start_new_session"] = True
+    process = subprocess.Popen(command, **options)
+    try:
+        return_code = process.wait(timeout=seconds)
+    except subprocess.TimeoutExpired:
+        try:
+            if os.name == "nt":
+                process.send_signal(signal.CTRL_BREAK_EVENT)
+            else:
+                os.killpg(process.pid, signal.SIGTERM)
+        except (OSError, ValueError):
+            process.terminate()
+        try:
+            process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            if os.name == "nt":
+                process.kill()
+            else:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except OSError:
+                    process.kill()
+            process.wait()
+        return 124
+    return 128 + abs(return_code) if return_code < 0 else return_code
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -180,6 +217,9 @@ def main(argv=None):
     codex.add_argument("--sandbox", default="workspace-write")
     codex.add_argument("--ephemeral", default="1")
     codex.add_argument("--additional-dirs", default="")
+    timeout = commands.add_parser("run-timeout")
+    timeout.add_argument("seconds", type=float)
+    timeout.add_argument("argv", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
     if args.command == "queue-pop":
         task = pop_task(args.path)
@@ -191,6 +231,9 @@ def main(argv=None):
         display_status(args.path)
     elif args.command == "codex-args":
         sys.stdout.buffer.write(("\0".join(codex_args(args)) + "\0").encode("utf-8"))
+    elif args.command == "run-timeout":
+        command = args.argv[1:] if args.argv[:1] == ["--"] else args.argv
+        return run_with_timeout(args.seconds, command)
     else:
         write_status(args)
     return 0
