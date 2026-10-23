@@ -129,6 +129,67 @@ class TimeoutContractTests(unittest.TestCase):
         self.assertIn("started", result.stdout)
 
 
+class GitAuditContractTests(unittest.TestCase):
+    def audit_case(self, files, *, target="src/a.py", title="[CODE: EXPAND]", level="1", constraints="", untracked=None, baseline_source="first\nsecond\n"):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            def git(*args):
+                return subprocess.run(["git", "-C", str(root), *args],
+                                      check=True, capture_output=True, text=True).stdout.strip()
+            git("config", "user.name", "Audit Test")
+            git("config", "user.email", "audit@example.invalid")
+            (root / "src").mkdir()
+            (root / "src/a.py").write_text(baseline_source)
+            (root / "tests").mkdir()
+            (root / "tests/test_a.py").write_text("assert True\n")
+            git("add", ".")
+            git("commit", "-qm", "baseline")
+            base = git("rev-parse", "HEAD")
+            for path, content in files.items():
+                destination = root / path
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_text(content)
+            git("add", ".")
+            git("commit", "-qm", "change")
+            if untracked:
+                (root / untracked).write_text("ghost\n")
+            return runtime("git-audit", "--work-dir", root, "--base", base,
+                           "--target", target, "--constraints", constraints,
+                           "--title", title, "--level", level)
+
+    def test_accepts_declared_target(self):
+        self.assertEqual(self.audit_case({"src/a.py": "updated\n"}).returncode, 0)
+
+    def test_rejects_file_outside_target(self):
+        result = self.audit_case({"src/other.py": "new\n"})
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("Target Whitelist", result.stdout)
+
+    def test_diagnostic_cannot_commit_product_code(self):
+        result = self.audit_case({"src/a.py": "updated\n"}, title="[DIAGNOSTIC]")
+        self.assertEqual(result.returncode, 4)
+
+    def test_fix_cannot_modify_tests(self):
+        result = self.audit_case({"tests/test_a.py": "assert False\n"},
+                                 target="tests/test_a.py", title="[CODE: FIX]")
+        self.assertEqual(result.returncode, 5)
+
+    def test_rejects_decreased_assertions(self):
+        result = self.audit_case({"tests/test_a.py": "pass\n"},
+                                 target="tests/test_a.py", title="[CODE: REFACTOR]")
+        self.assertEqual(result.returncode, 7)
+
+    def test_rejects_untracked_file(self):
+        result = self.audit_case({"src/a.py": "updated\n"}, untracked="ghost.txt")
+        self.assertEqual(result.returncode, 1)
+
+    def test_rejects_micro_task_large_deletion(self):
+        result = self.audit_case({"src/a.py": "kept\n"}, level="3",
+                                 baseline_source="".join(f"line {i}\n" for i in range(50)))
+        self.assertEqual(result.returncode, 8)
+
+
 class WorkerIntegrationTests(unittest.TestCase):
     def test_codex_task_keeps_queue_status_commit_and_guard_contract(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -187,6 +187,66 @@ def run_with_timeout(seconds, command):
     return 128 + abs(return_code) if return_code < 0 else return_code
 
 
+def git_audit(args):
+    """Return the existing post-flight guard code and a human-readable reason."""
+    def git(*command):
+        return subprocess.run(["git", "-C", args.work_dir, *command],
+                              check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout
+
+    status = git("status", "--porcelain", "--untracked-files=all", "-z")
+    ignored = re.compile(r"progress\.log|tasks\.txt|tasks\.done|worker\..*\.status|\.preview|\.reports")
+    dirty = [entry.decode("utf-8", "replace") for entry in status.split(b"\0")
+             if entry and not ignored.search(entry.decode("utf-8", "replace"))]
+    if dirty:
+        return 1, "Dirty working tree or untracked ghost files detected after task. " + ", ".join(dirty)
+
+    changed = [name.decode("utf-8", "replace") for name in
+               git("diff", "--name-only", "-z", args.base, "HEAD").split(b"\0") if name]
+    context = f"{args.title} {args.constraints}"
+    diagnostic = bool(re.search(r"\[DIAGNOSTIC\]", context, re.I))
+    research = bool(re.search(r"\[RESEARCH\]", context, re.I))
+    if diagnostic and any(re.match(r"^(Sources|src|app|lib)/", name, re.I) for name in changed):
+        return 4, "Diagnostic Violation: Modifying production code in [DIAGNOSTIC] is strictly forbidden. Only tests and .reports/ allowed."
+
+    if not diagnostic and not research:
+        tests = [name for name in changed if re.search(r"(^tests/|^Tests/|^test/|Test\.[a-z]+$|_test\.[a-z]+$)", name, re.I)]
+        if tests:
+            unauthorized = (bool(re.search(r"\[CODE:\s*FIX\]", args.title, re.I))
+                            or not re.search(r"tests/|Tests/|test", args.target, re.I))
+            if unauthorized and not re.search(r"test refactor approved", args.constraints, re.I):
+                return 5, f"Test Immutability Violation: Modified test files without authorization in TARGET ({', '.join(tests)})."
+            diff = git("diff", args.base, "HEAD", "--", *tests).decode("utf-8", "replace")
+            assertion = re.compile(r"\s*(XCTAssert|#expect|assert|expect\(|self\.assert)")
+            deleted = sum(bool(assertion.match(line[1:])) for line in diff.splitlines()
+                          if line.startswith("-") and not line.startswith("---"))
+            added = sum(bool(assertion.match(line[1:])) for line in diff.splitlines()
+                        if line.startswith("+") and not line.startswith("+++"))
+            if deleted > added:
+                return 7, f"Assertion Non-Decrease Violation: Deleted {deleted} assertions while adding only {added}."
+
+    numstat = git("diff", "--numstat", args.base, "HEAD").decode("utf-8", "replace")
+    deleted_lines = 0
+    for line in numstat.splitlines():
+        parts = line.split("\t")
+        if len(parts) >= 2 and parts[1].isdigit():
+            deleted_lines += int(parts[1])
+    if not re.search(r"large deletion approved|unrestricted", args.constraints, re.I):
+        limit = {2: 150, 3: 40}.get(args.level)
+        if limit is not None and deleted_lines > limit:
+            return 8, f"Blast Radius Violation: Level {args.level} tasks cannot delete >{limit} lines (Deleted: {deleted_lines})."
+
+    if args.target and not re.search(r"unrestricted|multi-interface", args.constraints, re.I) and not (diagnostic or research):
+        targets = [item.strip().rstrip("/").casefold() for item in args.target.split(",") if item.strip()]
+        exempt = {"progress.log", "tasks.txt", "tasks.done", "worker.status", ".gitignore", ".worker.notes.md"}
+        for name in changed:
+            if name in exempt or name.startswith((".reports/", "docs/reports/")):
+                continue
+            lowered = name.casefold()
+            if not any(lowered == target or lowered.startswith(target + "/") for target in targets):
+                return 2, f"Target Whitelist Violation: Modified unannounced file '{name}' outside declared scope."
+    return 0, ""
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -220,6 +280,13 @@ def main(argv=None):
     timeout = commands.add_parser("run-timeout")
     timeout.add_argument("seconds", type=float)
     timeout.add_argument("argv", nargs=argparse.REMAINDER)
+    audit = commands.add_parser("git-audit")
+    audit.add_argument("--work-dir", required=True)
+    audit.add_argument("--base", required=True)
+    audit.add_argument("--target", default="")
+    audit.add_argument("--constraints", default="")
+    audit.add_argument("--title", default="")
+    audit.add_argument("--level", type=int, default=1)
     args = parser.parse_args(argv)
     if args.command == "queue-pop":
         task = pop_task(args.path)
@@ -234,6 +301,11 @@ def main(argv=None):
     elif args.command == "run-timeout":
         command = args.argv[1:] if args.argv[:1] == ["--"] else args.argv
         return run_with_timeout(args.seconds, command)
+    elif args.command == "git-audit":
+        code, reason = git_audit(args)
+        if reason:
+            print(reason)
+        return code
     else:
         write_status(args)
     return 0
@@ -242,6 +314,6 @@ def main(argv=None):
 if __name__ == "__main__":
     try:
         sys.exit(main())
-    except (OSError, TimeoutError, ValueError, json.JSONDecodeError) as error:
+    except (OSError, TimeoutError, ValueError, json.JSONDecodeError, subprocess.CalledProcessError) as error:
         print(f"worker_runtime: {error}", file=sys.stderr)
         sys.exit(2)

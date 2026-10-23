@@ -366,143 +366,18 @@ isolate_and_rollback_dirty_tree() {
 }
 
 validate_post_flight() {
-  local task_id="$1"
-  local task_target="$2"
-  local task_constraints="$3"
-  local task_title="$4"
-  local task_level="${5:-1}"
-  local task_base_sha="${6:-HEAD~1}"
-
-  # 1. Check clean working tree (Ghost files & uncommitted tests check)
-  local dirty_files untracked_files
-  dirty_files=$(git -C "$WORK_DIR" status --porcelain 2>/dev/null | grep -vE "(progress\.log|tasks\.txt|tasks\.done|worker\..*\.status|\.preview|\.reports)" || true)
-  untracked_files=$(git -C "$WORK_DIR" ls-files --others --exclude-standard 2>/dev/null | grep -vE "(progress\.log|tasks\.txt|tasks\.done|worker\..*\.status|\.preview|\.worker\..*|\.reports)" || true)
-  if [ -n "$dirty_files" ] || [ -n "$untracked_files" ]; then
-    echo "[WORKER_GUARD] ❌ Dirty tree / untracked files detected after task:"
-    echo "$dirty_files"
-    echo "$untracked_files"
-    GUARD_ERROR="Dirty working tree or untracked ghost files detected after task."
-    return 1
+  local reason_file guard_exit
+  reason_file=$(mktemp)
+  "$PYTHON_BIN" "$SCRIPT_DIR/worker_runtime.py" git-audit \
+    --work-dir "$WORK_DIR" --base "$6" --target "$2" \
+    --constraints "$3" --title "$4" --level "${5:-1}" > "$reason_file"
+  guard_exit=$?
+  GUARD_ERROR=$(cat "$reason_file")
+  rm -f "$reason_file"
+  if [ "$guard_exit" -ne 0 ] && [ -n "$GUARD_ERROR" ]; then
+    echo "[WORKER_GUARD] $GUARD_ERROR"
   fi
-
-  local committed_files
-  committed_files=$(git -C "$WORK_DIR" diff --name-only "$task_base_sha" HEAD 2>/dev/null || git -C "$WORK_DIR" diff-tree --no-commit-id --name-only -r HEAD 2>/dev/null || true)
-
-  # 2. [Anti-Cheating Mech 1] Diagnostic Product-Code Lock
-  # Modifying product code in [DIAGNOSTIC] is strictly forbidden.
-  if echo "$task_title $task_constraints" | grep -iqE "\[DIAGNOSTIC\]"; then
-    local committed_prod_files
-    committed_prod_files=$(echo "$committed_files" | grep -iE '^(Sources|src|app|lib)/' || true)
-    if [ -n "$committed_prod_files" ]; then
-      echo "[WORKER_GUARD] ❌ Diagnostic Violation! Product code modified during [DIAGNOSTIC] task:"
-      echo "$committed_prod_files"
-      GUARD_ERROR="Diagnostic Violation: Modifying production code in [DIAGNOSTIC] is strictly forbidden. Only tests and .reports/ allowed."
-      return 4
-    fi
-  fi
-
-  # 3. [Anti-Cheating Mech 2 & Refactor Gate] Test Immutability & Assertion Non-Decrease
-  if ! echo "$task_title $task_constraints" | grep -iqE "\[DIAGNOSTIC\]|\[RESEARCH\]"; then
-    local committed_test_files
-    committed_test_files=$(echo "$committed_files" | grep -iE '(^tests/|^Tests/|Test\.[a-z]+$|_test\.[a-z]+$)' || true)
-    if [ -n "$committed_test_files" ]; then
-      # If [CODE: FIX] or tests not in TARGET:
-      if echo "$task_title" | grep -iqE "\[CODE:[[:space:]]*FIX\]" || ! echo "$task_target" | grep -iqE "(tests/|Tests/|test)"; then
-        if ! echo "$task_constraints" | grep -iqE "test refactor approved"; then
-          echo "[WORKER_GUARD] ❌ Test Immutability Violation! Test files modified during fix without explicit TARGET authorization:"
-          echo "$committed_test_files"
-          GUARD_ERROR="Test Immutability Violation: Modified test files without authorization in TARGET ($committed_test_files)."
-          return 5
-        fi
-      fi
-
-      # When test edits are authorized (e.g. [CODE: REFACTOR]): Assertion Non-Decrease Gate
-      local deleted_asserts added_asserts
-      deleted_asserts=$(git -C "$WORK_DIR" diff "$task_base_sha" HEAD -- $committed_test_files 2>/dev/null | grep -E '^\-[[:space:]]*(XCTAssert|#expect|assert|expect\(|self\.assert)' | grep -v -- '^\-\-\-' | wc -l | tr -dc '0-9')
-      added_asserts=$(git -C "$WORK_DIR" diff "$task_base_sha" HEAD -- $committed_test_files 2>/dev/null | grep -E '^\+[[:space:]]*(XCTAssert|#expect|assert|expect\(|self\.assert)' | grep -v -- '^\+\+\+' | wc -l | tr -dc '0-9')
-      [ -z "$deleted_asserts" ] && deleted_asserts=0
-      [ -z "$added_asserts" ] && added_asserts=0
-
-      if [ "$deleted_asserts" -gt "$added_asserts" ]; then
-        echo "[WORKER_GUARD] ❌ Assertion Non-Decrease Violation! Deleted assertions ($deleted_asserts) > Added assertions ($added_asserts)."
-        echo "[WORKER_GUARD] Weakening or deleting assertions during refactoring is strictly forbidden."
-        GUARD_ERROR="Assertion Non-Decrease Violation: Deleted $deleted_asserts assertions while adding only $added_asserts."
-        return 7
-      fi
-    fi
-  fi
-
-  # 4. [Blast Radius Gate] Limit line deletions dynamically by Level
-  local deleted_lines
-  deleted_lines=$(git -C "$WORK_DIR" diff --numstat "$task_base_sha" HEAD 2>/dev/null | awk '{sum += $2} END {print sum+0}')
-  [ -z "$deleted_lines" ] && deleted_lines=0
-
-  if ! echo "$task_constraints" | grep -iqE "large deletion approved|unrestricted"; then
-    if [ "$task_level" -eq 3 ] && [ "$deleted_lines" -gt 40 ]; then
-      echo "[WORKER_GUARD] ❌ Blast Radius Violation! Level 3 (Micro) deleted $deleted_lines lines (Max: 40)."
-      GUARD_ERROR="Blast Radius Violation: Level 3 tasks cannot delete >40 lines (Deleted: $deleted_lines). Split task or calibrate to Level 2."
-      return 8
-    elif [ "$task_level" -eq 2 ] && [ "$deleted_lines" -gt 150 ]; then
-      echo "[WORKER_GUARD] ❌ Blast Radius Violation! Level 2 (Standard) deleted $deleted_lines lines (Max: 150)."
-      GUARD_ERROR="Blast Radius Violation: Level 2 tasks cannot delete >150 lines (Deleted: $deleted_lines). Split task or calibrate to Level 1."
-      return 8
-    fi
-  fi
-
-  # 5. Check target whitelist
-  if [ -n "$task_target" ]; then
-    # Unrestricted bypass only if explicitly stated
-    if echo "$task_constraints" | grep -iqE "unrestricted"; then
-      return 0
-    fi
-    # Diagnostics/research bypass whitelist if they only touched tests/reports (already guarded above)
-    if echo "$task_title $task_constraints" | grep -iqE "\[DIAGNOSTIC\]|\[RESEARCH\]"; then
-      return 0
-    fi
-
-    if [ -n "$committed_files" ]; then
-      local target_tokens
-      target_tokens=$(echo "$task_target" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]')
-
-      while IFS= read -r f; do
-        [ -z "$f" ] && continue
-        case "$f" in
-          progress.log|tasks.txt|tasks.done|worker.status|.gitignore|.worker.notes.md|.reports/*|docs/reports/*)
-            continue
-            ;;
-        esac
-
-        local f_lower
-        f_lower=$(echo "$f" | tr '[:upper:]' '[:lower:]')
-        local matched=0
-
-        while IFS= read -r t; do
-          [ -z "$t" ] && continue
-          t_clean="${t%/}"
-          if [ "$f_lower" = "$t_clean" ] || [[ "$f_lower" == "$t_clean/"* ]]; then
-            matched=1
-            break
-          fi
-        done <<< "$target_tokens"
-
-        if [ $matched -eq 0 ]; then
-          # Check if multi-interface refactor is approved in constraints
-          if echo "$task_constraints" | grep -iqE "multi-interface"; then
-            matched=1
-          fi
-        fi
-
-        if [ $matched -eq 0 ]; then
-          echo "[WORKER_GUARD] ❌ Target Whitelist Violation! File '$f' is not declared in TARGET ($task_target)."
-          echo "[WORKER_GUARD] Undeclared cross-subsystem edits are forbidden. Declare target or emit [SCOPE_BLOCKED] / [NEED_DECOMPOSITION]."
-          GUARD_ERROR="Target Whitelist Violation: Modified unannounced file '$f' outside declared scope."
-          return 2
-        fi
-      done <<< "$committed_files"
-    fi
-  fi
-
-  return 0
+  return "$guard_exit"
 }
 
 # ------------------------------------------------------------------------------

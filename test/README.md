@@ -8,9 +8,9 @@ Keep new tests at public seams: the `worker_runtime.py` commands and the
 `worker.sh` entry point. For each behavior change, add a failing test with a
 fixed expected result, make the smallest implementation change, then run the
 whole suite. The integration fixture covers task claiming, Luna/none CLI
-arguments, wrapper commit, status, Git guard rejection, rollback, and timeout
-exit-code/process-termination behavior.
+arguments, wrapper commit, status, Git audit acceptance and rejection, rollback,
+and timeout exit-code/process-termination behavior.
 
-The staged migration intentionally leaves Git audit, task execution, agy,
-isolation, and preview logic in Bash for now. Move one verified behavior at a
+The staged migration leaves task execution, agy, isolation, and preview logic
+in Bash for now. Move one verified behavior at a
 time; do not remove an old path until its external contract is covered here.
