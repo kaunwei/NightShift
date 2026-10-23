@@ -248,29 +248,9 @@ prepend_progress_log() {
 
 isolate_and_rollback_dirty_tree() {
   local task_id="$1"
-  local backup_dir="$SCRIPT_DIR/.scratch/failed_tasks/${task_id}_$(date +%Y%m%d_%H%M%S)"
-  mkdir -p "$backup_dir"
-  
-  echo "[WORKER] Isolating failed changes to $backup_dir and resetting clean git tree..."
-  git -C "$WORK_DIR" diff > "$backup_dir/changes.diff" 2>/dev/null || true
-  git -C "$WORK_DIR" status --porcelain > "$backup_dir/status.txt" 2>/dev/null || true
-  
-  # Preserve every untracked file before cleaning the failed task's workspace.
-  # Never use a broad git clean here: it would permanently erase user files.
-  local untracked_path
-  while IFS= read -r -d '' untracked_path; do
-    mkdir -p "$backup_dir/untracked/$(dirname "$untracked_path")"
-    mv "$WORK_DIR/$untracked_path" "$backup_dir/untracked/$untracked_path"
-  done < <(git -C "$WORK_DIR" ls-files --others --exclude-standard -z 2>/dev/null)
-
-  # Queue and progress are live runtime state, even when tracked by Git.
-  local restore_paths=(.) runtime_path
-  for runtime_path in "$TASKS_FILE" "$TASKS_DONE_FILE" "$PROGRESS_FILE"; do
-    if [[ "$runtime_path" == "$WORK_DIR/"* ]]; then
-      restore_paths+=(":(exclude)${runtime_path#"$WORK_DIR/"}")
-    fi
-  done
-  git -C "$WORK_DIR" restore --worktree -- "${restore_paths[@]}" 2>/dev/null || true
+  "$PYTHON_BIN" "$SCRIPT_DIR/worker_runtime.py" rollback-failed-task \
+    --root "$SCRIPT_DIR" --work-dir "$WORK_DIR" --task-id "$task_id" \
+    --tasks "$TASKS_FILE" --tasks-done "$TASKS_DONE_FILE" --progress "$PROGRESS_FILE"
 }
 
 validate_post_flight() {

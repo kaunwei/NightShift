@@ -440,6 +440,51 @@ def archive_overlapping_reports(root, work_dir, base):
             print(f"[WORKER] 📦 Archiving stale report '{entry.name}' (referenced file modified in commit)...")
 
 
+def rollback_failed_task(root, work_dir, task_id, runtime_paths):
+    root, work_dir = Path(root).resolve(), Path(work_dir).resolve()
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup = root / ".scratch" / "failed_tasks" / f"{task_id}_{stamp}"
+    suffix = 1
+    while backup.exists():
+        backup = root / ".scratch" / "failed_tasks" / f"{task_id}_{stamp}_{suffix}"
+        suffix += 1
+    untracked = subprocess.run(
+        ["git", "-C", str(work_dir), "ls-files", "--others", "--exclude-standard", "-z"],
+        check=False, capture_output=True,
+    )
+    (backup / "untracked").mkdir(parents=True)
+    print(f"[WORKER] Isolating failed changes to {backup} and resetting clean git tree...",
+          file=sys.stderr)
+
+    diff = subprocess.run(["git", "-C", str(work_dir), "diff"],
+                          check=False, capture_output=True)
+    (backup / "changes.diff").write_bytes(diff.stdout)
+    status = subprocess.run(["git", "-C", str(work_dir), "status", "--porcelain"],
+                            check=False, capture_output=True)
+    (backup / "status.txt").write_bytes(status.stdout)
+    for raw_path in untracked.stdout.split(b"\0"):
+        if not raw_path:
+            continue
+        relative = Path(os.fsdecode(raw_path))
+        source = work_dir / relative
+        destination = backup / "untracked" / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(source), str(destination))
+
+    restore_paths = ["."]
+    for runtime_path in runtime_paths:
+        try:
+            relative = Path(runtime_path).resolve().relative_to(work_dir)
+        except ValueError:
+            continue
+        if str(relative) != ".":
+            restore_paths.append(f":(exclude){relative.as_posix()}")
+    subprocess.run(["git", "-C", str(work_dir), "restore", "--worktree", "--",
+                    *restore_paths], check=False, stdout=subprocess.DEVNULL,
+                   stderr=subprocess.DEVNULL)
+    return backup
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -502,6 +547,13 @@ def main(argv=None):
     overlap.add_argument("--root", required=True)
     overlap.add_argument("--work-dir", required=True)
     overlap.add_argument("--base", default="HEAD~1")
+    rollback = commands.add_parser("rollback-failed-task")
+    rollback.add_argument("--root", required=True)
+    rollback.add_argument("--work-dir", required=True)
+    rollback.add_argument("--task-id", required=True)
+    rollback.add_argument("--tasks", required=True)
+    rollback.add_argument("--tasks-done", default="")
+    rollback.add_argument("--progress", default="")
     poll = commands.add_parser("poll-next")
     poll.add_argument("--tasks", required=True)
     poll.add_argument("--done", required=True)
@@ -538,6 +590,9 @@ def main(argv=None):
         archive_active_reports(args.root)
     elif args.command == "archive-overlapping-reports":
         archive_overlapping_reports(args.root, args.work_dir, args.base)
+    elif args.command == "rollback-failed-task":
+        paths = [path for path in (args.tasks, args.tasks_done, args.progress) if path]
+        print(rollback_failed_task(args.root, args.work_dir, args.task_id, paths))
     elif args.command == "poll-next":
         sys.stdout.buffer.write(("\0".join(poll_next(args)) + "\0").encode("utf-8"))
     else:

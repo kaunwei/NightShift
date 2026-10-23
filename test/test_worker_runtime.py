@@ -349,6 +349,38 @@ class ReportArchiveContractTests(unittest.TestCase):
             self.assertTrue((reports / "unrelated").exists())
 
 
+class RollbackContractTests(unittest.TestCase):
+    def test_failed_workspace_changes_are_saved_and_runtime_files_survive_restore(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            def git(*args):
+                return subprocess.run(["git", "-C", str(root), *args], check=True,
+                                      capture_output=True, text=True).stdout.strip()
+            git("config", "user.name", "Rollback Test")
+            git("config", "user.email", "rollback@example.invalid")
+            (root / "source.txt").write_text("baseline\n")
+            (root / "tasks.txt").write_text("baseline queue\n")
+            git("add", "source.txt", "tasks.txt")
+            git("commit", "-qm", "baseline")
+            (root / "source.txt").write_text("failed edit\n")
+            (root / "tasks.txt").write_text("remaining task\n")
+            (root / "new.txt").write_text("untracked work\n")
+
+            result = runtime("rollback-failed-task", "--root", root,
+                             "--work-dir", root, "--task-id", "TASK-9",
+                             "--tasks", root / "tasks.txt")
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((root / "source.txt").read_text(), "baseline\n")
+            self.assertEqual((root / "tasks.txt").read_text(), "remaining task\n")
+            self.assertFalse((root / "new.txt").exists())
+            backup = Path(result.stdout.strip())
+            self.assertEqual((backup / "untracked/new.txt").read_text(), "untracked work\n")
+            self.assertIn("source.txt", (backup / "changes.diff").read_text())
+            self.assertIn("?? new.txt", (backup / "status.txt").read_text())
+
+
 class WorkerIntegrationTests(unittest.TestCase):
     def test_codex_task_keeps_queue_status_commit_and_guard_contract(self):
         with tempfile.TemporaryDirectory() as directory:
