@@ -10,6 +10,8 @@ import tempfile
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 
+from scripts.worker_runtime import build_task_prompt
+
 
 ROOT = next(parent for parent in Path(__file__).resolve().parents
             if (parent / "worker.sh").exists())
@@ -24,6 +26,32 @@ def runtime(*args, env=None):
         env=env,
         check=False,
     )
+
+
+class WorkerPromptContractTests(unittest.TestCase):
+    def test_prompt_preserves_task_scope_budget_verification_and_score_ownership(self):
+        prompt = build_task_prompt(
+            "[CODE: FIX] Correct the parser", "TASK-9", "2", "src/parser.py",
+            "python3 -m unittest", "no thread sleeps", "preserve error messages",
+            22, 2, 12, 5, "progress.log",
+        )
+
+        for required in (
+            "src/parser.py", "Action budget: 22", "base 12 + 2 target files × 5",
+            "Timeout is per task invocation", "python3 -m unittest", "TASK-9",
+            "Planner reviews the evidence and records the score",
+            "[EXEC] <brief action>", "[CLOSEOUT_REQUIRED]", "[SCOPE_BLOCKED]", "[DEAD_END]",
+            "progress.log",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, prompt)
+
+    def test_prompt_does_not_request_self_scoring_or_destructive_retry_reset(self):
+        prompt = build_task_prompt("task", "TASK-1", "1", "src/a.py", "test",
+                                  "", "", 17, 1, 12, 5, "progress.log")
+        self.assertIn("never adjust the shared score yourself", prompt)
+        self.assertIn("do not destructively reset files", prompt.lower())
+        self.assertNotIn("restore the clean tree", prompt)
 
 
 class QueueContractTests(unittest.TestCase):
@@ -1085,6 +1113,8 @@ class InstallerIntegrationTests(unittest.TestCase):
                                     cwd=ROOT, capture_output=True, text=True, timeout=30)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertTrue((target / "scripts/worker_runtime.py").is_file())
+            operations = ".agents/skills/nightshift/planner/OPERATIONS.md"
+            self.assertEqual((target / operations).read_text(), (ROOT / operations).read_text())
             self.assertFalse((target / "worker_runtime.py").exists())
             self.assertTrue((target / "test/nightshift_worker/test_worker_runtime.py").is_file())
             self.assertTrue((target / "test/nightshift_worker/README.md").is_file())

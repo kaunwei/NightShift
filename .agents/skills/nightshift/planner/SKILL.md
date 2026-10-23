@@ -1,108 +1,43 @@
 ---
 name: planner
-description: "Orchestrate the 24h unattended workflow: domain modeling, /explore seam discovery, TDD blueprinting, tracer-bullet tasks.txt dispatch, and double-funnel acceptance."
+description: "Plan and supervise NightShift work: discover seams, split tasks, dispatch workers, and accept results."
 ---
 
 # Planner
 
-`Domain (/domain-modeling) -> Seam (/codebase-design, /explore) -> TDD Blueprint (/tdd) -> Tracer-Bullet Slicing (to-tickets) -> Dispatch (tasks.txt) -> Live Preview (.preview/) & Acceptance`
+Own the task graph and acceptance decision. Workers implement bounded tickets; the runtime enforces mechanical limits and records score outcomes. Never change a score to make work pass.
 
-## 1. Lifecycle
+Before slicing, dispatching, accepting, or recovering work, read [OPERATIONS.md](OPERATIONS.md) for the exact gates, cadence, integration, intervention exceptions, and preview protocol. Task archetypes and execution limits live in the [Worker contract](../../../../.skills/universal-build-verify.md).
 
-### Block 1: Domain & Seam Modeling
-- **Domain**: Follow [`domain-modeling`](../engineering/domain-modeling/SKILL.md) to maintain `GLOSSARY.md` and `docs/adr/`.
-- **Deep Seams**: Follow [`codebase-design`](../engineering/codebase-design/SKILL.md) (and [`grilling`](../productivity/grilling/SKILL.md) when requirements are ambiguous) to design narrow public interfaces hiding deep implementations. Anchor tests strictly to public seams; never test private helpers.
+## Workflow
 
-### Block 2: Seam Resolution & Exploration (`/explore`)
-Resolve target paths and signatures without inspecting source files in Terminal A:
-- **Cache Hit (Active Report or Memory)**: If `.reports/<slug>/SUMMARY.md`, `.worker.notes.md`, or `progress.log` already covers the target seams (and `worker.sh` has not archived the report due to overlapping `[CODE]` edits), plan and dispatch `[CODE]` tickets directly without re-running `[RESEARCH]`.
-- **Cache Miss or `/explore` Invoked**: Follow [`explore`](../explore/SKILL.md) to enqueue a `[RESEARCH]` ticket to `tasks.txt` + Queue Sentinel and read the resulting `.reports/<slug>/SUMMARY.md`. If disk contradicts report/memory during execution, re-run [`explore`](../explore/SKILL.md) or trigger **Clean Pivot**.
+1. **Understand the domain and seams.** Read `GLOSSARY.md`, relevant ADRs, and repository notes. Use [`codebase-design`](../../engineering/codebase-design/SKILL.md) for interface decisions. If callers or target paths are uncertain, follow [`explore`](../explore/SKILL.md) and base tickets on its current report.
+2. **Slice the work.** For multi-ticket work, use [`to-spec`](../../engineering/to-spec/SKILL.md) and [`to-tickets`](../../engineering/to-tickets/SKILL.md); for a focused change, write a ticket directly. Keep each ticket independently verifiable, bounded by explicit `TARGET:` paths, and include observable `VERIFY:` criteria, dependencies, and meaningful constraints. For broad/ambiguous work, show the complete dependency-ordered queue once for alignment; for known scope or explicit auto-run, dispatch the full queue without repeated approval. Do not dictate shell-command formatting or bundle actions to evade the budget.
+3. **Set granularity before dispatch.** Read the shared score with `python3 scripts/worker_runtime.py score-read --state .worker-score.json`; it applies across all workers and providers:
 
-### Block 3: Granularity Ladder & TDD Blueprints
-Before each concurrent dispatch batch, read the shared runtime score with `python3 scripts/worker_runtime.py score-read --state .worker-score.json`. New workers start at 5 stars. Use the same score for every worker model/provider; only a human changes model or manually edits the score. Select task granularity from the shared score, not from a per-subsystem profile:
+   | Score | Level | Ticket shape |
+   | --- | --- | --- |
+   | 5 | 1 — macro | Largest bounded vertical slice; acceptance intent and target paths |
+   | 3–4 | 2 — meso | One module/seam with explicit files and verification |
+   | 1–2 | 3 — micro | One observable behavior with precise inputs, outputs, and test |
 
-| Score | Queue level | Task size |
-| :---: | :---: | :--- |
-| **5⭐** | **1 (Macro)** | Largest bounded vertical slice |
-| **3–4⭐** | **2 (Meso)** | Split by module or distinct seam |
-| **1–2⭐** | **3 (Micro)** | Function-sized slice with exact observable contract |
+   Use [`tdd`](../../engineering/tdd/SKILL.md) to define testable behavior. A low score means smaller work and clearer acceptance criteria—not more score rules or a planner-written implementation.
+4. **Dispatch in dependency order.** Queue format: `TASK-ID | LEVEL: 1-3 | [AFTER: TASK-ID] | TARGET: paths | ACTION: behavior | VERIFY: command | FORBIDDEN_SHORTCUTS: ... | CONSTRAINTS: ...`. Enqueue the full discovered graph, with blockers before dependents. Apply the refactor gates and 10-task review/refactor cadence in `OPERATIONS.md`.
+5. **Review evidence and accept.** Read the task record and runtime mechanical audit. Confirm the requested behavior, verification evidence, target scope, and any report pointers. Use [`code-review`](../../engineering/code-review/SKILL.md) when the change warrants an independent review. Record one compact score result with an evidence pointer; the runtime changes stars, never the Planner.
 
-Follow [`tdd`](../engineering/tdd/SKILL.md) and use the level to set instruction density:
+## Acceptance and score
 
-| Level | Rating | Blueprint Density | Max Deletions |
-| :---: | :--- | :--- | :--- |
-| **1 (Macro)** | `5⭐` | High-level acceptance intent; declare all slice paths in `TARGET:`. Worker designs internals. | `TARGET:`-bounded |
-| **2 (Meso)** | `3-4⭐` | Explicit target files, function signatures, error boundaries, single-command test. | `<= 150` lines |
-| **3 (Micro)** | `1-2⭐` | Zero-ambiguity TDD: exact signature diffs, input/output fixtures, step-by-step logic:<br>1. **Red**: Public seam test signature, fixtures, failing assertion (`assert ValueError("invalid")`).<br>2. **Green**: Public signature and minimal implementation satisfying Red.<br>3. **Verify**: Single deterministic test command (`pytest tests/test_foo.py -k test_bar`). | `<= 40` lines |
+- Record `accept`, `reject`, or `no_fault` with `python3 scripts/worker_runtime.py score-record --state .worker-score.json --task-id TASK-ID --result RESULT --evidence FILE#Lx`. `no_fault` is for environment/scope failures, not unsuccessful implementation.
+- Five consecutive eligible accepts raise the shared score by one (cap 5). A reject resets the accept window; `no_fault` is excluded. The script alone performs this arithmetic. The human alone chooses models and may manually edit the score.
+- Runtime timeout and exhausted action budget are hard failures. On the second and third hard failure for the same task ID, the runtime lowers the score by one each time; further failures do not lower it again. A successful audited task clears that task's failure count. Do not disguise an unchanged retry with a new ID; split only when scope or granularity changes.
+- A worker may request `[NEED_GUIDANCE]`, `[NEED_DECOMPOSITION]`, or report `[BLOCKED]`. Clarify, split, or narrow the ticket; do not raise its score. Record only reusable repository quirks in `.worker.notes.md`.
+- A `[CLOSEOUT_REQUIRED]` handoff may run once, against the original task. It can verify and perform allowed Git finalization, but cannot implement. Any remaining implementation means the original task failed; a ghost closeout is not a task and does not affect score cadence.
+- For queue changes, use `scripts/reorder_queue.sh`; honor `PAUSE`. Use `scripts/watch_worker.sh` to wait for the worker, then read its status and task record. Review the audit fields: PASS, verification exit 0, at least one test, whitelist PASS, and clean tree. Fast-track an audited first-attempt `HIGH` result; investigate failures, retries, low confidence, critical seams, or `[DEAD_END]` with focused diff review and [`code-review`](../../engineering/code-review/SKILL.md). A negative claim needs passing isolated evidence.
 
-### Block 4: Tracer-Bullet Slicing (`to-tickets`) & Full-Horizon Dispatch
-Follow [`to-tickets`](../engineering/to-tickets/SKILL.md) to slice work into end-to-end tracer bullets (prefactoring first, each slice independently demoable in `.preview/`, blocking edges in `[AFTER: <id>]`).
-- **Full-Horizon Batching**: Once seams are verified via [`explore`](../explore/SKILL.md), enqueue **100% of discovered tasks at once** in dependency order—never drip-feed 2–3 tasks at a time.
-- **Fast-Path / Full-Auto Mode (known seams, aligned direction, or user requests auto)**: Write the full queue directly to `tasks.txt` without confirmation (when `[RESEARCH]` finishes, immediately expand `.reports/<slug>/SUMMARY.md` into the full implementation queue).
-- **First-Time Alignment (new/ambiguous feature)**: After [`explore`](../explore/SKILL.md), present the complete `N`-ticket queue once:
-  ```text
-  Pre-agreed Public Seam: <Interface_Path> | Domain Terms: <Glossary_Additions>
-  Proposed Full Queue (end-to-end vertical slices, demoable in .preview/):
-    1. TASK-001 | LEVEL: 2 | TARGET: ... | ACTION: ... | VERIFY: ...
-    N. TASK-00N | LEVEL: 3 | [AFTER: TASK-...] | TARGET: ... | ACTION: ... | VERIFY: ...
-  Confirmation Prompt: "Approve this full queue (or reply 'auto' to dispatch all batches automatically)?"
-  ```
+## Reports and safeguards
 
-### Block 5: Queue Format, Archetypes & 10-Task Cadence
-```text
-TASK-XXX | LEVEL: 1-3 | [AFTER: <id>] | TARGET: <paths> | ACTION: <logic> | VERIFY: <test_cmd> | FORBIDDEN_SHORTCUTS: <hacks> | CONSTRAINTS: <limits>
-```
-- `[CODE: FIX]`: Product files only; `Tests/` read-only.
-- `[CODE: REFACTOR]` (**Track A**, `<= 5` files & `>= 3⭐`): Atomic vertical slice (`Tests/` allowed in `TARGET:`). Enforces **Assertion Non-Decrease** and structural closure (`<test_cmd> && ! grep -rn "<Deprecated>" Sources/`).
-- `[CODE: EXPAND]` / `[CODE: MIGRATE]` / `[CODE: CONTRACT]` (**Track B**, `> 5` files or `1⭐` module): 3 green-to-green phases.
-- `[DIAGNOSTIC]`: Isolate root cause with failing repro test in `Tests/` or trace in `.reports/<slug>/`. Product code locked.
-- `[RESEARCH]`: Read-only seam discovery producing `.reports/<slug>/SUMMARY.md`.
-- **10-Task Review & Refactor Cadence**: Every 10 tasks (`TASK-010`, `TASK-020`, ...), automatically run [`code-review`](../engineering/code-review/SKILL.md) (last 10 tasks) and [`improve-codebase-architecture`](../engineering/improve-codebase-architecture/SKILL.md) (`git log --oneline -n 20` hotspots), and enqueue a `[CODE: REFACTOR]` ticket into `tasks.txt`.
-
-### Block 6: Double-Funnel Acceptance & Scoring
-1. **Sentinel Subagent Waiter (Zero-Token Wakeup)**:
-   ```json
-   {"Subagents":[{"TypeName":"self","Role":"Queue Sentinel","Prompt":"Run `bash scripts/watch_worker.sh 3600`. When it exits, read `head -n 15 progress.log` and report whether tasks completed or blocked."}]}
-   ```
-2. **Mechanical Audit**: Verify line 1 of `progress.log`:
-   `[MECHANICAL_AUDIT] Status: PASS | Verify_Exit: 0 | Tests_Run: >=1 | Whitelist: PASS | Tree: CLEAN`
-3. **Acceptance Routing**:
-   - **Fast-Track (Green Light, `<= 5s`, 0 Review Tokens)**: Audit `PASS` + `Attempts: 1 | Confidence: HIGH` -> `git merge --ff-only feature/worker-frontier`.
-   - **Deep Audit (Yellow Light — Auto `code-review`)**: On audit fail, `Attempts > 1`, `Confidence < HIGH`, `[DEAD_END]`, or critical seam, run `git show --stat <commit>` and [`code-review`](../engineering/code-review/SKILL.md). Inject remedial `[CODE: FIX]` / `[CODE: REFACTOR]` to line 1 via `scripts/reorder_queue.sh`.
-     * **Proof of Negative (`[DEAD_END]`)**: Require isolated passing unit test or runtime log proving module health while global symptom persists; speculative exclusion = task failure.
-4. **Shared Worker Score**: The runtime owns all score arithmetic. After reviewing a completed task, record one compact result and evidence pointer, for example `python3 scripts/worker_runtime.py score-record --state .worker-score.json --task-id TASK-001 --result accept --evidence progress.log#L1`. Use `reject` when acceptance fails and `no_fault` for an environment/scope issue; do not adjust stars yourself. Every five consecutive eligible accepts raise the shared score by one (maximum 5); a reject closes that window without raising it. No-fault results do not enter the window.
-   - Runtime-enforced timeout or exhausted action budget is hard evidence. The second and third hard failure for the same `TASK_ID` each lower the score by one; a successful audited task clears that task's failure count. Do not assign a fresh ID to an unchanged retry. Split work into new IDs only when changing scope/granularity.
-   - Scope and environment failures are not score penalties. Planner confidence, acceptance quality, and evidence remain the Planner's review responsibility; the script records only the compact outcome/evidence, not narrative reasoning.
-   - A ghost closeout is not a formal task and never counts toward score cadence. Its failure belongs to the original `TASK_ID`.
-5. **Clean Reset**: Archive `.reports/<issue-slug>/` to `.reports/.archive/`.
-
-## 2. Refactor Authorization Gates
-
-Approve multi-interface targets or `[CODE: REFACTOR]` tickets only when all 4 gates pass:
-1. **Inseparability**: Splitting breaks intermediate builds/tests.
-2. **Vertical Slice**: Cohesive protocol -> implementation -> test only.
-3. **Worker Readiness**: Use the shared score from Block 3; below 3 stars, require a Level 3 blueprint.
-4. **Topology Proof**: Verified `[DIAGNOSTIC]` or `[RESEARCH]` report in `.reports/<issue-slug>/`.
-
-## 3. Queue Preemption, Feedback & Clean Pivot
-
-- **Hot Queue Preemption**: Inject urgent tickets to line 1 of `tasks.txt` via `scripts/reorder_queue.sh` (POSIX lock).
-- **`[NEED_GUIDANCE]`**: Clarify question from `progress.log` with human; re-queue with `GUIDANCE: <clarification>` via `scripts/reorder_queue.sh`.
-- **`[NEED_DECOMPOSITION]`**: Split into atomic L2/L3 tickets via `scripts/reorder_queue.sh`.
-- **`[BLOCKED]` (3 Retries Failed)**: Review `progress.log` / `.worker.log`, record only actionable repository quirks in `.worker.notes.md`, and re-slice or narrow the ticket according to the shared score. Do not raise the score or reissue the same broad contract unchanged.
-- **Closeout Continuation**: The script may launch one ghost closeout after the implementation call. It may verify/test and perform allowed Git finalization only. It must not edit source, tests, docs, configuration, or other project files. If more implementation is needed, it stops and reports failure against the original task; script auditing rejects any implementation diff.
-- **Clean Pivot**: If side-effects require `> 2` patch tickets or trigger `[SCOPE_BLOCKED]`, run `git reset --hard nightshift-session-base` and re-issue a unified vertical slice.
-
-## 4. Live Preview (`.preview/`) & `.worker.env`
-
-- **Dual Worktree (`WORKER_ISOLATION=1`)**: Human on `main` (`PORT=3000`); Worker in `.worker-tree` (`feature/worker-frontier`, `PORT=3001` / `TEST_PORT=3001`), preventing IDE flicker, `ETXTBSY`, and `EADDRINUSE`.
-- **Drop-Box**: Every PASS stages verified code and binaries (`bin/`, `dist/`, `build/`) + `.preview/version.json` to `.preview/` for live testing (`./.preview/bin/app`) without checkout.
-- **Human Steering**: **Continue**, **Tweak** (`scripts/reorder_queue.sh`), **Safe Hold** (`touch PAUSE`), or **Reject** (**Clean Pivot**).
-- **Autonomous `.worker.env`**: Update `ADDITIONAL_DIRS`, `AI_MODEL`, `AI_EFFORT`, `WORKER_ISOLATION`, or `TASK_TIMEOUT` when requested; confirm in 1 line.
-
-## 5. Hard Guardrails (Terminal A)
-
-- **Duty & `read_file` Firewall**: Never edit or `read_file` product/test source files (`src/`, `include/`, `lib/`, `Sources/`, `tests/`, `firmware/`) in Terminal A (except L3 Sovereign Intervention after 3 worker failures, repeated worker diagnostic hallucination, or explicit user mandate). Use `read_file` strictly on `.reports/<current-slug>/SUMMARY.md`, `progress.log`, `tasks.txt`, `.worker.notes.md`, `GLOSSARY.md`, `docs/`, and skill files.
-- **Language**: Write all `tasks.txt` entries, logs, and commits strictly in English.
-- **Context Explosion Guard**: Use `git log -n 1 --stat`, `git show --stat <commit>`, `git log --oneline -n 20`, `git diff --stat <commit>`, `scripts/extract_skeleton.sh <file>#L<line>`, or `scripts/probe_line.sh <file>#L<line>`. Never run bare `git log`, unbounded `git diff`, or `git log -p`.
-- **Forbidden Commands**: Never run `git push`, `git clean -f`/`-fd`, unauthorized `git reset --hard` (only for **Clean Pivot**), `sudo`, or host package managers (`apt`, `yum`, `brew`).
+- Follow `explore` for report freshness and research-only scope. Treat `.reports/<slug>/SUMMARY.md` as current only while its referenced source paths remain unchanged; never rely on archived reports.
+- Keep queue tickets, progress records, and commit messages in English. Keep investigations bounded: use `git show --stat`, `git log --oneline -n 20`, and focused source pointers instead of unbounded history or diffs.
+- Honor `PAUSE`, declared targets, user-approved scope, and the runtime audit. Recovery and intervention follow `OPERATIONS.md`; destructive reset is restricted to authorized Clean Pivot.
+- For isolated previews, `.worker.env` controls `WORKER_ISOLATION`: the worker uses `.worker-tree` by default, and successful builds are published under `.preview/`. Check runtime status/ports before opening one. Human steering is Continue, queue tweak, `PAUSE` (safe hold), or reject/replan; never clean/reset the worker tree as a shortcut.
+- In Terminal A, inspect reports, logs, queue, glossary, ADRs, docs, skills, and bounded Git metadata; source work follows the firewall and intervention exceptions in `OPERATIONS.md`.

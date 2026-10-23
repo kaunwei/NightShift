@@ -763,44 +763,27 @@ def execute_task_cli(args):
 
 def build_task_prompt(task, task_id, level, target, verify, forbidden, constraints,
                       max_steps, target_file_count, step_base, step_per_file, progress_file):
-    return f"""Execute this atomic task as the unattended Background Worker. Read and follow .skills/universal-build-verify.md and .worker.notes.md:
-- [CODE]: Follow .agents/skills/engineering/implement/SKILL.md (skip /code-review per task), .agents/skills/engineering/tdd/SKILL.md, and .agents/skills/engineering/codebase-design/SKILL.md.
-- [DIAGNOSTIC]: Follow .agents/skills/engineering/diagnosing-bugs/SKILL.md (compile-clean failing repro test or trace; product code locked).
-- [RESEARCH]: Follow .agents/skills/engineering/research/SKILL.md and .agents/skills/nightshift/explore/SKILL.md Tier 2 (SUMMARY.md <= 5KB + 03-micro.md).
+    return f"""Execute one unattended NightShift task. Read .skills/universal-build-verify.md and .worker.notes.md first; follow the applicable skill:
+- [CODE]: .agents/skills/engineering/tdd/SKILL.md; consult .agents/skills/engineering/codebase-design/SKILL.md when changing an interface.
+- [DIAGNOSTIC]: .agents/skills/engineering/diagnosing-bugs/SKILL.md.
+- [RESEARCH]: .agents/skills/engineering/research/SKILL.md and .agents/skills/nightshift/explore/SKILL.md.
 
 TASK:
 {task}
-STEP_BUDGET: {max_steps} steps (Base: {step_base} + {target_file_count} target files * {step_per_file}; reserve final 3 steps for verification and git commit)
+TASK_ID: {task_id}
 
-RULES:
-1. STEP LOGGING: Print "[EXEC] Modifying <file>...", "[EXEC] Running command: <cmd>", or "[EXEC] Running test: <cmd>" before every action.
-2. SCOPE & GATES:
-   - Touch ONLY declared TARGET paths ({target or 'target files'}).
-   - [CODE: FIX]: Tests/ read-only; never weaken assertions.
-   - [CODE: REFACTOR]: Tests/ and Mocks/ editable if in TARGET, subject to Assertion Non-Decrease (added assertions >= deleted).
-   - [DIAGNOSTIC]: Repro test must compile cleanly (0 syntax errors) and fail strictly on assertion; product code (Sources/, src/) locked.
-   - [SCOPE_BLOCKED]: On downstream compiler errors outside TARGET, halt without touching unlisted files and emit "[SCOPE_BLOCKED] (Need Target: <File>#L<Line>)".
-   - Blast Radius (max deletions): L3 <= 40 lines; L2 <= 150 lines; L1 TARGET-bounded.
-3. FORBIDDEN SHORTCUTS & HOST SAFETY:
-   - {forbidden or 'No thread sleeps/asyncAfter, no error swallowing (try?/empty catch), no optional-widening to dodge inits, no weakened assertions.'}
-   - Never run sudo, apt, yum, or global host commands.
-4. VERIFY, RETRIES & [DEAD_END]:
-   - Run verification: {verify or 'build and test'}.
-   - Proof of Negative: Declaring [DEAD_END] requires an isolated passing unit test or runtime log proving module health while global symptom persists.
-   - Max 3 attempts: if still failing after 3 fixes, restore the clean tree and report [BLOCKED] in the final response.
-5. COMMIT & PROGRESS (ON 100% PASS):
-   - Stage all changes (git status --porcelain must be 100% clean after commit).
-   - Do not edit {progress_file} directly; worker records the result outside the agent sandbox.
-   - End the final response with Attempts: <count> | Confidence: <HIGH|MED|LOW>.
-   - Commit with a clean two-part Conventional Commit (feat|fix|refactor|test|docs|perf; NEVER put raw "TASK-XXX | LEVEL: ..." pipe strings in title).
+LIMITS
+- Action budget: {max_steps} (base {step_base} + {target_file_count} target files × {step_per_file}). Keep the final 3 actions for verification and Git closeout. The runtime enforces this limit; do not evade it by combining actions.
+- Timeout is per task invocation. Work only in TARGET ({target or 'the declared target paths'}); report [SCOPE_BLOCKED] with the missing path and line if more scope is required.
+- At level {level or '1'}, deletion ceilings are L3 40 lines, L2 150 lines, and L1 TARGET-bounded. [CODE: FIX] keeps tests unchanged; [CODE: REFACTOR] may change declared tests but cannot reduce assertions. [DIAGNOSTIC] may add a compile-clean repro test, never product code. [RESEARCH] reads product code only and writes the requested report.
+- Honor FORBIDDEN_SHORTCUTS ({forbidden or 'none specified'}) and CONSTRAINTS ({constraints or 'none specified'}). Never weaken assertions, hide errors, use dummy behavior, or use thread sleeps to mask a race. Do not run sudo or host package managers.
 
-   git commit -m "<type>(<scope>): <concise English action <= 60 chars> ({task_id})" -m "<1-3 summary bullets>
-
-Task: {task_id} (Level {level or '1'})
-Scope: {target or '<modified files>'}
-Verification: {verify or '<test command>'} (100% PASS)
-Attempts: <attempts_count> | Confidence: <HIGH|MED|LOW>"
-6. CLOSEOUT HANDOFF: If implementation is complete and only verification/Git closeout remains, stop implementation and emit [CLOSEOUT_REQUIRED]. The script may start one restricted ghost closeout; it cannot perform implementation work.
+WORK
+- Keep each action independent. Before every AgY tool call, emit one `[EXEC] <brief action>` line; the runtime counts these as steps. Codex actions are counted from CLI events. Do not dictate command formatting, bundle actions, or fabricate markers to evade the budget.
+- Run {verify or 'the task verification'} and report only checks actually completed. A [DEAD_END] claim needs an isolated passing test or runtime evidence that the suspected module is healthy while the symptom remains.
+- Make at most 3 implementation attempts. If blocked, report [BLOCKED] and the cause; the runtime preserves failed work and restores the task baseline. Do not destructively reset files. Do not edit {progress_file}; the runtime records the task and performs mechanical audits.
+- Commit only after verification passes, with only task changes staged. Use a concise English Conventional Commit and include the task ID. End your report with Attempts: <N> | Confidence: <HIGH|MED|LOW>. The Planner reviews the evidence and records the score; never adjust the shared score yourself.
+- If implementation is complete and only verification/Git closeout remains, stop and emit [CLOSEOUT_REQUIRED]. The runtime may launch one restricted closeout for this task; it may verify and finalize existing changes but may not edit project files. If implementation remains, stop.
 """
 
 
