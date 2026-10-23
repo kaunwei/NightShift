@@ -134,6 +134,9 @@ for category in nightshift engineering productivity misc in-progress; do
   fi
 done
 
+# Remove retired Planner sidecar after its guidance has moved into the skill.
+rm -f "$TARGET_DIR/.agents/skills/nightshift/planner/OPERATIONS.md"
+
 # ------------------------------------------------------------------------------
 # 4. Initialize State Files (Non-Destructive)
 # ------------------------------------------------------------------------------

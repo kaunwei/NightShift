@@ -1371,8 +1371,10 @@ class InstallerIntegrationTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertEqual(skills_manifest.read_text(), '{"entries":[{"path":"custom/skills"}]}\n')
             self.assertTrue((target / "scripts/worker_runtime.py").is_file())
-            operations = ".agents/skills/nightshift/planner/OPERATIONS.md"
-            self.assertEqual((target / operations).read_text(), (ROOT / operations).read_text())
+            operations = target / ".agents/skills/nightshift/planner/OPERATIONS.md"
+            self.assertFalse(operations.exists())
+            operations.parent.mkdir(parents=True, exist_ok=True)
+            operations.write_text("stale planner instructions\n")
             self.assertFalse((target / "worker_runtime.py").exists())
             self.assertTrue((target / "test/nightshift_worker/test_worker_runtime.py").is_file())
             self.assertTrue((target / "test/nightshift_worker/README.md").is_file())
@@ -1384,6 +1386,11 @@ class InstallerIntegrationTests(unittest.TestCase):
             update = subprocess.run(["bash", str(ROOT / "install.sh"), str(target)],
                                     cwd=ROOT, capture_output=True, text=True, timeout=30)
             self.assertEqual(update.returncode, 0, update.stdout + update.stderr)
+            self.assertFalse(operations.exists(), "updates must remove retired skill sidecars")
+            planner_skill = (target / ".agents/skills/nightshift/planner/SKILL.md").read_text()
+            worker_contract = (target / ".skills/universal-build-verify.md").read_text()
+            self.assertNotIn("OPERATIONS.md", planner_skill + worker_contract)
+            self.assertIn("full discovered graph", planner_skill)
             self.assertEqual((target / ".worker.env").read_text(), "AI_CLI=agy\nCUSTOM_SETTING=preserve\n")
             self.assertTrue((target / "scripts/worker_runtime.py").is_file())
             installed = subprocess.run(

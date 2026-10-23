@@ -25,4 +25,4 @@ This is the shared execution reference for every queued task. The runtime is aut
 
 - Research/benchmark reports follow the artifact and probe requirements in `explore`: `SUMMARY.md` at most 5 KB, runtime `REPORT_META`, verified pointers and topology/strategy, plus `03-micro.md` skeletons.
 - Do not claim a report is current after a referenced source path changes. Do not treat `.reports/.archive/` as active evidence.
-- Check `.worker.notes.md` before work. Append 1–2 lines for non-obvious build/linker quirks and toolchain flags; keep it under 30 lines, without architectural lore, secrets, or task history. Execution mode/preview operations are defined in the Planner's `OPERATIONS.md`.
+- Check `.worker.notes.md` before work. Append 1–2 lines for non-obvious build/linker quirks and toolchain flags; keep it under 30 lines, without architectural lore, secrets, or task history. Honor `WORKER_ISOLATION`: work in `.worker-tree` when isolation is enabled, keep the human checkout untouched, and use the published `.preview/` artifacts for checkout-free review. Never clean or reset the worker tree as a shortcut.
