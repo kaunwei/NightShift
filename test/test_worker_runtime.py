@@ -303,6 +303,52 @@ class IsolationPreviewContractTests(unittest.TestCase):
             self.assertEqual(metadata["summary"], 'A "quoted" task')
 
 
+class ReportArchiveContractTests(unittest.TestCase):
+    def test_research_archive_moves_active_reports_but_keeps_archive(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            reports = root / ".reports"
+            (reports / "one").mkdir(parents=True)
+            (reports / ".archive").mkdir()
+            (reports / "one" / "SUMMARY.md").write_text("research")
+            (reports / ".archive" / "old").write_text("old")
+
+            result = runtime("archive-reports", "--root", root)
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse((reports / "one").exists())
+            self.assertEqual(len(list((reports / ".archive").iterdir())), 2)
+
+    def test_changed_report_reference_is_archived_without_moving_unrelated_report(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            def git(*args):
+                return subprocess.run(["git", "-C", str(root), *args], check=True,
+                                      capture_output=True, text=True).stdout.strip()
+            git("config", "user.name", "Archive Test")
+            git("config", "user.email", "archive@example.invalid")
+            (root / "src").mkdir()
+            (root / "src/a.py").write_text("before\n")
+            git("add", "src/a.py")
+            git("commit", "-qm", "baseline")
+            base = git("rev-parse", "HEAD")
+            (root / "src/a.py").write_text("after\n")
+            git("commit", "-qam", "change")
+            reports = root / ".reports"
+            (reports / "related").mkdir(parents=True)
+            (reports / "unrelated").mkdir()
+            (reports / "related" / "SUMMARY.md").write_text("Findings in src/a.py")
+            (reports / "unrelated" / "SUMMARY.md").write_text("Findings in src/b.py")
+
+            result = runtime("archive-overlapping-reports", "--root", root,
+                             "--work-dir", root, "--base", base)
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse((reports / "related").exists())
+            self.assertTrue((reports / "unrelated").exists())
+
+
 class WorkerIntegrationTests(unittest.TestCase):
     def test_codex_task_keeps_queue_status_commit_and_guard_contract(self):
         with tempfile.TemporaryDirectory() as directory:

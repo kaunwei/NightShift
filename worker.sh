@@ -150,49 +150,13 @@ ensure_worker_tree() {
 }
 
 archive_active_reports() {
-  mkdir -p "$SCRIPT_DIR/.reports/.archive"
-  local ts
-  ts=$(date '+%Y%m%d-%H%M%S')
-  for entry in "$SCRIPT_DIR/.reports"/*; do
-    [ ! -e "$entry" ] && continue
-    local base
-    base=$(basename "$entry")
-    [ "$base" = ".archive" ] && continue
-    mv "$entry" "$SCRIPT_DIR/.reports/.archive/${ts}-${base}" 2>/dev/null || true
-  done
+  "$PYTHON_BIN" "$SCRIPT_DIR/worker_runtime.py" archive-reports --root "$SCRIPT_DIR"
 }
 
 archive_overlapping_reports() {
   local base_sha="${1:-HEAD~1}"
-  mkdir -p "$SCRIPT_DIR/.reports/.archive"
-  local ts changed_files
-  ts=$(date '+%Y%m%d-%H%M%S')
-  changed_files=$(git -C "$WORK_DIR" diff --name-only "$base_sha" HEAD 2>/dev/null || true)
-  [ -z "$changed_files" ] && return 0
-
-  for entry in "$SCRIPT_DIR/.reports"/*; do
-    [ ! -e "$entry" ] && continue
-    local base
-    base=$(basename "$entry")
-    [ "$base" = ".archive" ] && continue
-    local summary_file="$entry/SUMMARY.md"
-    [ -f "$entry" ] && summary_file="$entry"
-    [ ! -f "$summary_file" ] && continue
-
-    local overlap=0
-    while IFS= read -r cf; do
-      [ -z "$cf" ] && continue
-      if grep -Fq "$cf" "$summary_file" 2>/dev/null; then
-        overlap=1
-        break
-      fi
-    done <<< "$changed_files"
-
-    if [ $overlap -eq 1 ]; then
-      echo "[WORKER] 📦 Archiving stale report '$base' (referenced file modified in commit)..."
-      mv "$entry" "$SCRIPT_DIR/.reports/.archive/${ts}-${base}" 2>/dev/null || true
-    fi
-  done
+  "$PYTHON_BIN" "$SCRIPT_DIR/worker_runtime.py" archive-overlapping-reports \
+    --root "$SCRIPT_DIR" --work-dir "$WORK_DIR" --base "$base_sha"
 }
 
 publish_preview_artifact() {

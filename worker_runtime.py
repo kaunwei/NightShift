@@ -399,6 +399,47 @@ def publish_preview(root, task_id, title):
     return commit
 
 
+def report_archive_path(root, timestamp, name):
+    archive = Path(root) / ".reports" / ".archive"
+    archive.mkdir(parents=True, exist_ok=True)
+    return archive / f"{timestamp}-{name}"
+
+
+def archive_active_reports(root):
+    reports = Path(root) / ".reports"
+    reports.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    for entry in reports.iterdir():
+        if entry.name.startswith("."):
+            continue
+        shutil.move(str(entry), str(report_archive_path(root, timestamp, entry.name)))
+
+
+def archive_overlapping_reports(root, work_dir, base):
+    reports = Path(root) / ".reports"
+    reports.mkdir(parents=True, exist_ok=True)
+    changed = subprocess.run(
+        ["git", "-C", str(work_dir), "diff", "--name-only", base, "HEAD"],
+        check=False, capture_output=True, text=True,
+    )
+    if changed.returncode:
+        return
+    changed_files = [name for name in changed.stdout.splitlines() if name]
+    if not changed_files:
+        return
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    for entry in reports.iterdir():
+        if entry.name.startswith("."):
+            continue
+        summary = entry / "SUMMARY.md" if entry.is_dir() else entry
+        if not summary.is_file():
+            continue
+        content = summary.read_text(encoding="utf-8", errors="replace")
+        if any(changed_file in content for changed_file in changed_files):
+            shutil.move(str(entry), str(report_archive_path(root, timestamp, entry.name)))
+            print(f"[WORKER] 📦 Archiving stale report '{entry.name}' (referenced file modified in commit)...")
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -455,6 +496,12 @@ def main(argv=None):
     preview.add_argument("--root", required=True)
     preview.add_argument("--task-id", required=True)
     preview.add_argument("--title", required=True)
+    archive = commands.add_parser("archive-reports")
+    archive.add_argument("--root", required=True)
+    overlap = commands.add_parser("archive-overlapping-reports")
+    overlap.add_argument("--root", required=True)
+    overlap.add_argument("--work-dir", required=True)
+    overlap.add_argument("--base", default="HEAD~1")
     poll = commands.add_parser("poll-next")
     poll.add_argument("--tasks", required=True)
     poll.add_argument("--done", required=True)
@@ -487,6 +534,10 @@ def main(argv=None):
         print(ensure_worktree(args.root, args.branch))
     elif args.command == "publish-preview":
         print(publish_preview(args.root, args.task_id, args.title))
+    elif args.command == "archive-reports":
+        archive_active_reports(args.root)
+    elif args.command == "archive-overlapping-reports":
+        archive_overlapping_reports(args.root, args.work_dir, args.base)
     elif args.command == "poll-next":
         sys.stdout.buffer.write(("\0".join(poll_next(args)) + "\0").encode("utf-8"))
     else:
