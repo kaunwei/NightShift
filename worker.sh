@@ -28,6 +28,16 @@ fi
 # shellcheck source=/dev/null
 source "$ENV_FILE"
 
+PYTHON_BIN="${PYTHON_BIN:-python3}"
+if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
+  echo "[FATAL ERROR] Python runtime not found: $PYTHON_BIN" >&2
+  exit 1
+fi
+if [ ! -f "$SCRIPT_DIR/worker_runtime.py" ]; then
+  echo "[FATAL ERROR] Missing worker_runtime.py alongside worker.sh" >&2
+  exit 1
+fi
+
 # ------------------------------------------------------------------------------
 # 2. Operating System Detection & Switching (macOS / Ubuntu / Linux)
 # ------------------------------------------------------------------------------
@@ -321,42 +331,14 @@ update_status() {
   local remaining="${6:-0}"
   local percent="${7:-0%}"
   local bar="${8:-}"
-  local now
-  now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-
   if [ -z "$bar" ]; then
     bar=$(render_progress_bar "$current_idx" "$total_tasks" 30)
   fi
-
-  local escaped_task=""
-  if [ -n "$current_task" ]; then
-    escaped_task=$(printf '%s' "$current_task" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')
-  fi
-
-  cat <<EOF > "$STATUS_FILE"
-{
-  "worker_id": "$WORKER_ID",
-  "os": "$ACTIVE_OS",
-  "platform": "$PLATFORM_NAME",
-  "isolation": $ISOLATION_FLAG,
-  "work_dir": "$WORK_DIR",
-  "state": "$state",
-  "current_task": $(if [ -n "$current_task" ]; then printf '"%s"' "$escaped_task"; else echo "null"; fi),
-  "elapsed_seconds": $elapsed,
-  "progress": {
-    "current_index": $current_idx,
-    "total_tasks": $total_tasks,
-    "remaining": $remaining,
-    "percentage": "$percent",
-    "bar": "$bar"
-  },
-  "pid": $$,
-  "model": "$AI_MODEL",
-  "cli": "$AI_CLI",
-  "timeout_seconds": $TASK_TIMEOUT,
-  "last_heartbeat": "$now"
-}
-EOF
+  "$PYTHON_BIN" "$SCRIPT_DIR/worker_runtime.py" status-write \
+    "$STATUS_FILE" "$WORKER_ID" "$ACTIVE_OS" "$PLATFORM_NAME" \
+    "$ISOLATION_FLAG" "$WORK_DIR" "$state" "$current_task" \
+    "$elapsed" "$current_idx" "$total_tasks" "$remaining" \
+    "$percent" "$bar" "$$" "$AI_MODEL" "$AI_CLI" "$TASK_TIMEOUT"
 }
 
 # ------------------------------------------------------------------------------
@@ -372,11 +354,13 @@ fi
 echo "$$" > "$PID_FILE"
 
 cleanup() {
+  local exit_code=$?
+  trap - SIGINT SIGTERM EXIT
   echo ""
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] Shutting down worker daemon..."
   rm -f "$PID_FILE"
-  update_status "STOPPED" "" "0" "0" "0" "0" "0%" "[------------------------------] 0%"
-  exit 0
+  update_status "STOPPED" "" "0" "0" "0" "0" "0%" "[------------------------------] 0%" || true
+  exit "$exit_code"
 }
 
 trap cleanup SIGINT SIGTERM EXIT
@@ -393,21 +377,7 @@ prepend_progress_log() {
 }
 
 extract_task_field() {
-  local raw="$1"
-  local key="$2"
-  printf '%s\n' "$raw" | awk -v k="$key" '
-    {
-      pat = "(^|\\|[[:space:]]*)" k ":[[:space:]]*"
-      if (match($0, pat)) {
-        rest = substr($0, RSTART + RLENGTH)
-        if (match(rest, /[[:space:]]*\|[[:space:]]*(LEVEL|TARGET|ACTION|GOAL|VERIFY|FORBIDDEN_SHORTCUTS|CONSTRAINTS|DEPENDS_ON):[[:space:]]*/)) {
-          rest = substr(rest, 1, RSTART - 1)
-        }
-        gsub(/^[[:space:]]+|[[:space:]]+$/, "", rest)
-        print rest
-      }
-    }
-  '
+  "$PYTHON_BIN" "$SCRIPT_DIR/worker_runtime.py" task-field "$1" "$2"
 }
 
 isolate_and_rollback_dirty_tree() {
@@ -419,9 +389,22 @@ isolate_and_rollback_dirty_tree() {
   git -C "$WORK_DIR" diff > "$backup_dir/changes.diff" 2>/dev/null || true
   git -C "$WORK_DIR" status --porcelain > "$backup_dir/status.txt" 2>/dev/null || true
   
-  # Safe reset to head
-  git -C "$WORK_DIR" restore . 2>/dev/null || true
-  git -C "$WORK_DIR" clean -df 2>/dev/null || true
+  # Preserve every untracked file before cleaning the failed task's workspace.
+  # Never use a broad git clean here: it would permanently erase user files.
+  local untracked_path
+  while IFS= read -r -d '' untracked_path; do
+    mkdir -p "$backup_dir/untracked/$(dirname "$untracked_path")"
+    mv "$WORK_DIR/$untracked_path" "$backup_dir/untracked/$untracked_path"
+  done < <(git -C "$WORK_DIR" ls-files --others --exclude-standard -z 2>/dev/null)
+
+  # Queue and progress are live runtime state, even when tracked by Git.
+  local restore_paths=(.) runtime_path
+  for runtime_path in "$TASKS_FILE" "$TASKS_DONE_FILE" "$PROGRESS_FILE"; do
+    if [[ "$runtime_path" == "$WORK_DIR/"* ]]; then
+      restore_paths+=(":(exclude)${runtime_path#"$WORK_DIR/"}")
+    fi
+  done
+  git -C "$WORK_DIR" restore --worktree -- "${restore_paths[@]}" 2>/dev/null || true
 }
 
 validate_post_flight() {
@@ -609,20 +592,20 @@ while true; do
     continue
   fi
 
-  # Peek at the first non-empty, non-comment line in tasks.txt
-  RAW_TASK_MATCH=$(grep -n -v '^[[:space:]]*#' "$TASKS_FILE" 2>/dev/null | grep -v '^[0-9]*:[[:space:]]*$' | head -n 1 || true)
-  if [ -n "$RAW_TASK_MATCH" ]; then
-    RAW_TASK_LINE_NO="${RAW_TASK_MATCH%%:*}"
-    RAW_TASK="${RAW_TASK_MATCH#*:}"
-  else
-    RAW_TASK_LINE_NO=""
-    RAW_TASK=""
+  # Pop while holding the queue lock; never act on a stale pre-lock peek.
+  if ! RAW_TASK=$("$PYTHON_BIN" "$SCRIPT_DIR/worker_runtime.py" queue-pop "$TASKS_FILE"); then
+    echo "[WORKER] Failed to read the task queue; leaving it for inspection." >&2
+    exit 2
   fi
 
   DONE_COUNT=$(grep -v '^[[:space:]]*#' "$TASKS_DONE_FILE" 2>/dev/null | grep -v '^[[:space:]]*$' | wc -l | tr -dc '0-9')
   [ -z "$DONE_COUNT" ] && DONE_COUNT=0
   REMAINING_COUNT=$(grep -v '^[[:space:]]*#' "$TASKS_FILE" 2>/dev/null | grep -v '^[[:space:]]*$' | wc -l | tr -dc '0-9')
   [ -z "$REMAINING_COUNT" ] && REMAINING_COUNT=0
+  # The claimed task is still in progress, so include it in progress totals.
+  if [ -n "$RAW_TASK" ]; then
+    REMAINING_COUNT=$(( REMAINING_COUNT + 1 ))
+  fi
   TOTAL_COUNT=$(( DONE_COUNT + REMAINING_COUNT ))
 
   if [ -z "$RAW_TASK" ]; then
@@ -660,30 +643,6 @@ while true; do
   CURRENT_IDX=$(( DONE_COUNT + 1 ))
   PERCENT_START=$(( (DONE_COUNT * 100) / TOTAL_COUNT ))
   BAR_START=$(render_progress_bar "$DONE_COUNT" "$TOTAL_COUNT" 30)
-
-  # Pop the task line atomically from tasks.txt with directory-lock protection
-  LOCK_DIR="${TASKS_FILE}.lock"
-  LOCK_MAX_RETRIES=50
-  LOCK_RETRY=0
-  while ! mkdir "$LOCK_DIR" 2>/dev/null; do
-    sleep 0.1
-    LOCK_RETRY=$(( LOCK_RETRY + 1 ))
-    if [ $LOCK_RETRY -ge $LOCK_MAX_RETRIES ]; then
-      rmdir "$LOCK_DIR" 2>/dev/null || true
-    fi
-  done
-
-  TEMP_TASKS=$(mktemp)
-  if [ -n "${RAW_TASK_LINE_NO:-}" ]; then
-    awk -v ln="$RAW_TASK_LINE_NO" 'NR != ln' "$TASKS_FILE" > "$TEMP_TASKS"
-  else
-    awk -v task="$RAW_TASK" '
-      !found && $0 == task { found=1; next }
-      { print }
-    ' "$TASKS_FILE" > "$TEMP_TASKS"
-  fi
-  mv "$TEMP_TASKS" "$TASKS_FILE"
-  rmdir "$LOCK_DIR" 2>/dev/null || true
 
   TASK_TITLE="$RAW_TASK"
   TASK_ID=$(echo "$RAW_TASK" | awk -F'|' '{print $1}' | tr -d ' ' || echo "TASK-UNKNOWN")
@@ -864,46 +823,21 @@ PROMPT_EOF
       fi
     done
   elif [ "$AI_CLI" = "codex" ]; then
-    CODEX_ARGS=(exec --color never)
     CODEX_LAST_MESSAGE_TMP=$(mktemp)
-    CODEX_ARGS+=("--output-last-message" "$CODEX_LAST_MESSAGE_TMP")
-
-    if [ "$CODEX_EPHEMERAL" = "1" ] || [ "$CODEX_EPHEMERAL" = "true" ]; then
-      CODEX_ARGS+=("--ephemeral")
+    CODEX_ARGS_TMP=$(mktemp)
+    if ! "$PYTHON_BIN" "$SCRIPT_DIR/worker_runtime.py" codex-args \
+      --last-message "$CODEX_LAST_MESSAGE_TMP" --model "$AI_MODEL" \
+      --effort "$AI_EFFORT" --approval-mode "$CODEX_APPROVAL_MODE" \
+      --sandbox "$CODEX_SANDBOX" --ephemeral "$CODEX_EPHEMERAL" \
+      --additional-dirs "$ADDITIONAL_DIRS" > "$CODEX_ARGS_TMP"; then
+      EXIT_CODE=2
+    else
+      CODEX_ARGS=()
+      while IFS= read -r -d '' codex_arg; do
+        CODEX_ARGS+=("$codex_arg")
+      done < "$CODEX_ARGS_TMP"
     fi
-    if [ -n "$AI_MODEL" ]; then
-      CODEX_ARGS+=("--model" "$AI_MODEL")
-    fi
-    if [ -n "$AI_EFFORT" ]; then
-      CODEX_ARGS+=("--config" "model_reasoning_effort=$AI_EFFORT")
-    fi
-
-    case "$CODEX_APPROVAL_MODE" in
-      auto|approve-for-me)
-        # --approve-for-me already selects Codex's workspace-write sandbox.
-        CODEX_ARGS+=("--approve-for-me")
-        ;;
-      prompt|default|"")
-        CODEX_ARGS+=("--sandbox" "$CODEX_SANDBOX")
-        ;;
-      bypass)
-        CODEX_ARGS+=("--dangerously-bypass-approvals-and-sandbox")
-        ;;
-      *)
-        echo "[WORKER] Unsupported CODEX_APPROVAL_MODE: $CODEX_APPROVAL_MODE (expected auto, prompt, or bypass)"
-        EXIT_CODE=2
-        ;;
-    esac
-
-    if [ -n "$ADDITIONAL_DIRS" ]; then
-      IFS=',' read -ra DIRS <<< "$ADDITIONAL_DIRS"
-      for d in "${DIRS[@]}"; do
-        d_trimmed=$(echo "$d" | xargs)
-        if [ -n "$d_trimmed" ] && [ -d "$d_trimmed" ]; then
-          CODEX_ARGS+=("--add-dir" "$d_trimmed")
-        fi
-      done
-    fi
+    rm -f "$CODEX_ARGS_TMP"
 
     if [ "$EXIT_CODE" -eq 0 ]; then
       echo "[WORKER] Launching codex (Model: ${AI_MODEL:-configured default}, Effort: ${AI_EFFORT:-configured default}, StepBudget: $TASK_MAX_STEPS, WorkDir: $WORK_DIR)..."

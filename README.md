@@ -65,8 +65,15 @@ A plug-and-play, dual-terminal AI development framework combining **Matt Pocock'
 ## File Structure
 
 - **`install.sh` / `update.sh`**: Unified non-destructive installer and updater (deploys scripts/skills, preserves user state, and prevents duplicate `.gitignore` entries).
-- **`worker.sh`**: Background worker daemon with POSIX queue locking, isolation modes, and mechanical audit gates.
+- **`worker.sh` + `worker_runtime.py`**: Bash-compatible daemon entry point plus Python 3 queue, task-field, JSON status, and Codex argument operations. Git audit, CLI execution, isolation, and preview remain in Bash during the staged migration.
 - **`.worker.env.example`**: Configuration template (model selection, effort level, timeout, `WORKER_ISOLATION`, `ADDITIONAL_DIRS`).
+
+The active low-cost test configuration is `AI_CLI=codex`, `AI_MODEL=gpt-6-luna`, and `AI_EFFORT=none`. The retained `test/` suite uses a fake Codex executable, so routine regression tests consume no model tokens:
+
+```sh
+python3 -m unittest discover -s test -v
+bash -n worker.sh install.sh scripts/*.sh
+```
 - **`.skills/universal-build-verify.md`**: Worker execution SOP and hard guardrails (Terminal B).
 - **`.agents/skills/nightshift/`**: NightShift orchestrator skills (`planner/SKILL.md` and `explore/SKILL.md`).
 - **`.agents/skills/{engineering,productivity,misc,in-progress}/`**: Matt Pocock's upstream skills catalog (unmodified).

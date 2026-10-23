@@ -54,6 +54,11 @@ echo ""
 # ------------------------------------------------------------------------------
 echo ">>> [1/5] Deploying core worker daemon & configuration..."
 cp -f "$SCRIPT_DIR/worker.sh" "$TARGET_DIR/worker.sh"
+cp -f "$SCRIPT_DIR/worker_runtime.py" "$TARGET_DIR/worker_runtime.py"
+mkdir -p "$TARGET_DIR/test/nightshift_worker"
+cp -f "$SCRIPT_DIR/test/test_worker_runtime.py" "$TARGET_DIR/test/nightshift_worker/test_worker_runtime.py"
+cp -f "$SCRIPT_DIR/test/README.md" "$TARGET_DIR/test/nightshift_worker/README.md"
+touch "$TARGET_DIR/test/nightshift_worker/__init__.py"
 chmod +x "$TARGET_DIR/worker.sh"
 if [ "$IS_UPDATE" -eq 1 ]; then
   echo "  ✓ Updated worker.sh"
@@ -238,7 +243,8 @@ fi
 echo ""
 echo ">>> Verifying syntax of deployed scripts in target..."
 bash -n "$TARGET_DIR/worker.sh" "$TARGET_DIR"/scripts/*.sh
-echo "  ✓ All bash scripts pass syntax validation (Exit 0)"
+"${PYTHON_BIN:-python3}" -c 'import ast, pathlib, sys; ast.parse(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))' "$TARGET_DIR/worker_runtime.py"
+echo "  ✓ Bash and Python worker files pass syntax validation (Exit 0)"
 
 echo ""
 echo "=============================================================================="

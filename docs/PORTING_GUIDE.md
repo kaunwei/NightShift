@@ -57,6 +57,7 @@ deploys or upgrades the complete Pure Skills-Driven architecture non-destructive
 | :--- | :---: | :--- |
 | `install.sh` / `update.sh` | `chmod +x` | Unified installer & updater (deploys scripts, skills, state files, and protects `.gitignore` without duplication). |
 | `worker.sh` | `chmod +x` | Background daemon (supports isolation modes, zero-arg execution). |
+| `worker_runtime.py` | Python 3 | Atomic queue pop, task-field parsing, JSON status reader/writer, and Codex argument builder used by the daemon and dashboard. |
 | `.worker.env.example` | Read-only template | Config template with OS detection, model flags, and `WORKER_ISOLATION`. |
 | `.worker.env` | Config file | Active config initialized from `.worker.env.example` in target root. |
 | `scripts/` | `chmod +x` | Helper suite: `status.sh`, `watch_worker.sh`, `reorder_queue.sh`, `extract_skeleton.sh`, `probe_line.sh`. |
@@ -93,7 +94,7 @@ From the NightShift repository root, execute:
 ./update.sh /path/to/target-project
 ```
 The script automatically detects whether the target is a **Fresh Install** or an **Update**, and non-destructively:
-- Copies `worker.sh` and marks it executable (`chmod +x`).
+- Copies `worker.sh` and `worker_runtime.py`, and marks the Bash entry point executable (`chmod +x`).
 - Copies `.worker.env.example` and initializes `.worker.env` (preserves existing `.worker.env`).
 - Deploys all `scripts/*.sh` tools with execution permissions.
 - Copies the pure skills catalog (`.skills/universal-build-verify.md` and `.agents/skills/*`).
@@ -113,6 +114,7 @@ Because NightShift is a **Pure Skills-Driven Architecture**, there is **zero nee
 1. Run syntax validation in target repository:
    ```bash
    bash -n worker.sh scripts/*.sh
+   python3 -m unittest discover -s test -v
    ```
 2. Test empty-queue dry run:
    ```bash

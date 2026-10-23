@@ -6,7 +6,15 @@
 
 set -uo pipefail
 
-STATUS_FILE="worker.status"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [ -f "$SCRIPT_DIR/.worker.env" ]; then
+  # shellcheck source=/dev/null
+  source "$SCRIPT_DIR/.worker.env"
+fi
+STATUS_FILE="${STATUS_FILE:-worker.status}"
+if [ "${WORKER_ID:-default}" != "default" ]; then
+  STATUS_FILE="worker.${WORKER_ID}.status"
+fi
 PROGRESS_FILE="progress.log"
 TASKS_FILE="tasks.txt"
 TASKS_DONE_FILE="tasks.done"
@@ -17,30 +25,8 @@ echo "==========================================================================
 
 # 1. Worker Daemon Status
 if [ -f "$STATUS_FILE" ]; then
-  STATE=$(grep -o '"state":[[:space:]]*"[^"]*"' "$STATUS_FILE" 2>/dev/null | cut -d'"' -f4 || echo "UNKNOWN")
-  TASK=$(grep -o '"current_task":[[:space:]]*"[^"]*"' "$STATUS_FILE" 2>/dev/null | cut -d'"' -f4 || echo "None")
-  ELAPSED=$(grep -o '"elapsed_seconds":[[:space:]]*[0-9]*' "$STATUS_FILE" 2>/dev/null | grep -o '[0-9]*' || echo "0")
-  BAR=$(grep -o '"bar":[[:space:]]*"[^"]*"' "$STATUS_FILE" 2>/dev/null | cut -d'"' -f4 || echo "[---]")
-  PID=$(grep -o '"pid":[[:space:]]*[0-9]*' "$STATUS_FILE" 2>/dev/null | grep -o '[0-9]*' || echo "-")
-  
-  # Check if PID is actually alive
-  if [ "$PID" != "-" ] && kill -0 "$PID" 2>/dev/null; then
-    ALIVE_FLAG="[ALIVE (PID: $PID)]"
-  else
-    ALIVE_FLAG="[DEAD / INACTIVE]"
-  fi
-
-  ISOLATION=$(grep -o '"isolation":[[:space:]]*[^,}]*' "$STATUS_FILE" 2>/dev/null | awk '{print $2}' || echo "false")
-  WORK_DIR=$(grep -o '"work_dir":[[:space:]]*"[^"]*"' "$STATUS_FILE" 2>/dev/null | cut -d'"' -f4 || echo "-")
-
-  echo "Worker State   : $STATE $ALIVE_FLAG"
-  echo "Current Task   : ${TASK:-None} (${ELAPSED}s elapsed)"
-  echo "Progress       : $BAR"
-  if [ "$ISOLATION" = "true" ]; then
-    echo "Isolation Mode : ENABLED (Sandboxed in $WORK_DIR)"
-  else
-    echo "Isolation Mode : DISABLED (In-place execution)"
-  fi
+  "${PYTHON_BIN:-python3}" "$SCRIPT_DIR/worker_runtime.py" status-display "$STATUS_FILE" || \
+    echo "Worker Status  : Invalid status file"
 else
   echo "Worker Status  : No worker.status found"
 fi
