@@ -10,7 +10,7 @@ import tempfile
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 
-from scripts.worker_runtime import build_task_prompt
+from scripts.worker_runtime import build_task_prompt, first_report, publish_research_reports
 
 
 ROOT = next(parent for parent in Path(__file__).resolve().parents
@@ -595,6 +595,55 @@ class MechanicalAuditContractTests(unittest.TestCase):
             self.assertIn("Pointer Validity", audit["error"])
             self.assertIn("REPORT_META:", report.read_text().splitlines()[0])
 
+    def test_research_audit_ignores_archived_reports_and_requires_current_task_metadata(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            def git(*args):
+                return subprocess.run(["git", "-C", str(root), *args], check=True,
+                                      capture_output=True, text=True).stdout.strip()
+            git("config", "user.name", "Audit Test")
+            git("config", "user.email", "audit@example.invalid")
+            (root / ".gitignore").write_text(".reports/\n")
+            (root / "source.py").write_text("one\n")
+            git("add", ".gitignore", "source.py")
+            git("commit", "-qm", "baseline")
+            base = git("rev-parse", "HEAD")
+            archived = root / ".reports/.archive/old/SUMMARY.md"
+            archived.parent.mkdir(parents=True)
+            archived.write_text("# Old report\n")
+
+            result = runtime("mechanical-audit", "--work-dir", root, "--base", base,
+                             "--target", ".reports/current/SUMMARY.md", "--title", "[RESEARCH] inspect",
+                             "--task-id", "TASK-NEW", "--verify", "REPORT_ONLY")
+            self.assertEqual(json.loads(result.stdout)["status"], 11)
+
+            report = root / ".reports/current/SUMMARY.md"
+            report.parent.mkdir()
+            report.write_text("<!-- REPORT_META: Task=TASK-OLD | Commit=abc | Time=now -->\n# Old report\n")
+            result = runtime("mechanical-audit", "--work-dir", root, "--base", base,
+                             "--target", ".reports/current/SUMMARY.md", "--title", "[RESEARCH] inspect",
+                             "--task-id", "TASK-NEW", "--verify", "REPORT_ONLY")
+            audit = json.loads(result.stdout)
+            self.assertEqual(audit["status"], 11)
+            self.assertIn("Stale", audit["error"])
+
+    def test_research_report_discovery_only_uses_declared_reports_targets(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            old = root / ".reports/.archive/old/SUMMARY.md"
+            old.parent.mkdir(parents=True)
+            old.write_text("# Archived\n")
+            tree = root / ".worker-tree"
+            current = tree / ".reports/current/SUMMARY.md"
+            current.parent.mkdir(parents=True)
+            current.write_text("# Current\n")
+
+            self.assertEqual(first_report(tree, ".reports/current/SUMMARY.md"), current.resolve())
+            self.assertIsNone(first_report(tree, "docs/research/"))
+            publish_research_reports(root, tree, ".reports/current/SUMMARY.md")
+            self.assertEqual((root / ".reports/current/SUMMARY.md").read_text(), "# Current\n")
+
     def test_code_verification_timeout_is_a_guard_failure(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -642,8 +691,16 @@ class IsolationPreviewContractTests(unittest.TestCase):
             tree = root / ".worker-tree"
             self.assertEqual((tree / "source.txt").read_text(), "baseline\n")
             self.assertEqual((tree / ".env").read_text(), "SAMPLE=1\n")
-            self.assertTrue((tree / ".reports").exists())
+            self.assertTrue((tree / ".reports").is_dir())
+            self.assertFalse((tree / ".reports").is_symlink())
+            git_dir = subprocess.run(["git", "-C", str(tree), "rev-parse", "--git-path", "ORIG_HEAD"],
+                                     check=True, capture_output=True, text=True).stdout.strip()
+            orig_head = tree / git_dir
+            original_metadata = (orig_head.read_bytes(), orig_head.stat().st_mtime_ns) if orig_head.exists() else None
             self.assertEqual(runtime("ensure-worktree", "--root", root).returncode, 0)
+            updated_metadata = (orig_head.read_bytes(), orig_head.stat().st_mtime_ns) if orig_head.exists() else None
+            self.assertEqual(updated_metadata, original_metadata,
+                             "an identical HEAD must not run git merge and rewrite ORIG_HEAD")
 
             (root / "source.txt").write_text("new baseline\n")
             git("add", "source.txt")
@@ -748,6 +805,97 @@ class RollbackContractTests(unittest.TestCase):
 
 
 class WorkerIntegrationTests(unittest.TestCase):
+    def test_worker_rejects_zero_exit_when_final_response_says_blocked(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "repo"
+            root.mkdir()
+            for name in ("worker.sh", ".gitignore"):
+                shutil.copy2(ROOT / name, root / name)
+            (root / "scripts").mkdir()
+            shutil.copy2(RUNTIME, root / "scripts/worker_runtime.py")
+            (root / ".worker.env").write_text(
+                "WORKER_ISOLATION=0\nRUN_ONCE=1\nPOLL_INTERVAL=0\n"
+            )
+            task = "TASK-BLOCKED | LEVEL: 1 | TARGET: output.txt | ACTION: [CODE: FIX] Stop blocked | VERIFY: true\n"
+            (root / "tasks.txt").write_text(task)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            subprocess.run(["git", "-C", str(root), "config", "user.name", "Worker Test"], check=True)
+            subprocess.run(["git", "-C", str(root), "config", "user.email", "worker@example.invalid"], check=True)
+            subprocess.run(["git", "-C", str(root), "add", "worker.sh", "scripts/worker_runtime.py", ".gitignore", "tasks.txt"], check=True)
+            subprocess.run(["git", "-C", str(root), "commit", "-qm", "fixture"], check=True)
+            bin_dir = Path(directory) / "bin"
+            bin_dir.mkdir()
+            fake = bin_dir / "codex"
+            fake.write_text(
+                "#!/bin/sh\n"
+                "while [ \"$#\" -gt 0 ]; do\n"
+                "  if [ \"$1\" = --output-last-message ]; then shift; result=$1; fi\n"
+                "  shift\n"
+                "done\n"
+                "printf '[BLOCKED] reports-not-writable\\n' > \"$result\"\n"
+            )
+            fake.chmod(0o755)
+
+            result = subprocess.run(["bash", str(root / "worker.sh")], cwd=root,
+                                    env={**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"},
+                                    capture_output=True, text=True, timeout=30)
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("[WORKER_BLOCKED]", (root / "tasks.done").read_text())
+            self.assertNotIn("[DONE]", (root / "tasks.done").read_text())
+            self.assertIn("Worker final response contained [BLOCKED]", (root / "progress.log").read_text())
+            self.assertEqual(json.loads((root / "worker.status").read_text())["state"], "BLOCKED")
+
+    def test_isolated_research_task_publishes_only_its_new_report_artifacts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "repo"
+            root.mkdir()
+            for name in ("worker.sh", ".gitignore"):
+                shutil.copy2(ROOT / name, root / name)
+            (root / "scripts").mkdir()
+            shutil.copy2(RUNTIME, root / "scripts/worker_runtime.py")
+            (root / ".worker.env").write_text(
+                "WORKER_ISOLATION=1\nRUN_ONCE=1\nPOLL_INTERVAL=0\n"
+            )
+            (root / "tasks.txt").write_text(
+                "TASK-REPORT | LEVEL: 1 | TARGET: .reports/fake/SUMMARY.md,.reports/fake/03-micro.md | "
+                "ACTION: [RESEARCH] Produce fake report | VERIFY: REPORT_ONLY\n"
+            )
+            (root / ".reports/.archive/old").mkdir(parents=True)
+            (root / ".reports/.archive/old/SUMMARY.md").write_text("# Archived\n")
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            subprocess.run(["git", "-C", str(root), "config", "user.name", "Worker Test"], check=True)
+            subprocess.run(["git", "-C", str(root), "config", "user.email", "worker@example.invalid"], check=True)
+            subprocess.run(["git", "-C", str(root), "add", "worker.sh", "scripts/worker_runtime.py", ".gitignore", "tasks.txt"], check=True)
+            subprocess.run(["git", "-C", str(root), "commit", "-qm", "fixture"], check=True)
+            bin_dir = Path(directory) / "bin"
+            bin_dir.mkdir()
+            fake = bin_dir / "codex"
+            fake.write_text(
+                "#!/bin/sh\n"
+                "while [ \"$#\" -gt 0 ]; do\n"
+                "  if [ \"$1\" = --output-last-message ]; then shift; result=$1; fi\n"
+                "  shift\n"
+                "done\n"
+                "mkdir -p .reports/fake\n"
+                "printf '# Fresh summary\\n' > .reports/fake/SUMMARY.md\n"
+                "printf '# Fresh details\\n' > .reports/fake/03-micro.md\n"
+                "printf 'Attempts: 1 | Confidence: HIGH\\n' > \"$result\"\n"
+            )
+            fake.chmod(0o755)
+
+            result = subprocess.run(["bash", str(root / "worker.sh")], cwd=root,
+                                    env={**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"},
+                                    capture_output=True, text=True, timeout=45)
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("[DONE] TASK-REPORT", (root / "tasks.done").read_text())
+            summary = root / ".reports/fake/SUMMARY.md"
+            self.assertIn("Task=TASK-REPORT", summary.read_text().splitlines()[0])
+            self.assertEqual((root / ".reports/fake/03-micro.md").read_text(), "# Fresh details\n")
+            self.assertFalse((root / ".worker-tree/.reports").is_symlink())
+            self.assertTrue(list((root / ".reports/.archive").iterdir()))
+
     def test_worker_switches_to_next_registered_agent_after_quota_error(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "repo"

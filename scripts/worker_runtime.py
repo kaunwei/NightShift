@@ -983,6 +983,8 @@ def worker_daemon(root):
             is_diagnostic = bool(re.search(r"\[DIAGNOSTIC\]", f"{task} {constraints}", re.I))
             if is_research:
                 archive_active_reports(root)
+                if work_dir.resolve() != root.resolve():
+                    archive_active_reports(work_dir)
             print(f"\n{'=' * 78}\n[{stamp()}] >>> [Task {current} of {total} (In Progress) | Completed: {done_count}/{total} ({fields[6]}%)]")
             print(f">>> Progress: {bar}\n>>> Task: {task}")
             print(f">>> Step Budget: {max_steps} steps (Base: {step_base} + {target_file_count} files * {step_per_file})\n{'=' * 78}")
@@ -1041,6 +1043,7 @@ def worker_daemon(root):
                            "step_budget" if exit_code == 125 else
                            "closeout_failed" if exit_code == 126 else
                            "scope" if "[SCOPE_BLOCKED]" in result_text else
+                           "blocked" if "[BLOCKED]" in result_text else
                            "guidance" if re.search(r"\[(?:NEED_GUIDANCE|NEED_DECOMPOSITION)\]", result_text) else
                            "error" if exit_code else "success")
                 stamp_now = stamp()
@@ -1098,6 +1101,19 @@ def worker_daemon(root):
                     append_line(done_file, f"[{stamp_now}] [GUIDANCE_REQUESTED] {task}")
                     update_status("AWAITING_GUIDANCE", task, duration, current, total,
                                   max(0, remaining - 1), percent, bar)
+                elif outcome == "blocked":
+                    print(f"[{stamp_now}] 🚧 [WORKER BLOCKED] Worker reported [BLOCKED]; rejecting task success.")
+                    rollback_failed_task(root, work_dir, task_id, (tasks_file, done_file, progress_file))
+                    summary = ("=" * 80 + f"\n[BLOCKED] {task_id}: Worker Reported Blocked\n"
+                               f"Time: {stamp_now} | Status: BLOCKED\n"
+                               "Failure Reason: Worker final response contained [BLOCKED].\n"
+                               "Action Needed for Human: Inspect the worker response and resolve its blocker.\n"
+                               + "=" * 80)
+                    prepend_progress(progress_file, summary)
+                    append_line(done_file, f"[{stamp_now}] [FAILED] {task} [WORKER_BLOCKED]")
+                    final_state = "BLOCKED"
+                    update_status("BLOCKED", f"{task} (WORKER BLOCKED)", duration, current, total,
+                                  max(0, remaining - 1), percent, bar)
                 elif outcome == "error":
                     print(f"[{stamp_now}] [ERROR] CLI exited with code {exit_code}")
                     rollback_failed_task(root, work_dir, task_id, (tasks_file, done_file, progress_file))
@@ -1110,11 +1126,17 @@ def worker_daemon(root):
                                   max(0, remaining - 1), percent, bar)
                 else:
                     audit_args = argparse.Namespace(
-                        work_dir=str(work_dir), base=base, target=target,
+                        work_dir=str(work_dir), root=str(root), base=base, target=target,
                         constraints=constraints, title=task, level=int(level or 1),
                         task_id=task_id, verify=verify, port=worker_port, verify_timeout=180,
                     )
                     audit = mechanical_audit(audit_args)
+                    if audit["status"] == 0 and is_research:
+                        try:
+                            publish_research_reports(root, work_dir, target)
+                        except (OSError, ValueError, shutil.Error) as error:
+                            audit["status"] = 14
+                            audit["error"] = f"Research Artifact Publish Failed: {error}"
                     for message in audit["messages"]:
                         print(message)
                     guard_status, guard_error = audit["status"], audit["error"]
@@ -1266,21 +1288,57 @@ def run_verify(command, work_dir, port, timeout):
 
 
 def first_report(root, target):
-    target_path = Path(root) / target if target else None
-    if target_path and target_path.is_file():
-        return target_path
-    reports = Path(root) / ".reports"
-    if reports.exists():
-        for current, directories, files in os.walk(reports, followlinks=True):
-            if "SUMMARY.md" in files:
-                return Path(current) / "SUMMARY.md"
-    research = Path(root) / "docs/research"
-    if research.exists():
-        for current, directories, files in os.walk(research):
-            for name in files:
-                if name.endswith(".md"):
-                    return Path(current) / name
+    root = Path(root).resolve()
+    reports = (root / ".reports").resolve()
+    for declared in (part.strip() for part in (target or "").split(",")):
+        if not declared:
+            continue
+        candidate = (root / declared).resolve()
+        if not candidate.is_relative_to(reports) or candidate == reports:
+            continue
+        if candidate.is_file():
+            if candidate.name == "SUMMARY.md":
+                return candidate
+        elif candidate.is_dir():
+            for current, directories, files in os.walk(candidate, followlinks=False):
+                directories[:] = [name for name in directories if not name.startswith(".")]
+                if "SUMMARY.md" in files:
+                    return Path(current) / "SUMMARY.md"
     return None
+
+
+def publish_research_reports(root, work_dir, target):
+    """Copy declared report artifacts from the isolated worker tree to the project."""
+    root, work_dir = Path(root).resolve(), Path(work_dir).resolve()
+    source_reports = (work_dir / ".reports").resolve()
+    for declared in (part.strip() for part in (target or "").split(",")):
+        if not declared:
+            continue
+        relative = Path(declared)
+        if relative.is_absolute() or not relative.parts or relative.parts[0] != ".reports":
+            continue
+        source = (work_dir / relative).resolve()
+        if not source.is_relative_to(source_reports):
+            raise ValueError(f"declared report escapes .reports/: {declared}")
+        if not source.exists():
+            continue
+        destination = root / relative
+        if source.is_dir():
+            for current, directories, files in os.walk(source, followlinks=False):
+                directories[:] = [name for name in directories if not name.startswith(".")]
+                relative_dir = Path(current).relative_to(work_dir)
+                for filename in files:
+                    source_file = Path(current) / filename
+                    if source_file.is_symlink():
+                        raise ValueError(f"report artifact cannot be a symlink: {source_file}")
+                    target_file = root / relative_dir / filename
+                    target_file.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(source_file, target_file)
+        elif source.is_file():
+            if source.is_symlink():
+                raise ValueError(f"report artifact cannot be a symlink: {source}")
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
 
 
 def mechanical_audit(args):
@@ -1324,25 +1382,31 @@ def mechanical_audit(args):
                     guard_status = 11
                     reason = f"Research Artifact Invalid: Report '{report}' lacks standard markdown headings."
                 else:
-                    if not content.splitlines()[0].find("REPORT_META:") >= 0:
+                    metadata = re.search(r"REPORT_META:\s*Task=([^ |]+)", content.splitlines()[0])
+                    if metadata and metadata.group(1) != args.task_id:
+                        guard_status = 11
+                        reason = (f"Research Artifact Stale: Report '{report}' belongs to task "
+                                  f"{metadata.group(1)}, expected {args.task_id}.")
+                    elif not metadata:
                         commit = subprocess.run(["git", "-C", args.work_dir, "rev-parse", "--short", "HEAD"],
                                                 check=False, capture_output=True, text=True).stdout.strip() or "HEAD"
                         stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
                         atomic_write(report, f"<!-- REPORT_META: Task={args.task_id} | Commit={commit} | Time={stamp} -->\n{content}")
                         content = report.read_text(encoding="utf-8", errors="replace")
-                    messages.append(f"[WORKER_GUARD] ✅ Artifact verified: {report} ({report.stat().st_size} bytes)")
-                    pointers = re.findall(r"[a-zA-Z0-9_./-]+\.[a-zA-Z0-9]+#L[0-9]+", content)[:5]
-                    for pointer in pointers:
-                        file_name, line_number = pointer.rsplit("#L", 1)
-                        source = Path(args.work_dir) / file_name
-                        if source.is_file():
-                            total_lines = source.read_bytes().count(b"\n")
-                            if int(line_number) > total_lines:
-                                guard_status = 13
-                                reason = (f"Pointer Validity Violation: Line {line_number} in pointer '{pointer}' "
-                                          f"exceeds total file lines ({total_lines}).")
-                                break
-                            messages.append(f"[WORKER_GUARD] 🔍 Verified pointer target: {file_name}#L{line_number} (Total lines: {total_lines})")
+                    if guard_status == 0:
+                        messages.append(f"[WORKER_GUARD] ✅ Artifact verified: {report} ({report.stat().st_size} bytes)")
+                        pointers = re.findall(r"[a-zA-Z0-9_./-]+\.[a-zA-Z0-9]+#L[0-9]+", content)[:5]
+                        for pointer in pointers:
+                            file_name, line_number = pointer.rsplit("#L", 1)
+                            source = Path(args.work_dir) / file_name
+                            if source.is_file():
+                                total_lines = source.read_bytes().count(b"\n")
+                                if int(line_number) > total_lines:
+                                    guard_status = 13
+                                    reason = (f"Pointer Validity Violation: Line {line_number} in pointer '{pointer}' "
+                                              f"exceeds total file lines ({total_lines}).")
+                                    break
+                                messages.append(f"[WORKER_GUARD] 🔍 Verified pointer target: {file_name}#L{line_number} (Total lines: {total_lines})")
         if guard_status == 0 and verify and not re.match(r"^(REPORT_ONLY|none)$", verify, re.I):
             messages.append(f"[WORKER_GUARD] 🔍 Executing Custom Research VERIFY: {verify}")
             verify_exit, _ = run_verify(verify, args.work_dir, args.port, args.verify_timeout)
@@ -1389,7 +1453,9 @@ def ensure_worktree(root, branch="feature/worker-frontier"):
     ancestor = git_at(root, "merge-base", "--is-ancestor", branch, "HEAD", check=False)
     if ancestor.returncode == 0 and not git_at(target, "status", "--porcelain").stdout:
         source_head = git_at(root, "rev-parse", "HEAD").stdout.decode().strip()
-        git_at(target, "merge", "--ff-only", source_head)
+        target_head = git_at(target, "rev-parse", "HEAD").stdout.decode().strip()
+        if source_head != target_head:
+            git_at(target, "merge", "--ff-only", source_head)
     for name in (".env", ".worker.env"):
         source = root / name
         if source.is_file():
@@ -1402,8 +1468,12 @@ def ensure_worktree(root, branch="feature/worker-frontier"):
     reports = root / ".reports"
     (reports / ".archive").mkdir(parents=True, exist_ok=True)
     link = target / ".reports"
-    if not link.exists() and not link.is_symlink():
-        link.symlink_to(reports, target_is_directory=True)
+    if link.is_symlink():
+        if link.resolve() != reports.resolve():
+            raise ValueError(f"worker report path points outside its managed report directory: {link}")
+        link.unlink()
+    if not link.exists():
+        link.mkdir(parents=True)
     return target
 
 
