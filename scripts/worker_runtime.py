@@ -171,7 +171,7 @@ def run_codex_closeout(args, environment, output, actions_used):
     environment["MAX_STEPS"] = str(remaining)
     command = [args.executable, *codex_args(codex), prompt]
     code = stream_with_timeout(args.timeout, command, args.work_dir,
-                               environment, output, append=True)
+                               environment, output, append=True, action_budget=remaining)
     after = workspace_snapshot(args.work_dir, args.base)
     if before != after:
         print("[WORKER] Ghost closeout changed implementation files; rejecting closeout.", file=sys.stderr)
@@ -498,6 +498,16 @@ def count_codex_actions(output):
     return count
 
 
+def is_codex_action_event(line):
+    try:
+        event = json.loads(line)
+    except (json.JSONDecodeError, TypeError):
+        return False
+    item = event.get("item", {}) if isinstance(event, dict) else {}
+    return (isinstance(item, dict) and item.get("type") == "command_execution"
+            and event.get("type") == "item.completed")
+
+
 def run_with_timeout(seconds, command):
     """Run a command with inherited output and terminate its process group on timeout."""
     if not command:
@@ -533,7 +543,8 @@ def run_with_timeout(seconds, command):
     return 128 + abs(return_code) if return_code < 0 else return_code
 
 
-def stream_with_timeout(seconds, command, cwd, environment, output_path, append=False):
+def stream_with_timeout(seconds, command, cwd, environment, output_path, append=False,
+                        action_budget=None):
     """Stream combined CLI output to the worker console and its audit log."""
     options = {"cwd": cwd, "env": environment, "stdout": subprocess.PIPE,
               "stderr": subprocess.STDOUT, "bufsize": 0}
@@ -558,6 +569,9 @@ def stream_with_timeout(seconds, command, cwd, environment, output_path, append=
     reader.start()
     deadline = time.monotonic() + seconds
     timed_out = False
+    budget_exceeded = False
+    action_count = 0
+    event_buffer = ""
     finished_reading = False
     with open(output_path, "ab" if append else "wb") as output:
         while not finished_reading:
@@ -594,6 +608,31 @@ def stream_with_timeout(seconds, command, cwd, environment, output_path, append=
                 continue
             output.write(chunk)
             output.flush()
+            if action_budget is not None and not budget_exceeded:
+                event_buffer += chunk.decode("utf-8", "replace")
+                lines = event_buffer.split("\n")
+                event_buffer = lines.pop()
+                action_count += sum(is_codex_action_event(line) for line in lines)
+                if action_count > action_budget:
+                    budget_exceeded = True
+                    try:
+                        if os.name == "nt":
+                            process.send_signal(signal.CTRL_BREAK_EVENT)
+                        else:
+                            os.killpg(process.pid, signal.SIGTERM)
+                    except (OSError, ValueError):
+                        process.terminate()
+                    try:
+                        process.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        if os.name == "nt":
+                            process.kill()
+                        else:
+                            try:
+                                os.killpg(process.pid, signal.SIGKILL)
+                            except OSError:
+                                process.kill()
+                        process.wait()
             try:
                 sys.stdout.buffer.write(chunk)
                 sys.stdout.buffer.flush()
@@ -603,6 +642,8 @@ def stream_with_timeout(seconds, command, cwd, environment, output_path, append=
     reader.join(timeout=1)
     if timed_out:
         return 124
+    if budget_exceeded:
+        return 125
     code = process.wait()
     return 128 + abs(code) if code < 0 else code
 
@@ -628,7 +669,7 @@ def execute_task_cli(args):
         )
         command = [args.executable, *codex_args(codex), prompt]
         result_code = stream_with_timeout(args.timeout, command, args.work_dir,
-                                          environment, output)
+                                          environment, output, action_budget=args.step_budget)
         codex_output = output.read_text(encoding="utf-8", errors="replace")
         actions_used = count_codex_actions(codex_output)
         if actions_used > args.step_budget:

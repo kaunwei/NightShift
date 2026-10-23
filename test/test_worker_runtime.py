@@ -206,16 +206,23 @@ class WorkerScoreTests(unittest.TestCase):
                 "  shift\n"
                 "done\n"
                 "printf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"type\":\"command_execution\"}}'\n"
+                "sleep 0.3\n"
+                "touch \"$BUDGET_MARKER\"\n"
             )
             executable.chmod(0o755)
+            marker = Path(directory) / "continued-after-budget"
+            env = os.environ.copy()
+            env["BUDGET_MARKER"] = str(marker)
             result = runtime("task-cli", "--provider", "codex", "--executable", executable,
                              "--work-dir", root, "--prompt-file", prompt, "--output-file", output,
                              "--result-file", last_message, "--timeout", "10", "--model", "gpt-6-luna",
                              "--effort", "none", "--approval-mode", "auto", "--sandbox", "workspace-write",
                              "--ephemeral", "1", "--additional-dirs", "", "--step-budget", "0",
                              "--worker-port", "3001", "--target", "", "--task-id", "TASK-C", "--title", "test",
-                             "--level", "1", "--verify", "", "--base", "HEAD", "--progress-file", "progress.log")
+                             "--level", "1", "--verify", "", "--base", "HEAD", "--progress-file", "progress.log",
+                             env=env)
             self.assertEqual(result.returncode, 125)
+            self.assertFalse(marker.exists())
 
     def test_codex_hands_closeout_marker_to_ghost_without_editing_code(self):
         with tempfile.TemporaryDirectory() as directory:
