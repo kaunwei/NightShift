@@ -22,7 +22,7 @@ An update overwrites the deployed NightShift-owned runtime, helper, test, exampl
 
 On a fresh installation, `.worker.env` is initialized from `.worker.env.example`. On an existing installation, the current `.worker.env` is left intact; compare it with the updated example when new settings are introduced.
 
-The example selects Codex with `gpt-6-luna` and `none` effort. `AI_AGENTS_JSON` optionally configures ordered CLI profiles. Failover happens only after a failed CLI call reports a recognized quota or rate-limit error. When all configured profiles are exhausted, the runtime requeues the current ticket and stops; it does not query quota in advance.
+The example selects Codex with `gpt-6-luna` and `none` effort. `AI_AGENTS_JSON` optionally configures ordered CLI profiles. Failover happens only after a failed CLI call reports a recognized quota or rate-limit error. When all configured profiles are exhausted, the runtime requeues the current ticket and waits for the exhausted-agent state to be reset; it does not query quota in advance. Explicit `RUN_ONCE=1` tests exit instead.
 
 Use `/planner` for ticket planning and acceptance, `/explore` for read-only seam research, and `./worker.sh` to run the queue. The runtime handles one ticket at a time. It does not start a Planner agent or automatically integrate the Worker branch into the main checkout. See the [complete behavior specification](NIGHTSHIFT_SPEC.md) before relying on any workflow detail.
 

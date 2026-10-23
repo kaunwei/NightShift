@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 
@@ -1435,6 +1436,111 @@ class WorkerIntegrationTests(unittest.TestCase):
             self.assertIn("[MECHANICAL_AUDIT] Status: FAIL", (root / "progress.log").read_text())
             self.assertFalse((root / "outside.txt").exists())
             self.assertEqual(git("show", "HEAD:output.txt"), "hello")
+
+
+class DaemonLifecycleTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name) / "repo"
+        (self.root / "scripts").mkdir(parents=True)
+        shutil.copy2(ROOT / "worker.sh", self.root / "worker.sh")
+        shutil.copy2(RUNTIME, self.root / "scripts/worker_runtime.py")
+        shutil.copy2(ROOT / ".gitignore", self.root / ".gitignore")
+        (self.root / ".worker.env").write_text(
+            "WORKER_ISOLATION=0\nRUN_ONCE=0\nPOLL_INTERVAL=0.05\nSTEP_BASE=1\nSTEP_PER_FILE=0\n")
+        self.fake = Path(self.directory.name) / "codex"
+        self.flag = Path(self.directory.name) / "quota"
+        self.fake.write_text(
+            "#!/usr/bin/env python3\nimport os,sys,json\nfrom pathlib import Path\n"
+            "if Path(os.environ['QUOTA_FLAG']).exists():\n print('RESOURCE_EXHAUSTED code 429',flush=True);sys.exit(1)\n"
+            "prompt=sys.argv[-1]\n"
+            "if 'TASK-BUDGET' in prompt:\n"
+            " Path('output.txt').write_text('partial')\n"
+            " for _ in range(2): print(json.dumps({'type':'item.completed','item':{'type':'command_execution'}}),flush=True)\n"
+            "else:\n"
+            " Path('output.txt').write_text('recovered')\n"
+            " Path(sys.argv[sys.argv.index('--output-last-message')+1]).write_text('Attempts: 1 | Confidence: HIGH')\n")
+        self.fake.chmod(0o755)
+        for args in (("init", "-q"), ("config", "user.name", "Lifecycle Test"),
+                     ("config", "user.email", "lifecycle@example.invalid"),
+                     ("add", "."), ("commit", "-qm", "fixture")):
+            subprocess.run(["git", "-C", str(self.root), *args], check=True, capture_output=True)
+        self.env = {**os.environ, "AI_CLI": "codex", "AI_AGENTS_JSON": "",
+                    "PATH": f"{self.fake.parent}{os.pathsep}{os.environ['PATH']}",
+                    "QUOTA_FLAG": str(self.flag)}
+
+    def enqueue(self, task):
+        (self.root / "tasks.txt").write_text(
+            f"{task} | LEVEL: 1 | TARGET: output.txt | ACTION: [CODE: EXPAND] Write output | VERIFY: test -f output.txt\n")
+
+    def start(self):
+        self.log = (Path(self.directory.name) / "daemon.log").open("w+")
+        self.addCleanup(self.log.close)
+        self.process = subprocess.Popen(["bash", "worker.sh"], cwd=self.root, env=self.env,
+                                        stdout=self.log, stderr=subprocess.STDOUT)
+        def stop():
+            if self.process.poll() is None:
+                self.process.terminate()
+                self.process.wait(timeout=5)
+        self.addCleanup(stop)
+
+    def wait_for(self, predicate):
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            self.assertIsNone(self.process.poll(), "daemon unexpectedly exited")
+            if predicate():
+                return
+            time.sleep(0.02)
+        self.log.seek(0)
+        self.fail("daemon condition timed out: " + self.log.read())
+
+    def state(self):
+        p = self.root / "worker.status"
+        return json.loads(p.read_text())["state"] if p.exists() else None
+
+    def test_budget_failure_hands_back_to_planner_and_resumes_after_pause(self):
+        self.enqueue("TASK-BUDGET")
+        self.start()
+        self.wait_for(lambda: (self.root / "tasks.done").exists() and
+                      "[FAILED] TASK-BUDGET" in (self.root / "tasks.done").read_text())
+        self.wait_for(lambda: self.state() == "BLOCKED")
+        self.assertIn("[NEED_DECOMPOSITION] TASK-BUDGET", (self.root / "progress.log").read_text())
+        self.assertFalse((self.root / "output.txt").exists())
+        (self.root / "PAUSE").touch()
+        self.wait_for(lambda: self.state() == "PAUSED")
+        self.enqueue("TASK-RECOVER")
+        time.sleep(0.15)
+        self.assertIn("TASK-RECOVER", (self.root / "tasks.txt").read_text())
+        (self.root / "PAUSE").unlink()
+        self.wait_for(lambda: "[DONE] TASK-RECOVER" in (self.root / "tasks.done").read_text())
+        self.wait_for(lambda: self.state() == "IDLE")
+        self.assertTrue((self.root / ".worker.pid").exists())
+
+    def test_failed_verification_keeps_planner_handoff_instead_of_idle(self):
+        self.enqueue("TASK-AUDIT")
+        queue = self.root / "tasks.txt"
+        queue.write_text(queue.read_text().replace("VERIFY: test -f output.txt", "VERIFY: false"))
+        self.start()
+        self.wait_for(lambda: (self.root / "tasks.done").exists() and
+                      "[GUARD_VIOLATION]" in (self.root / "tasks.done").read_text())
+        time.sleep(0.15)
+        self.assertEqual(self.state(), "BLOCKED")
+        self.assertIn("awaiting Planner", json.loads((self.root / "worker.status").read_text())["current_task"])
+
+    def test_all_quotas_exhausted_waits_then_recovers_without_daemon_restart(self):
+        self.env["AI_AGENTS_JSON"] = json.dumps([{"id": "test", "provider": "codex", "command": str(self.fake)}])
+        self.flag.touch()
+        self.enqueue("TASK-QUOTA")
+        self.start()
+        self.wait_for(lambda: self.state() == "QUOTA_EXHAUSTED")
+        time.sleep(0.15)
+        self.assertIn("TASK-QUOTA", (self.root / "tasks.txt").read_text())
+        self.assertEqual((self.root / "tasks.done").read_text(), "")
+        self.flag.unlink()
+        (self.root / ".worker-agent-state.default.json").unlink()
+        self.wait_for(lambda: "[DONE] TASK-QUOTA" in (self.root / "tasks.done").read_text())
+        self.wait_for(lambda: self.state() == "IDLE")
 
 
 class InstallerIntegrationTests(unittest.TestCase):

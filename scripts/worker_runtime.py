@@ -1018,8 +1018,17 @@ def worker_daemon(root):
         was_busy = False
         idle_status_shown = False
         run_once = env_bool("RUN_ONCE", "0")
+        pending_planner = None
+        waiting_for_quota = False
 
         while not stop_requested.is_set():
+            if waiting_for_quota and not pause_file.exists():
+                state = read_agent_state(agent_state_path)
+                if all(agent["id"] in state["exhausted"] for agent in agents):
+                    update_status("QUOTA_EXHAUSTED", "Waiting for agent quota state reset")
+                    stop_requested.wait(poll_interval)
+                    continue
+                waiting_for_quota = False
             poll_args = argparse.Namespace(tasks=str(tasks_file), done=str(done_file),
                                            pause=str(pause_file), work_dir=str(work_dir),
                                            **step_args)
@@ -1033,9 +1042,20 @@ def worker_daemon(root):
             total, current = int(fields[4]), int(fields[5])
             percent, bar = f"{fields[6]}%", fields[7]
             if fields[0] == "idle":
+                if pending_planner:
+                    failed_task, reason = pending_planner
+                    state = {"SCOPE": "SCOPE_BLOCKED", "GUIDANCE": "AWAITING_GUIDANCE"}.get(reason, "BLOCKED")
+                    update_status(state, f"{failed_task} ({reason}); awaiting Planner")
+                    if not idle_status_shown:
+                        print(f"[AWAITING_PLANNER] {failed_task}: daemon remains alive; waiting for revised queue work.")
+                        idle_status_shown = True
+                    if run_once:
+                        break
+                    stop_requested.wait(poll_interval)
+                    continue
                 update_status("IDLE", current=done_count, total=total, percentage="100%", bar=bar)
                 if was_busy:
-                    print(f"\n{'=' * 78}\n[{stamp()}] 🎉 [ALL TASKS COMPLETED] {bar}")
+                    print(f"\n{'=' * 78}\n[{stamp()}] [QUEUE_DRAINED] {bar}")
                     print(f"[IDLE] Queue is empty (Total completed: {done_count} tasks).\n{'=' * 78}")
                     was_busy, idle_status_shown = False, True
                     if run_once:
@@ -1051,6 +1071,7 @@ def worker_daemon(root):
                 continue
 
             was_busy, idle_status_shown = True, False
+            pending_planner = None
             task, task_id, level = raw_task, fields[8], fields[9]
             target, verify, forbidden, constraints = fields[10], fields[11], fields[12], fields[13]
             target_file_count, max_steps = int(fields[14]), int(fields[15])
@@ -1127,18 +1148,24 @@ def worker_daemon(root):
                            "guidance" if re.search(r"\[(?:NEED_GUIDANCE|NEED_DECOMPOSITION)\]", result_text) else
                            "success")
                 stamp_now = stamp()
+                if outcome not in ("success", "quota_exhausted"):
+                    pending_planner = (task_id, outcome.upper())
                 if outcome == "quota_exhausted":
                     restore_task_front(tasks_file, raw_task)
-                    final_state = "QUOTA_EXHAUSTED"
                     warning = ("=" * 80 + f"\n[QUOTA_EXHAUSTED] {task_id}: All registered agents are exhausted\n"
                                f"Time: {stamp_now} | Status: QUOTA_EXHAUSTED\n"
                                f"Task returned to {tasks_file}; remove or edit {agent_state_path} after quota resets.\n"
-                               "Worker stopped without marking the task failed.\n" + "=" * 80)
+                               "Task is not failed; daemon waits for quota state reset (RUN_ONCE exits).\n" + "=" * 80)
                     prepend_progress(progress_file, warning)
-                    print(f"[{stamp_now}] [QUOTA_EXHAUSTED] All registered agent quotas are exhausted; stopping worker.")
+                    print(f"[{stamp_now}] [QUOTA_EXHAUSTED] All registered agent quotas are exhausted; awaiting quota state reset.")
                     update_status("QUOTA_EXHAUSTED", task, duration, current, total,
                                   remaining, percent, bar)
-                    break
+                    if run_once:
+                        final_state = "QUOTA_EXHAUSTED"
+                        break
+                    waiting_for_quota = True
+                    stop_requested.wait(poll_interval)
+                    continue
                 elif outcome == "timeout":
                     print(f"[{stamp_now}] [TIMEOUT] Task exceeded {timeout}s limit!")
                     record_score_result(score_state_path, task_id, "hard_failure",
@@ -1160,7 +1187,9 @@ def worker_daemon(root):
                     rollback_failed_task(root, work_dir, task_id,
                                          (tasks_file, done_file, progress_file))
                     prepend_progress(progress_file,
-                                     f"[HARD_FAILURE] {task_id}: {reason}; score now {read_score_state(score_state_path)['score']}/5")
+                                     f"[HARD_FAILURE] {task_id}: {reason}; score now {read_score_state(score_state_path)['score']}/5\n"
+                                     f"{'[NEED_DECOMPOSITION]' if outcome == 'step_budget' else '[PLANNER_REQUIRED]'} {task_id}: "
+                                     "Review the failed-task snapshot and return a bounded ticket through tasks.txt; daemon remains alive.")
                     append_line(done_file, f"[{stamp_now}] [FAILED] {task} [{outcome.upper()}]")
                     update_status("BLOCKED", f"{task} ({outcome.upper()})", duration, current,
                                   total, max(0, remaining - 1), percent, bar)
@@ -1221,6 +1250,7 @@ def worker_daemon(root):
                         print(message)
                     guard_status, guard_error = audit["status"], audit["error"]
                     if guard_status:
+                        pending_planner = (task_id, "GUARD_VIOLATION")
                         print(f"[{stamp()}] 🛑 [GUARD REJECTION] Post-flight validation failed: {guard_error}")
                         rollback_failed_task(root, work_dir, task_id,
                                              (tasks_file, done_file, progress_file))
