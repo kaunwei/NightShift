@@ -60,6 +60,8 @@ deploys or upgrades the complete Pure Skills-Driven architecture non-destructive
 | `scripts/worker_runtime.py` | Python 3.9+ | Daemon lifecycle and polling, task execution/adapters, timeout and continuation, mechanical/Git audit, rollback, status, report archiving, isolation, and preview publishing. |
 | `.worker.env.example` | Read-only template | Config template with OS detection, model flags, and `WORKER_ISOLATION`. |
 | `.worker.env` | Config file | Active config initialized from `.worker.env.example` in target root. |
+| `AI_AGENTS_JSON` | Optional JSON environment setting | Ordered agent profiles (`id`, `provider`, `command`, `model`, `effort`, optional `agy_mode`) for error-triggered quota failover. No quota preflight calls are made. |
+| `.worker-agent-state.<WORKER_ID>.json` | Ignored runtime state | Remembers agents whose CLI failures explicitly indicated quota exhaustion; remove after quota reset. |
 | `scripts/` | `chmod +x` | Helper suite: `status.sh`, `watch_worker.sh`, `reorder_queue.sh`, `extract_skeleton.sh`, `probe_line.sh`. |
 | `.skills/universal-build-verify.md` | Instruction | Worker build & test verification skill. |
 | `.agents/skills/nightshift/` | Skills | NightShift command skills (`planner`, `explore`). Background operations execute autonomously without polluting the `/` command interface. |
@@ -96,6 +98,7 @@ From the NightShift repository root, execute:
 The script automatically detects whether the target is a **Fresh Install** or an **Update**, and non-destructively:
 - Copies `worker.sh` and `scripts/worker_runtime.py`, and marks the compatibility launcher executable (`chmod +x`).
 - Copies `.worker.env.example` and initializes `.worker.env` (preserves existing `.worker.env`).
+- Quota failover can be enabled by setting `AI_AGENTS_JSON` in `.worker.env`; the worker switches only after a failed CLI call reports a recognized quota/rate-limit error.
 - Deploys all `scripts/*.sh` tools with execution permissions.
 - Copies the pure skills catalog (`.skills/universal-build-verify.md` and `.agents/skills/*`).
 - Initializes runtime tracking files (`tasks.txt`, `tasks.done`, `progress.log`, `.worker.notes.md`, `docs/agents/granularity-profile.json`) without overwriting existing files.

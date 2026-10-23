@@ -70,6 +70,14 @@ A plug-and-play, dual-terminal AI development framework combining **Matt Pocock'
 
 The active low-cost test configuration is `AI_CLI=codex`, `AI_MODEL=gpt-6-luna`, and `AI_EFFORT=none`. The retained `test/` suite uses a fake Codex executable, so routine regression tests consume no model tokens:
 
+To enable ordered quota failover, set `AI_AGENTS_JSON` in `.worker.env` to a JSON array. The worker checks CLI output only after a failed call; there is no quota preflight request. For example:
+
+```sh
+AI_AGENTS_JSON='[{"id":"codex-main","provider":"codex","command":"codex","model":"gpt-6-luna","effort":"none"},{"id":"agy-backup","provider":"agy","command":"agy","model":"gemini-3.8-flash-low","effort":"low","agy_mode":"accept-edits"}]'
+```
+
+Registered entries are tried in order. Only recognized quota/rate-limit errors trigger a switch; timeouts and other failures follow the normal failure path. Quota exhaustion is remembered in the ignored `.worker-agent-state.<WORKER_ID>.json` file. If every registered agent is exhausted, the worker stops and returns the current task to `tasks.txt`; remove that state file after quota resets to make those agents eligible again.
+
 ```sh
 python3 -m unittest discover -s test -v
 bash -n worker.sh install.sh scripts/*.sh

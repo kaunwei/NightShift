@@ -193,6 +193,7 @@ REQUIRED_IGNORES=(
   "worker*.status"
   ".worker*.log"
   ".worker*.pid"
+  ".worker-agent-state*.json"
   "PAUSE"
   ".scratch/"
   ".reports"

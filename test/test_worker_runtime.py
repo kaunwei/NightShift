@@ -559,6 +559,134 @@ class RollbackContractTests(unittest.TestCase):
 
 
 class WorkerIntegrationTests(unittest.TestCase):
+    def test_worker_switches_to_next_registered_agent_after_quota_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "repo"
+            root.mkdir()
+            for name in ("worker.sh", ".gitignore"):
+                shutil.copy2(ROOT / name, root / name)
+            (root / "scripts").mkdir()
+            shutil.copy2(ROOT / "scripts/worker_runtime.py", root / "scripts/worker_runtime.py")
+            profiles = [
+                {"id": "primary", "provider": "codex", "command": "codex", "model": "gpt-6-luna"},
+                {"id": "backup", "provider": "codex", "command": "codex", "model": "gpt-6.1-sol"},
+            ]
+            (root / ".worker.env").write_text(
+                "WORKER_ISOLATION=0\nRUN_ONCE=1\nPOLL_INTERVAL=0\n"
+                "AI_AGENTS_JSON='" + json.dumps(profiles) + "'\n"
+            )
+            (root / "tasks.txt").write_text(
+                "TASK-Q | LEVEL: 1 | TARGET: output.txt | ACTION: [CODE: EXPAND] "
+                "Write output | VERIFY: test -f output.txt\n"
+            )
+            bin_dir = Path(directory) / "bin"
+            bin_dir.mkdir()
+            fake = bin_dir / "codex"
+            fake.write_text(
+                "#!/bin/sh\n"
+                "model=\nwhile [ \"$#\" -gt 0 ]; do\n"
+                "  if [ \"$1\" = --model ]; then shift; model=$1; fi\n"
+                "  if [ \"$1\" = --output-last-message ]; then shift; result=$1; fi\n"
+                "  shift\ndone\n"
+                "printf '%s\\n' \"$model\" >> \"$AGENT_CALLS\"\n"
+                "if [ \"$model\" = gpt-6-luna ]; then echo 'Error: insufficient_quota'; exit 1; fi\n"
+                "printf 'Attempts: 1 | Confidence: HIGH\\n' > \"$result\"\n"
+                "printf 'hello\\n' > output.txt\n"
+            )
+            fake.chmod(0o755)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            subprocess.run(["git", "-C", str(root), "config", "user.name", "Worker Test"], check=True)
+            subprocess.run(["git", "-C", str(root), "config", "user.email", "worker@example.invalid"], check=True)
+            subprocess.run(["git", "-C", str(root), "add", "worker.sh", "scripts/worker_runtime.py", ".gitignore", "tasks.txt"], check=True)
+            subprocess.run(["git", "-C", str(root), "commit", "-qm", "fixture"], check=True)
+            calls = Path(directory) / "agent-calls.log"
+            env = os.environ.copy()
+            env.update(PATH=f"{bin_dir}{os.pathsep}{env['PATH']}", AGENT_CALLS=str(calls))
+
+            result = subprocess.run(["bash", str(root / "worker.sh")], cwd=root, env=env,
+                                    capture_output=True, text=True, timeout=45)
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(calls.read_text().splitlines(), ["gpt-6-luna", "gpt-6.1-sol"])
+            self.assertIn("[DONE]", (root / "tasks.done").read_text())
+            self.assertEqual((root / "output.txt").read_text(), "hello\n")
+            state = json.loads((root / ".worker-agent-state.default.json").read_text())
+            self.assertEqual(state["exhausted"]["primary"]["reason"], "quota")
+
+    def test_worker_requeues_task_and_stops_when_all_registered_agents_are_exhausted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "repo"
+            root.mkdir()
+            for name in ("worker.sh", ".gitignore"):
+                shutil.copy2(ROOT / name, root / name)
+            (root / "scripts").mkdir()
+            shutil.copy2(ROOT / "scripts/worker_runtime.py", root / "scripts/worker_runtime.py")
+            task = ("TASK-Q | LEVEL: 1 | TARGET: output.txt | ACTION: [CODE: EXPAND] "
+                    "Write output | VERIFY: test -f output.txt\n")
+            profiles = [{"id": "one", "provider": "codex", "command": "codex"},
+                        {"id": "two", "provider": "codex", "command": "codex"}]
+            (root / ".worker.env").write_text(
+                "WORKER_ISOLATION=0\nRUN_ONCE=1\nPOLL_INTERVAL=0\n"
+                "AI_AGENTS_JSON='" + json.dumps(profiles) + "'\n"
+            )
+            (root / "tasks.txt").write_text(task)
+            bin_dir = Path(directory) / "bin"
+            bin_dir.mkdir()
+            fake = bin_dir / "codex"
+            fake.write_text("#!/bin/sh\necho 'rate limit exceeded'; exit 1\n")
+            fake.chmod(0o755)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            subprocess.run(["git", "-C", str(root), "config", "user.name", "Worker Test"], check=True)
+            subprocess.run(["git", "-C", str(root), "config", "user.email", "worker@example.invalid"], check=True)
+            subprocess.run(["git", "-C", str(root), "add", "worker.sh", "scripts/worker_runtime.py", ".gitignore", "tasks.txt"], check=True)
+            subprocess.run(["git", "-C", str(root), "commit", "-qm", "fixture"], check=True)
+            result = subprocess.run(["bash", str(root / "worker.sh")], cwd=root,
+                                    env={**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"},
+                                    capture_output=True, text=True, timeout=45)
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual((root / "tasks.txt").read_text(), task)
+            self.assertEqual((root / "tasks.done").read_text(), "")
+            self.assertIn("QUOTA_EXHAUSTED", result.stdout)
+            self.assertEqual(json.loads((root / "worker.status").read_text())["state"], "QUOTA_EXHAUSTED")
+            self.assertEqual(set(json.loads((root / ".worker-agent-state.default.json").read_text())["exhausted"]), {"one", "two"})
+
+    def test_worker_does_not_switch_agents_for_non_quota_cli_errors(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "repo"
+            root.mkdir()
+            for name in ("worker.sh", ".gitignore"):
+                shutil.copy2(ROOT / name, root / name)
+            (root / "scripts").mkdir()
+            shutil.copy2(ROOT / "scripts/worker_runtime.py", root / "scripts/worker_runtime.py")
+            profiles = [{"id": "primary", "provider": "codex", "command": "codex"},
+                        {"id": "backup", "provider": "codex", "command": "codex"}]
+            (root / ".worker.env").write_text(
+                "WORKER_ISOLATION=0\nRUN_ONCE=1\nPOLL_INTERVAL=0\n"
+                "AI_AGENTS_JSON='" + json.dumps(profiles) + "'\n"
+            )
+            (root / "tasks.txt").write_text("TASK-E | LEVEL: 1 | TARGET: output.txt | ACTION: [CODE: EXPAND] Fail | VERIFY: true\n")
+            bin_dir = Path(directory) / "bin"
+            bin_dir.mkdir()
+            fake = bin_dir / "codex"
+            fake.write_text("#!/bin/sh\necho 'network unavailable'; exit 1\n")
+            fake.chmod(0o755)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            subprocess.run(["git", "-C", str(root), "config", "user.name", "Worker Test"], check=True)
+            subprocess.run(["git", "-C", str(root), "config", "user.email", "worker@example.invalid"], check=True)
+            subprocess.run(["git", "-C", str(root), "add", "worker.sh", "scripts/worker_runtime.py", ".gitignore", "tasks.txt"], check=True)
+            subprocess.run(["git", "-C", str(root), "commit", "-qm", "fixture"], check=True)
+            calls = Path(directory) / "calls.log"
+            env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}", "AGENT_CALLS": str(calls)}
+            fake.write_text("#!/bin/sh\necho called >> \"$AGENT_CALLS\"\necho 'network unavailable'; exit 1\n")
+
+            result = subprocess.run(["bash", str(root / "worker.sh")], cwd=root, env=env,
+                                    capture_output=True, text=True, timeout=45)
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(calls.read_text().splitlines(), ["called"])
+            self.assertFalse((root / ".worker-agent-state.default.json").exists())
+
     def test_status_dashboard_uses_project_paths_from_an_external_cwd(self):
         with tempfile.TemporaryDirectory() as directory:
             external = Path(directory)
@@ -795,6 +923,7 @@ class InstallerIntegrationTests(unittest.TestCase):
             self.assertTrue((target / "test/nightshift_worker/test_worker_runtime.py").is_file())
             self.assertTrue((target / "test/nightshift_worker/README.md").is_file())
             self.assertTrue((target / ".worker.env").is_file())
+            self.assertIn(".worker-agent-state*.json", (target / ".gitignore").read_text())
             (target / ".worker.env").write_text("AI_CLI=agy\nCUSTOM_SETTING=preserve\n")
             update = subprocess.run(["bash", str(ROOT / "install.sh"), str(target)],
                                     cwd=ROOT, capture_output=True, text=True, timeout=30)

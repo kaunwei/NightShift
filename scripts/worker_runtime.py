@@ -80,6 +80,114 @@ def pop_task(queue_path):
         lock.rmdir()
 
 
+def restore_task_front(queue_path, task):
+    """Put a claimed task back at the queue head without racing queue editors."""
+    queue = Path(queue_path)
+    lock = Path(f"{queue}.lock")
+    for attempt in range(50):
+        try:
+            lock.mkdir()
+            break
+        except FileExistsError:
+            time.sleep(0.1)
+    else:
+        raise TimeoutError(f"queue lock remains held: {lock}")
+    try:
+        lines = queue.read_text(encoding="utf-8").splitlines(keepends=True) if queue.exists() else []
+        insertion = next((index for index, line in enumerate(lines)
+                          if line.strip() and not line.lstrip().startswith("#")), len(lines))
+        task_line = task.rstrip("\r\n") + "\n"
+        atomic_write(queue, "".join(lines[:insertion] + [task_line] + lines[insertion:]))
+    finally:
+        lock.rmdir()
+
+
+def parse_agent_registry(raw, defaults):
+    if not raw.strip():
+        return []
+    profiles = json.loads(raw)
+    if not isinstance(profiles, list) or not profiles:
+        raise ValueError("AI_AGENTS_JSON must be a non-empty JSON array")
+    agents, seen = [], set()
+    for item in profiles:
+        if not isinstance(item, dict):
+            raise ValueError("each AI_AGENTS_JSON entry must be an object")
+        agent_id = str(item.get("id", "")).strip()
+        provider = str(item.get("provider", "")).strip().lower()
+        command = str(item.get("command", item.get("executable", ""))).strip()
+        if not agent_id or agent_id in seen:
+            raise ValueError("AI_AGENTS_JSON agent ids must be non-empty and unique")
+        if provider not in ("codex", "agy", "generic"):
+            raise ValueError(f"unsupported provider for agent {agent_id}: {provider}")
+        if not command:
+            raise ValueError(f"AI_AGENTS_JSON agent {agent_id} requires a command")
+        seen.add(agent_id)
+        agents.append({
+            "id": agent_id, "provider": provider, "command": command,
+            "model": str(item.get("model", defaults["model"])),
+            "effort": str(item.get("effort", defaults["effort"])),
+            "agy_mode": str(item.get("agy_mode", defaults["agy_mode"])),
+        })
+    return agents
+
+
+def quota_error(text):
+    patterns = (r"insufficient[_ ]quota", r"quota (?:has been )?exceeded",
+                r"rate[_ ]limit(?:[_ ]exceeded)?", r"resource_exhausted",
+                r"too many requests", r"billing hard limit", r"out of credits",
+                r"usage limit", r"exceeded.{0,40}quota",
+                r"(?:http(?: status)?|status(?: code)?|error)\s*[:=]?\s*429\b")
+    return any(re.search(pattern, text, re.I) for pattern in patterns)
+
+
+def read_agent_state(path):
+    path = Path(path)
+    if not path.exists():
+        return {"version": 1, "exhausted": {}}
+    state = json.loads(path.read_text(encoding="utf-8"))
+    if state.get("version") != 1 or not isinstance(state.get("exhausted"), dict):
+        raise ValueError(f"invalid agent quota state file: {path}")
+    return state
+
+
+def execute_registered_agents(args, agents, state_path, rollback):
+    state = read_agent_state(state_path)
+    available = [agent for agent in agents if agent["id"] not in state["exhausted"]]
+    if not available:
+        print("[WORKER] QUOTA_EXHAUSTED: all registered agents are exhausted; task remains queued.")
+        return 0, True
+    for index, agent in enumerate(available):
+        attempt = argparse.Namespace(**vars(args))
+        attempt.provider = agent["provider"]
+        attempt.executable = agent["command"]
+        attempt.model = agent["model"]
+        attempt.effort = agent["effort"]
+        attempt.agy_mode = agent["agy_mode"]
+        for output_name in ("output_file", "result_file"):
+            output = Path(getattr(attempt, output_name, "") or ".")
+            if output.is_file():
+                output.unlink()
+        print(f"[WORKER] Launching registered agent {agent['id']} ({agent['provider']}, model={agent['model'] or 'default'})...")
+        code = execute_task_cli(attempt)
+        output_path = Path(attempt.output_file)
+        result_path = Path(attempt.result_file) if attempt.result_file else output_path
+        output_text = output_path.read_text(encoding="utf-8", errors="replace") if output_path.exists() else ""
+        result_text = result_path.read_text(encoding="utf-8", errors="replace") if result_path.exists() else ""
+        if code in (0, 124) or not quota_error(output_text + "\n" + result_text):
+            return code, False
+        state["exhausted"][agent["id"]] = {
+            "provider": agent["provider"], "command": agent["command"],
+            "reason": "quota", "detected_at": datetime.now(timezone.utc).isoformat(),
+        }
+        atomic_write(state_path, json.dumps(state, ensure_ascii=False, indent=2) + "\n")
+        print(f"[WORKER] Agent {agent['id']} quota exhausted; switching to the next registered agent.", file=sys.stderr)
+        rollback()
+        if index + 1 == len(available):
+            print("[WORKER] QUOTA_EXHAUSTED: all registered agents are exhausted; task remains queued.")
+            return 0, True
+    return 0, True
+
+
 def progress_bar(current, total, width=30):
     if total <= 0:
         return "[------------------------------] 0% (0/0)"
@@ -357,6 +465,8 @@ def execute_task_cli(args):
     environment.update(PORT=args.worker_port, TEST_PORT=args.worker_port)
     if args.provider in ("codex", "agy"):
         environment["MAX_STEPS"] = str(args.step_budget)
+    environment.pop("AI_AGENTS_JSON", None)
+    environment.pop("AI_AGENT_STATE_FILE", None)
     if args.provider == "agy":
         environment["AGY_MAX_STEPS"] = str(args.step_budget)
     output = Path(args.output_file)
@@ -529,7 +639,7 @@ def worker_daemon(root):
     worker_id = config.get("WORKER_ID", "default")
 
     def resolve(name, default):
-        path = Path(config.get(name, default))
+        path = Path(config.get(name) or default)
         return path if path.is_absolute() else root / path
 
     tasks_file = resolve("TASKS_FILE", "tasks.txt")
@@ -546,6 +656,12 @@ def worker_daemon(root):
     ai_model = config.get("AI_MODEL", "")
     ai_effort = config.get("AI_EFFORT", "")
     agy_mode = config.get("AGY_MODE", "accept-edits")
+    agents = parse_agent_registry(config.get("AI_AGENTS_JSON", ""), {
+        "model": ai_model, "effort": ai_effort, "agy_mode": agy_mode,
+    })
+    safe_worker_id = re.sub(r"[^A-Za-z0-9_.-]", "_", worker_id)
+    agent_state_path = resolve(
+        "AI_AGENT_STATE_FILE", f".worker-agent-state.{safe_worker_id}.json")
     timeout_value = float(config.get("TASK_TIMEOUT", "1800"))
     timeout = int(timeout_value) if timeout_value.is_integer() else timeout_value
     step_base = int(config.get("STEP_BASE", "12"))
@@ -576,6 +692,7 @@ def worker_daemon(root):
     if not acquire_worker_lock(pid_file, pid):
         return 1
     stop_requested = threading.Event()
+    final_state = "STOPPED"
     def request_stop(signum, frame):
         stop_requested.set()
     signal.signal(signal.SIGINT, request_stop)
@@ -702,11 +819,22 @@ def worker_daemon(root):
                     task_id=task_id, title=task, level=level, verify=verify,
                     base=base, progress_file=str(progress_file),
                 )
+                quota_exhausted = False
                 try:
-                    exit_code = execute_task_cli(cli_args)
+                    if agents:
+                        exit_code, quota_exhausted = execute_registered_agents(
+                            cli_args, agents, agent_state_path,
+                            lambda: rollback_failed_task(
+                                root, work_dir, task_id,
+                                (tasks_file, done_file, progress_file, agent_state_path),
+                            ),
+                        )
+                    else:
+                        exit_code = execute_task_cli(cli_args)
                 except (OSError, ValueError, subprocess.CalledProcessError) as error:
                     print(f"[WORKER] CLI execution failed: {error}", file=sys.stderr)
                     exit_code = 2
+                    quota_exhausted = False
                 result_output = result_path if result_path.is_file() and result_path.stat().st_size else output_path
                 duration = int(time.time() - started)
                 append_line(log_file, f"=== [{stamp()}] Task: {task} (Duration: {duration}s, Exit: {exit_code}) ===")
@@ -715,12 +843,25 @@ def worker_daemon(root):
                     stream.write("\n")
                 result_text = result_output.read_text(encoding="utf-8", errors="replace") if result_output.exists() else ""
 
-                outcome = ("timeout" if exit_code == 124 else
+                outcome = ("quota_exhausted" if quota_exhausted else
+                           "timeout" if exit_code == 124 else
                            "scope" if "[SCOPE_BLOCKED]" in result_text else
                            "guidance" if re.search(r"\[(?:NEED_GUIDANCE|NEED_DECOMPOSITION)\]", result_text) else
                            "error" if exit_code else "success")
                 stamp_now = stamp()
-                if outcome == "timeout":
+                if outcome == "quota_exhausted":
+                    restore_task_front(tasks_file, raw_task)
+                    final_state = "QUOTA_EXHAUSTED"
+                    warning = ("=" * 80 + f"\n[QUOTA_EXHAUSTED] {task_id}: All registered agents are exhausted\n"
+                               f"Time: {stamp_now} | Status: QUOTA_EXHAUSTED\n"
+                               f"Task returned to {tasks_file}; remove or edit {agent_state_path} after quota resets.\n"
+                               "Worker stopped without marking the task failed.\n" + "=" * 80)
+                    prepend_progress(progress_file, warning)
+                    print(f"[{stamp_now}] [QUOTA_EXHAUSTED] All registered agent quotas are exhausted; stopping worker.")
+                    update_status("QUOTA_EXHAUSTED", task, duration, current, total,
+                                  remaining, percent, bar)
+                    break
+                elif outcome == "timeout":
                     print(f"[{stamp_now}] [TIMEOUT] Task exceeded {timeout}s limit!")
                     rollback_failed_task(root, work_dir, task_id,
                                          (tasks_file, done_file, progress_file))
@@ -813,7 +954,7 @@ def worker_daemon(root):
         except OSError:
             pass
         try:
-            update_status("STOPPED", bar="[------------------------------] 0%")
+            update_status(final_state, bar="[------------------------------] 0%")
         except (OSError, ValueError):
             pass
 
