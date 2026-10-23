@@ -172,7 +172,7 @@ Attempts: <attempts_count> | Confidence: <confidence_score>"
 ## 7. Dynamic Queue Rescheduling & Hot Preemption
 
 1. **Atomic File Locking**:
-   - `worker_runtime.py` and `scripts/reorder_queue.sh` use POSIX directory locking (`mkdir tasks.txt.lock`) with automated retry backoff to ensure collision-free queue pops and insertions.
+   - `scripts/worker_runtime.py` and `scripts/reorder_queue.sh` use POSIX directory locking (`mkdir tasks.txt.lock`) with automated retry backoff to ensure collision-free queue pops and insertions.
 2. **Live Feedback Hotfix**:
    - If human spots an issue during early preview in `.preview/`, Planner inspects remaining tasks in `tasks.txt`, deduplicates redundant tasks, and injects `[HOTFIX]` tasks at line 1.
    - Worker picks up the hotfix immediately after finishing its current turn.

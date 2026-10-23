@@ -20,8 +20,8 @@ if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
   echo "[FATAL ERROR] Python runtime not found: $PYTHON_BIN" >&2
   exit 1
 fi
-if [ ! -f "$SCRIPT_DIR/worker_runtime.py" ]; then
-  echo "[FATAL ERROR] Missing worker_runtime.py alongside worker.sh" >&2
+if [ ! -f "$SCRIPT_DIR/scripts/worker_runtime.py" ]; then
+  echo "[FATAL ERROR] Missing scripts/worker_runtime.py" >&2
   exit 1
 fi
 
@@ -40,4 +40,4 @@ export USE_SANDBOX="${USE_SANDBOX:-0}" RUN_ONCE="${RUN_ONCE:-0}"
 export ADDITIONAL_DIRS="${ADDITIONAL_DIRS:-}" WORKER_ISOLATION="${WORKER_ISOLATION:-1}"
 export WORKER_PORT="${WORKER_PORT:-3001}"
 
-exec "$PYTHON_BIN" "$SCRIPT_DIR/worker_runtime.py" daemon --root "$SCRIPT_DIR"
+exec "$PYTHON_BIN" "$SCRIPT_DIR/scripts/worker_runtime.py" daemon --root "$SCRIPT_DIR"

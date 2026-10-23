@@ -13,7 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 ROOT = next(parent for parent in Path(__file__).resolve().parents
             if (parent / "worker.sh").exists())
-RUNTIME = ROOT / "worker_runtime.py"
+RUNTIME = ROOT / "scripts/worker_runtime.py"
 
 
 def runtime(*args, env=None):
@@ -565,7 +565,8 @@ class WorkerIntegrationTests(unittest.TestCase):
             root = external / "repo"
             (root / "scripts").mkdir(parents=True)
             shutil.copy2(ROOT / "scripts/status.sh", root / "scripts/status.sh")
-            shutil.copy2(ROOT / "worker_runtime.py", root / "worker_runtime.py")
+            (root / "scripts").mkdir(exist_ok=True)
+            shutil.copy2(ROOT / "scripts/worker_runtime.py", root / "scripts/worker_runtime.py")
             (root / ".worker.env").write_text(
                 "STATUS_FILE=state/worker.json\nTASKS_FILE=queue/tasks.txt\n"
                 "TASKS_DONE_FILE=queue/tasks.done\nPROGRESS_FILE=queue/progress.log\n"
@@ -618,8 +619,10 @@ class WorkerIntegrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "repo"
             root.mkdir()
-            for name in ("worker.sh", "worker_runtime.py", ".gitignore"):
+            for name in ("worker.sh", ".gitignore"):
                 shutil.copy2(ROOT / name, root / name)
+            (root / "scripts").mkdir()
+            shutil.copy2(ROOT / "scripts/worker_runtime.py", root / "scripts/worker_runtime.py")
             (root / ".worker.env").write_text(
                 "WORKER_ISOLATION=0\nRUN_ONCE=1\nPOLL_INTERVAL=0.01\nAI_CLI=codex\n"
             )
@@ -627,7 +630,7 @@ class WorkerIntegrationTests(unittest.TestCase):
             subprocess.run(["git", "init", "-q", str(root)], check=True)
             subprocess.run(["git", "-C", str(root), "config", "user.name", "Worker Test"], check=True)
             subprocess.run(["git", "-C", str(root), "config", "user.email", "worker@example.invalid"], check=True)
-            subprocess.run(["git", "-C", str(root), "add", "worker.sh", "worker_runtime.py", ".gitignore", "tasks.txt"], check=True)
+            subprocess.run(["git", "-C", str(root), "add", "worker.sh", "scripts/worker_runtime.py", ".gitignore", "tasks.txt"], check=True)
             subprocess.run(["git", "-C", str(root), "commit", "-qm", "fixture"], check=True)
 
             result = subprocess.run(["bash", str(root / "worker.sh")], cwd=root,
@@ -642,8 +645,10 @@ class WorkerIntegrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "repo"
             root.mkdir()
-            for name in ("worker.sh", "worker_runtime.py", ".gitignore"):
+            for name in ("worker.sh", ".gitignore"):
                 shutil.copy2(ROOT / name, root / name)
+            (root / "scripts").mkdir()
+            shutil.copy2(ROOT / "scripts/worker_runtime.py", root / "scripts/worker_runtime.py")
             (root / ".worker.env").write_text("WORKER_ISOLATION=0\n")
             pid_file = root / ".worker.pid"
             pid_file.write_text(f"{os.getpid()}\n")
@@ -660,8 +665,10 @@ class WorkerIntegrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "repo"
             root.mkdir()
-            for name in ("worker.sh", "worker_runtime.py", ".gitignore"):
+            for name in ("worker.sh", ".gitignore"):
                 shutil.copy2(ROOT / name, root / name)
+            (root / "scripts").mkdir()
+            shutil.copy2(ROOT / "scripts/worker_runtime.py", root / "scripts/worker_runtime.py")
             (root / ".worker.env").write_text(
                 "AI_CLI=codex\nWORKER_ISOLATION=0\nRUN_ONCE=1\nPOLL_INTERVAL=0\nTASK_TIMEOUT=0.5\n"
             )
@@ -681,7 +688,7 @@ class WorkerIntegrationTests(unittest.TestCase):
             subprocess.run(["git", "init", "-q", str(root)], check=True)
             subprocess.run(["git", "-C", str(root), "config", "user.name", "Worker Test"], check=True)
             subprocess.run(["git", "-C", str(root), "config", "user.email", "worker@example.invalid"], check=True)
-            subprocess.run(["git", "-C", str(root), "add", "worker.sh", "worker_runtime.py", ".gitignore", "output.txt", "tasks.txt"], check=True)
+            subprocess.run(["git", "-C", str(root), "add", "worker.sh", "scripts/worker_runtime.py", ".gitignore", "output.txt", "tasks.txt"], check=True)
             subprocess.run(["git", "-C", str(root), "commit", "-qm", "fixture"], check=True)
             env = os.environ.copy()
             env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
@@ -702,8 +709,10 @@ class WorkerIntegrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "repo"
             root.mkdir()
-            for name in ("worker.sh", "worker_runtime.py", ".gitignore"):
+            for name in ("worker.sh", ".gitignore"):
                 shutil.copy2(ROOT / name, root / name)
+            (root / "scripts").mkdir()
+            shutil.copy2(ROOT / "scripts/worker_runtime.py", root / "scripts/worker_runtime.py")
             (root / ".worker.env").write_text(
                 "AI_CLI=codex\nAI_MODEL=gpt-6-luna\nAI_EFFORT=none\n"
                 "CODEX_APPROVAL_MODE=auto\nWORKER_ISOLATION=0\n"
@@ -735,7 +744,7 @@ class WorkerIntegrationTests(unittest.TestCase):
             git("init", "-q")
             git("config", "user.name", "Worker Test")
             git("config", "user.email", "worker@example.invalid")
-            git("add", "worker.sh", "worker_runtime.py", ".gitignore", "tasks.txt")
+            git("add", "worker.sh", "scripts/worker_runtime.py", ".gitignore", "tasks.txt")
             git("commit", "-qm", "fixture")
             args_log = Path(directory) / "args.txt"
             env = os.environ.copy()
@@ -781,10 +790,17 @@ class InstallerIntegrationTests(unittest.TestCase):
             result = subprocess.run(["bash", str(ROOT / "install.sh"), str(target)],
                                     cwd=ROOT, capture_output=True, text=True, timeout=30)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            self.assertTrue((target / "worker_runtime.py").is_file())
+            self.assertTrue((target / "scripts/worker_runtime.py").is_file())
+            self.assertFalse((target / "worker_runtime.py").exists())
             self.assertTrue((target / "test/nightshift_worker/test_worker_runtime.py").is_file())
             self.assertTrue((target / "test/nightshift_worker/README.md").is_file())
             self.assertTrue((target / ".worker.env").is_file())
+            (target / ".worker.env").write_text("AI_CLI=agy\nCUSTOM_SETTING=preserve\n")
+            update = subprocess.run(["bash", str(ROOT / "install.sh"), str(target)],
+                                    cwd=ROOT, capture_output=True, text=True, timeout=30)
+            self.assertEqual(update.returncode, 0, update.stdout + update.stderr)
+            self.assertEqual((target / ".worker.env").read_text(), "AI_CLI=agy\nCUSTOM_SETTING=preserve\n")
+            self.assertTrue((target / "scripts/worker_runtime.py").is_file())
             installed = subprocess.run(
                 [sys.executable, "-m", "unittest", "discover", "-s", "test", "-v"],
                 cwd=target, capture_output=True, text=True, timeout=45,

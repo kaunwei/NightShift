@@ -57,7 +57,7 @@ deploys or upgrades the complete Pure Skills-Driven architecture non-destructive
 | :--- | :---: | :--- |
 | `install.sh` / `update.sh` | `chmod +x` | Unified installer & updater (deploys scripts, skills, state files, and protects `.gitignore` without duplication). |
 | `worker.sh` | `chmod +x` | Compatibility launcher: loads `.worker.env`, validates Python, then `exec`s the daemon. |
-| `worker_runtime.py` | Python 3.9+ | Daemon lifecycle and polling, task execution/adapters, timeout and continuation, mechanical/Git audit, rollback, status, report archiving, isolation, and preview publishing. |
+| `scripts/worker_runtime.py` | Python 3.9+ | Daemon lifecycle and polling, task execution/adapters, timeout and continuation, mechanical/Git audit, rollback, status, report archiving, isolation, and preview publishing. |
 | `.worker.env.example` | Read-only template | Config template with OS detection, model flags, and `WORKER_ISOLATION`. |
 | `.worker.env` | Config file | Active config initialized from `.worker.env.example` in target root. |
 | `scripts/` | `chmod +x` | Helper suite: `status.sh`, `watch_worker.sh`, `reorder_queue.sh`, `extract_skeleton.sh`, `probe_line.sh`. |
@@ -94,7 +94,7 @@ From the NightShift repository root, execute:
 ./update.sh /path/to/target-project
 ```
 The script automatically detects whether the target is a **Fresh Install** or an **Update**, and non-destructively:
-- Copies `worker.sh` and `worker_runtime.py`, and marks the compatibility launcher executable (`chmod +x`).
+- Copies `worker.sh` and `scripts/worker_runtime.py`, and marks the compatibility launcher executable (`chmod +x`).
 - Copies `.worker.env.example` and initializes `.worker.env` (preserves existing `.worker.env`).
 - Deploys all `scripts/*.sh` tools with execution permissions.
 - Copies the pure skills catalog (`.skills/universal-build-verify.md` and `.agents/skills/*`).

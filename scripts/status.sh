@@ -27,7 +27,7 @@ echo "==========================================================================
 
 # 1. Worker Daemon Status
 if [ -f "$STATUS_FILE" ]; then
-  "${PYTHON_BIN:-python3}" "$SCRIPT_DIR/worker_runtime.py" status-display "$STATUS_FILE" || \
+  "${PYTHON_BIN:-python3}" "$SCRIPT_DIR/scripts/worker_runtime.py" status-display "$STATUS_FILE" || \
     echo "Worker Status  : Invalid status file"
 else
   echo "Worker Status  : No worker.status found"
