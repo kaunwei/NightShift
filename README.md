@@ -6,7 +6,7 @@ The intended workflow can run continuously, but the runtime does not start or su
 
 ## Components
 
-- `worker.sh` loads `.worker.env`, checks Python, and starts `scripts/worker_runtime.py`.
+- `worker.sh` owns worker runtime defaults, checks Python, and starts `scripts/worker_runtime.py`.
 - `.agents/skills/nightshift/planner/` defines ticket planning, dispatch, acceptance, and recovery.
 - `.agents/skills/nightshift/explore/` defines read-only seam research and report handoff.
 - `.skills/universal-build-verify.md` defines Worker execution, verification, and closeout expectations.
@@ -29,13 +29,7 @@ Update a deployment with the same installer interface:
 ./update.sh /path/to/target-project
 ```
 
-The installer preserves an existing `.worker.env`, queue, history, and notes. To configure this repository directly, copy the example first:
-
-```sh
-cp .worker.env.example .worker.env
-```
-
-Register executable adapters in `AI_AGENTS_JSON`; the runtime does not select or infer a provider from an adapter name. The example uses the shipped Codex and AgY protocol adapters, with each provider executable and model configured in that adapter's `overrides`. Failover follows the registration order after quota exhaustion or a confirmed timeout. A capability change creates a Planner gate, so the replacement waits until the Planner acknowledges or revises the affected work. If every registration is quota-exhausted, the task remains queued until quota state is reset.
+Worker runtime settings are configured at the top of `worker.sh`. Agent registrations live together in `agents/agents.json`, keyed by agent name; each entry provides an adapter, command, optional args/env, adapter config, and a `default` flag. The Worker puts default agents first and uses the same config object for every adapter. The installer preserves an existing agent registry. Failover follows registration order after quota exhaustion or a confirmed timeout. A capability change creates a Planner gate, so the replacement waits until the Planner acknowledges or revises the affected work. If every registration is quota-exhausted, the task remains queued until quota state is reset.
 
 ## Run and inspect
 
@@ -60,7 +54,7 @@ touch PAUSE                         # pause before the next ticket
 rm PAUSE                            # resume
 ```
 
-The queue reorder helper accepts a complete replacement queue from a file or standard input; it has no `prepend` subcommand. Worker tasks execute directly in the project directory. Trial deliveries go under `.trials/<TASK-ID>/` after their staged copy passes the runnable check; previous deliveries remain separate from development build outputs. Existing deployments may retain `WORKER_ISOLATION` in `.worker.env`; the setting is ignored. Upgrades preserve old `.worker-tree`, branches, and `.preview` contents so you can inspect or migrate unfinished work manually. A runtime audit PASS is not Planner acceptance.
+The queue reorder helper accepts a complete replacement queue from a file or standard input; it has no `prepend` subcommand. Worker tasks execute directly in the project directory. Trial deliveries go under `.trials/<TASK-ID>/` after their staged copy passes the runnable check; previous deliveries remain separate from development build outputs. Upgrades preserve old `.worker-tree`, branches, and `.preview` contents so you can inspect or migrate unfinished work manually. A runtime audit PASS is not Planner acceptance.
 
 ## Regression tests
 

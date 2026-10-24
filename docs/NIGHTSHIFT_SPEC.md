@@ -107,7 +107,7 @@ Explore supplies read-only, evidence-based knowledge of code ownership, callers,
 - Planner skill: detailed dispatch gates, cadence, acceptance routing, recovery, in-place execution, and interventions.
 - `.agents/skills/nightshift/explore/SKILL.md`: report cache, research procedure, audit requirements, and Planner handoff shape.
 - `.skills/universal-build-verify.md`: Worker execution contract for task types, limits, retries, verification, commit, progress, and closeout.
-- `.worker.env.example` / `.worker.env`: documented defaults / local runtime choices; model and operational settings are configuration, not duplicated policy.
+- `worker.sh` / `agents/agents.json`: worker runtime defaults and the single name-keyed agent registry; adapters receive their named config through the shared protocol.
 - `.worker.notes.md`: short-lived reusable build/toolchain quirks only; not architecture, task history, or secrets.
 - `tasks.txt`, `tasks.done`, `progress.log`: pending queue, completed/outcome history, and latest audit/worker evidence respectively.
 - `.worker-score.json` and agent-state file: shared reliability arithmetic state and quota-exhaustion state respectively; these are separate concerns.

@@ -3,6 +3,7 @@
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -21,6 +22,10 @@ RUNTIME = ROOT / "scripts/worker_runtime.py"
 
 
 def runtime(*args, env=None):
+    args = list(args)
+    if args and args[0] == "daemon" and env and env.get("AI_AGENTS_JSON"):
+        root_index = args.index("--root") + 1
+        write_legacy_registry(Path(args[root_index]), env["AI_AGENTS_JSON"])
     return subprocess.run(
         [sys.executable, str(RUNTIME), *map(str, args)],
         text=True,
@@ -28,6 +33,67 @@ def runtime(*args, env=None):
         env=env,
         check=False,
     )
+
+
+def write_legacy_registry(root, raw):
+    """Translate old test fixtures to the new on-disk public registry seam."""
+    profiles = json.loads(raw)
+    if not isinstance(profiles, list):
+        profiles = [profiles]
+    registry = {}
+    for index, profile in enumerate(profiles):
+        if not isinstance(profile, dict):
+            profile = {"invalid": profile}
+        name = profile.get("id", f"agent-{index}")
+        entry = {key: value for key, value in profile.items()
+                 if key not in {"id", "overrides", "config"}}
+        config = profile.get("config", profile.get("overrides", {}))
+        entry.update({"default": index == 0, "config": config})
+        registry[name] = entry
+    agent_dir = Path(root) / "agents"
+    agent_dir.mkdir(parents=True, exist_ok=True)
+    (agent_dir / "agents.json").write_text(json.dumps(registry))
+
+
+_real_subprocess_run = subprocess.run
+
+
+def _run_worker_fixture_compat(command, *args, **kwargs):
+    """Keep older integration fixtures runnable while their setup is migrated."""
+    parts = list(map(str, command)) if isinstance(command, (list, tuple)) else []
+    if len(parts) >= 2 and Path(parts[-1]).name == "worker.sh":
+        root = Path(kwargs.get("cwd") or Path(parts[-1]).parent)
+        legacy = root / ".worker.env"
+        child_env = dict(kwargs.get("env") or os.environ)
+        if legacy.is_file():
+            settings = {}
+            for line in legacy.read_text().splitlines():
+                if not line.strip() or line.lstrip().startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                value = value.strip()
+                if value.startswith("'") and value.endswith("'"):
+                    value = value[1:-1]
+                elif value.startswith('"') and value.endswith('"'):
+                    fallback = re.search(r":-(.*)\}\"?$", value)
+                    value = fallback.group(1).rstrip('"') if fallback else value[1:-1]
+                settings[key] = value
+            if settings.get("AI_AGENTS_JSON"):
+                write_legacy_registry(root, settings.pop("AI_AGENTS_JSON"))
+                if _real_subprocess_run(["git", "-C", str(root), "rev-parse", "--is-inside-work-tree"],
+                                        capture_output=True, text=True).returncode == 0:
+                    _real_subprocess_run(["git", "-C", str(root), "add", "agents/agents.json"], check=True)
+                    if _real_subprocess_run(["git", "-C", str(root), "diff", "--cached", "--quiet"]).returncode:
+                        _real_subprocess_run(["git", "-C", str(root), "-c", "user.name=Fixture",
+                                              "-c", "user.email=fixture@example.invalid",
+                                              "commit", "-m", "test: configure agent registry"],
+                                             check=True, capture_output=True)
+            child_env.update(settings)
+            kwargs["env"] = child_env
+    return _real_subprocess_run(command, *args, **kwargs)
+
+
+subprocess.run = _run_worker_fixture_compat
 
 
 def copy_runtime_fixture(destination):
@@ -126,6 +192,38 @@ class InPlaceExecutionContractTests(unittest.TestCase):
 
 
 class AgentConfigContractTests(unittest.TestCase):
+    def test_registry_orders_every_default_agent_first_and_allows_multiple_defaults(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "agents.json"
+            path.write_text(json.dumps({
+                "backup": {"default": False, "adapter": "opaque", "command": "backup"},
+                "main": {"default": True, "adapter": "opaque", "command": "main"},
+                "secondary-default": {"default": True, "adapter": "opaque", "command": "secondary"},
+            }))
+
+            agents = runtime_module.load_agent_registry(path)
+
+            self.assertEqual({agent["id"] for agent in agents[:2]}, {"main", "secondary-default"})
+            self.assertEqual(agents[2]["id"], "backup")
+
+    def test_daemon_scans_single_named_agent_json_registry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "tasks.txt").write_text("")
+            config_dir = root / "agents"
+            config_dir.mkdir()
+            (config_dir / "agents.json").write_text(json.dumps({
+                "backup": {"default": False, "adapter": "opaque", "command": "backup"},
+                "main": {"default": True, "adapter": "opaque", "command": "main"},
+            }))
+            env = {**os.environ, "RUN_ONCE": "1", "POLL_INTERVAL": "0"}
+
+            result = runtime("daemon", "--root", root, env=env)
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("Registered adapters: 2", result.stdout)
+            self.assertNotIn("AI_AGENTS_JSON must", result.stderr)
+
     def test_daemon_accepts_multiple_unrecognized_adapter_registrations(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "project"
@@ -1981,6 +2079,10 @@ class WorkerIntegrationTests(unittest.TestCase):
             subprocess.run(["git", "init", "-q", str(root)], check=True)
 
             result = subprocess.run(["bash", str(root / "scripts/status.sh")], cwd=external,
+                                    env={**os.environ, "STATUS_FILE": "state/worker.json",
+                                         "TASKS_FILE": "queue/tasks.txt",
+                                         "TASKS_DONE_FILE": "queue/tasks.done",
+                                         "PROGRESS_FILE": "queue/progress.log"},
                                     capture_output=True, text=True, timeout=10)
 
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -2019,10 +2121,6 @@ class WorkerIntegrationTests(unittest.TestCase):
             (root / "scripts").mkdir(parents=True)
             (root / "queue").mkdir()
             shutil.copy2(ROOT / "scripts/watch_worker.sh", root / "scripts/watch_worker.sh")
-            (root / ".worker.env").write_text(
-                "TASKS_FILE=queue/tasks.txt\nTASKS_DONE_FILE=queue/tasks.done\n"
-                "STATUS_FILE=queue/worker.json\nPROGRESS_FILE=queue/progress.log\n"
-            )
             (root / "queue/tasks.txt").write_text("")
             (root / "queue/tasks.done").write_text("[DONE] TASK-OLD\n")
             (root / "queue/progress.log").write_text(
@@ -2041,7 +2139,11 @@ class WorkerIntegrationTests(unittest.TestCase):
 
             result = subprocess.run(
                 ["bash", str(root / "scripts/watch_worker.sh"), "1", "0.01"],
-                cwd=root, capture_output=True, text=True, timeout=10,
+                cwd=root, env={**os.environ, "TASKS_FILE": "queue/tasks.txt",
+                               "TASKS_DONE_FILE": "queue/tasks.done",
+                               "STATUS_FILE": "queue/worker.json",
+                               "PROGRESS_FILE": "queue/progress.log"},
+                capture_output=True, text=True, timeout=10,
             )
 
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -2055,10 +2157,6 @@ class WorkerIntegrationTests(unittest.TestCase):
             (root / "scripts").mkdir(parents=True)
             (root / "queue").mkdir()
             shutil.copy2(ROOT / "scripts/watch_worker.sh", root / "scripts/watch_worker.sh")
-            (root / ".worker.env").write_text(
-                "TASKS_FILE=queue/tasks.txt\nTASKS_DONE_FILE=queue/tasks.done\n"
-                "STATUS_FILE=queue/worker.json\nPROGRESS_FILE=queue/progress.log\n"
-            )
             (root / "queue/tasks.txt").write_text("")
             (root / "queue/tasks.done").write_text("[DONE] TASK-RETRY\n")
             (root / "queue/progress.log").write_text(
@@ -2073,7 +2171,11 @@ class WorkerIntegrationTests(unittest.TestCase):
 
             result = subprocess.run(
                 ["bash", str(root / "scripts/watch_worker.sh"), "1", "0.01", "TASK-RETRY"],
-                cwd=root, capture_output=True, text=True, timeout=10,
+                cwd=root, env={**os.environ, "TASKS_FILE": "queue/tasks.txt",
+                               "TASKS_DONE_FILE": "queue/tasks.done",
+                               "STATUS_FILE": "queue/worker.json",
+                               "PROGRESS_FILE": "queue/progress.log"},
+                capture_output=True, text=True, timeout=10,
             )
 
             self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
@@ -2086,10 +2188,6 @@ class WorkerIntegrationTests(unittest.TestCase):
             (root / "scripts").mkdir(parents=True)
             (root / "queue").mkdir()
             shutil.copy2(ROOT / "scripts/watch_worker.sh", root / "scripts/watch_worker.sh")
-            (root / ".worker.env").write_text(
-                "TASKS_FILE=queue/tasks.txt\nTASKS_DONE_FILE=queue/tasks.done\n"
-                "STATUS_FILE=queue/worker.json\nPROGRESS_FILE=queue/progress.log\n"
-            )
             (root / "queue/tasks.txt").write_text("TASK-RETRY | LEVEL: 1\n")
             (root / "queue/tasks.done").write_text("[FAILED] TASK-RETRY [EXIT_1]\n")
             (root / "queue/progress.log").write_text(
@@ -2106,7 +2204,11 @@ class WorkerIntegrationTests(unittest.TestCase):
 
             result = subprocess.run(
                 ["bash", str(root / "scripts/watch_worker.sh"), "1", "0.01", "TASK-RETRY"],
-                cwd=root, capture_output=True, text=True, timeout=5,
+                cwd=root, env={**os.environ, "TASKS_FILE": "queue/tasks.txt",
+                               "TASKS_DONE_FILE": "queue/tasks.done",
+                               "STATUS_FILE": "queue/worker.json",
+                               "PROGRESS_FILE": "queue/progress.log"},
+                capture_output=True, text=True, timeout=5,
             )
 
             self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
@@ -2122,17 +2224,19 @@ class WorkerIntegrationTests(unittest.TestCase):
                 shutil.copy2(ROOT / name, root / name)
             (root / "scripts").mkdir()
             copy_runtime_fixture(root / "scripts/worker_runtime.py")
-            (root / ".worker.env").write_text(
-                "WORKER_ISOLATION=0\nRUN_ONCE=1\nPOLL_INTERVAL=0.01\n"
-            )
+            (root / "agents").mkdir()
+            (root / "agents/agents.json").write_text(json.dumps({
+                "primary": {"default": True, "adapter": "opaque", "command": "unused"}
+            }))
             (root / "tasks.txt").write_text("# no tasks\n")
             subprocess.run(["git", "init", "-q", str(root)], check=True)
             subprocess.run(["git", "-C", str(root), "config", "user.name", "Worker Test"], check=True)
             subprocess.run(["git", "-C", str(root), "config", "user.email", "worker@example.invalid"], check=True)
-            subprocess.run(["git", "-C", str(root), "add", "worker.sh", "scripts", ".gitignore", "tasks.txt"], check=True)
+            subprocess.run(["git", "-C", str(root), "add", "worker.sh", "scripts", "agents", ".gitignore", "tasks.txt"], check=True)
             subprocess.run(["git", "-C", str(root), "commit", "-qm", "fixture"], check=True)
 
             result = subprocess.run(["bash", str(root / "worker.sh")], cwd=root,
+                                    env={**os.environ, "RUN_ONCE": "1", "POLL_INTERVAL": "0.01"},
                                     capture_output=True, text=True, timeout=30)
 
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -2148,7 +2252,6 @@ class WorkerIntegrationTests(unittest.TestCase):
                 shutil.copy2(ROOT / name, root / name)
             (root / "scripts").mkdir()
             copy_runtime_fixture(root / "scripts/worker_runtime.py")
-            (root / ".worker.env").write_text("WORKER_ISOLATION=0\n")
             pid_file = root / ".worker.pid"
             pid_file.write_text(f"{os.getpid()}\n")
 
@@ -2310,11 +2413,13 @@ class DaemonLifecycleTests(unittest.TestCase):
             " Path('output.txt').write_text('recovered')\n"
             " Path(sys.argv[sys.argv.index('--output-last-message')+1]).write_text(json.dumps({'outcome':'complete','changed':True,'commit_message':'feat: recover output'}))\n")
         self.fake.chmod(0o755)
+        write_legacy_registry(self.root, json.dumps([codex_registration("test", self.fake)]))
         for args in (("init", "-q"), ("config", "user.name", "Lifecycle Test"),
                      ("config", "user.email", "lifecycle@example.invalid"),
                      ("add", "."), ("commit", "-qm", "fixture")):
             subprocess.run(["git", "-C", str(self.root), *args], check=True, capture_output=True)
-        self.env = {**os.environ, "AI_AGENTS_JSON": json.dumps([codex_registration("test", self.fake)]),
+        self.env = {**os.environ, "RUN_ONCE": "0", "POLL_INTERVAL": "0.05",
+                    "STEP_BASE": "1", "STEP_PER_FILE": "0",
                     "PATH": f"{self.fake.parent}{os.pathsep}{os.environ['PATH']}",
                     "QUOTA_FLAG": str(self.flag)}
 
@@ -2378,7 +2483,6 @@ class DaemonLifecycleTests(unittest.TestCase):
         self.assertIn("awaiting Planner", json.loads((self.root / "worker.status").read_text())["current_task"])
 
     def test_all_quotas_exhausted_waits_then_recovers_without_daemon_restart(self):
-        self.env["AI_AGENTS_JSON"] = json.dumps([codex_registration("test", self.fake)])
         self.flag.touch()
         self.enqueue("TASK-QUOTA")
         self.start()
@@ -2397,9 +2501,14 @@ class DaemonLifecycleTests(unittest.TestCase):
             "import json,os,time\ntime.sleep(float(os.environ['AGENT_DELAY']))\n"
             "json.dump({'outcome':'failure'}, open(os.environ['NIGHTSHIFT_RESULT_FILE'],'w'))\n"
         )
-        self.env["AI_AGENTS_JSON"] = json.dumps([
+        write_legacy_registry(self.root, json.dumps([
             generic_registration("test", sys.executable, [str(wrapper)], {"AGENT_DELAY": "1"})
-        ])
+        ]))
+        subprocess.run(["git", "-C", str(self.root), "add", "agents/agents.json"], check=True)
+        subprocess.run(["git", "-C", str(self.root), "commit", "-qm", "test: configure timeout agent"], check=True)
+        self.env["TASK_TIMEOUT"] = "0.1"
+        self.env["POLL_INTERVAL"] = "0.05"
+        self.env["RUN_ONCE"] = "1"
         self.enqueue("TASK-TIMEOUT")
         (self.root / ".worker.env").write_text(
             "WORKER_ISOLATION=0\nRUN_ONCE=1\nPOLL_INTERVAL=0.05\n"
@@ -2446,6 +2555,7 @@ class TrialDemoIntegrationTests(unittest.TestCase):
             pause.parent.mkdir(parents=True, exist_ok=True)
             pause.touch()
             status = subprocess.run(["bash", str(target / "scripts/status.sh")], cwd=target,
+                                    env={**os.environ, "PAUSE_FILE": str(pause)},
                                     capture_output=True, text=True, check=True)
             self.assertIn("Pause Flag     : [PAUSED]", status.stdout)
             poll = subprocess.run([sys.executable, str(target / "scripts/worker_runtime.py"),
@@ -2484,14 +2594,17 @@ class InstallerIntegrationTests(unittest.TestCase):
             self.assertFalse((target / "worker_runtime.py").exists())
             self.assertTrue((target / "test/nightshift_worker/test_worker_runtime.py").is_file())
             self.assertTrue((target / "test/nightshift_worker/README.md").is_file())
-            self.assertTrue((target / ".worker.env").is_file())
+            self.assertFalse((target / ".worker.env").exists())
+            self.assertTrue((target / "agents/agents.json").is_file())
             self.assertIn(".worker-agent-state*.json", (target / ".gitignore").read_text())
             self.assertIn(".worker-score*.json", (target / ".gitignore").read_text())
             self.assertIn(".worker-score*.json.lock/", (target / ".gitignore").read_text())
             self.assertIn(".worker-agent-scores/", (target / ".gitignore").read_text())
             self.assertIn(".worker-agent-events.jsonl", (target / ".gitignore").read_text())
             self.assertIn(".trials/", (target / ".gitignore").read_text())
-            (target / ".worker.env").write_text("AI_CLI=agy\nCUSTOM_SETTING=preserve\n")
+            agent_registry = target / "agents/agents.json"
+            custom_registry = '{"custom":{"default":true,"adapter":"opaque","command":"custom"}}\n'
+            agent_registry.write_text(custom_registry)
             deployed_runtime.write_text("stale runtime\n")
             update = subprocess.run(["bash", str(ROOT / "install.sh"), str(target)],
                                     cwd=ROOT, capture_output=True, text=True, timeout=30)
@@ -2503,7 +2616,7 @@ class InstallerIntegrationTests(unittest.TestCase):
             worker_contract = (target / ".skills/universal-build-verify.md").read_text()
             self.assertNotIn("OPERATIONS.md", planner_skill + worker_contract)
             self.assertIn("full discovered graph", planner_skill)
-            self.assertEqual((target / ".worker.env").read_text(), "AI_CLI=agy\nCUSTOM_SETTING=preserve\n")
+            self.assertEqual(agent_registry.read_text(), custom_registry)
             self.assertEqual(deployed_runtime.read_bytes(), (ROOT / "scripts/worker_runtime.py").read_bytes())
             installed = subprocess.run(
                 [sys.executable, "-m", "unittest", "discover", "-s", "test", "-v"],

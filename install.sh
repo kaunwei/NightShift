@@ -84,12 +84,12 @@ else
   echo "  ✓ Installed worker.sh"
 fi
 
-cp -f "$SCRIPT_DIR/.worker.env.example" "$TARGET_DIR/.worker.env.example"
-if [ ! -f "$TARGET_DIR/.worker.env" ]; then
-  cp "$SCRIPT_DIR/.worker.env.example" "$TARGET_DIR/.worker.env"
-  echo "  ✓ Initialized .worker.env from example"
+mkdir -p "$TARGET_DIR/agents"
+if [ ! -f "$TARGET_DIR/agents/agents.json" ]; then
+  cp "$SCRIPT_DIR/agents/agents.json" "$TARGET_DIR/agents/agents.json"
+  echo "  ✓ Initialized agents/agents.json"
 else
-  echo "  • Preserved existing .worker.env (not overwritten)"
+  echo "  • Preserved existing agents/agents.json (not overwritten)"
 fi
 
 # ------------------------------------------------------------------------------

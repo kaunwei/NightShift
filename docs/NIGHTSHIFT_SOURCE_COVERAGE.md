@@ -14,22 +14,22 @@ For every later simplification, compare the changed source hashes and each affec
 | [.agents/skills/nightshift/explore/SKILL.md](../.agents/skills/nightshift/explore/SKILL.md) | 20acb1a3011c4b8babaab8bde25f1f775ff73507bff087529aab19e796191ef8 |
 | [.agents/skills/nightshift/planner/SKILL.md](../.agents/skills/nightshift/planner/SKILL.md) | c474f96c1471344a45fa4e19cf7212d6c70e80802428b5cc5a8450d6ed9e5109 |
 | [.skills/universal-build-verify.md](../.skills/universal-build-verify.md) | e65a72134c609d22936a9943b5edbdd4be350300ec57880da1e11031ae6157ef |
-| [.worker.env.example](../.worker.env.example) | 6cafefe9bd42529ab77ccef4983bb375564e8977928432ddeed7f44010c6516d |
-| [install.sh](../install.sh) | ec1007969ebdf4ddb6fe3091d32b488aefc9592c867b2b840ceeae0e2c1f77fb |
+| [agents/agents.json](../agents/agents.json) | ba92e28b8b08ef2a65e8fadfdc16e88a843ee8338591ca79f2b0f41659d50702 |
+| [install.sh](../install.sh) | 036e5ffc04345a67866be90b2aa158dda852c74df2cc4b65e121ed3aa3ed60d1 |
 | [scripts/extract_skeleton.sh](../scripts/extract_skeleton.sh) | 1ed2a93cee0194d1828336a50298ce3d7d8b981875dfaf36bd1adea469e5db01 |
 | [scripts/probe_line.sh](../scripts/probe_line.sh) | 6b56db490c2b82dc864617a88c82c49b75d0f759c3ace06dece014b2c2d87cd3 |
 | [scripts/reorder_queue.sh](../scripts/reorder_queue.sh) | 5cfc56907dafd4b22960199cfff8a413d8542a1251357867d7b5468bee88210a |
-| [scripts/status.sh](../scripts/status.sh) | 9ed2de26a61bc4f8d21f221b98b55d5c96cd3bde92b83c545e4b51361a78c533 |
-| [scripts/watch_worker.sh](../scripts/watch_worker.sh) | 0f3d5547b0e2aa1b75d8750466a3c7eb5c4dfe9718b17d833903c6b9940de3e1 |
-| [scripts/worker_runtime.py](../scripts/worker_runtime.py) | 79d9f03b7b61692d5324e9a53d57b1fff4ed586d4eb415fbd2ffcdb550a5245f |
-| [update.sh](../update.sh) | ec1007969ebdf4ddb6fe3091d32b488aefc9592c867b2b840ceeae0e2c1f77fb |
-| [test/test_worker_runtime.py](../test/test_worker_runtime.py) | bdc4a1201785618aed92f3e05bd7607fcf0b9918c96413f8da6c89c5dd0f607f |
-| [test/fixtures/trial-demo/README.md](../test/fixtures/trial-demo/README.md) | 500f619df0ea9ad4dbbbeece46b3db5e88f1390ab2c9c0a0bd7e65121e5abc14 |
-| [worker.sh](../worker.sh) | 58a0ac90f09b8515aead302901be70de93cf06301f06992de4f96169b7b476f5 |
+| [scripts/status.sh](../scripts/status.sh) | 2449d0718c5a364e9358947d88e0ab66723b43a4ae866cde9787d636d2f814f2 |
+| [scripts/watch_worker.sh](../scripts/watch_worker.sh) | a073c874ac4c05d9a6e976c682155d19be6ad613e6730575b515f8cce2597c0d |
+| [scripts/worker_runtime.py](../scripts/worker_runtime.py) | 705f17e5c54f7db4547f8f2a35e95662c6248bce3a1e797a1c1efde7fab7c5a8 |
+| [update.sh](../update.sh) | 036e5ffc04345a67866be90b2aa158dda852c74df2cc4b65e121ed3aa3ed60d1 |
+| [test/test_worker_runtime.py](../test/test_worker_runtime.py) | 39b805790927d912e1ea8a41e38bf2ad1bd7c6de057248d28106fef16506f8cf |
+| [test/fixtures/trial-demo/README.md](../test/fixtures/trial-demo/README.md) | 4384b3061cefc038ccc5b01f566f78afaca4984f7204a43e58f20b44d54db63b |
+| [worker.sh](../worker.sh) | 246ad3e355ce6972242f950a2063696fc526e8f68d484d62a2cd0e36cf22395e |
 
 ## Runtime function coverage
 
-All 58 top-level runtime functions are mapped below to numbered clauses in the spec's As-built behavior and limits section; nested closures are covered by their owning daemon/streaming function.
+All 59 top-level runtime functions are mapped below to numbered clauses in the spec's As-built behavior and limits section; nested closures are covered by their owning daemon/streaming function.
 
 | Function | As-built clause |
 | --- | --- |
@@ -55,6 +55,7 @@ All 58 top-level runtime functions are mapped below to numbered clauses in the s
 | [restore_task_front](../scripts/worker_runtime.py#L398) | 1–2 |
 | [insert_task_front](../scripts/worker_runtime.py#L420) | 1–2 |
 | [parse_agent_registry](../scripts/worker_runtime.py#L452) | 11 |
+| [load_agent_registry](../scripts/worker_runtime.py#L497) | 11 |
 | [adapter_callback](../scripts/worker_runtime.py#L506) | 11 |
 | [execute_adapter_protocol](../scripts/worker_runtime.py#L555) | 11 |
 | [should_failover_agent](../scripts/worker_runtime.py#L643) | 11 |

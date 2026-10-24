@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Portable, testable operations behind the worker.sh compatibility entry point.
 
-This module deliberately does not source .worker.env: Bash retains that interface.
+Worker settings come from the launcher environment; agent registrations are read
+from the single agents/agents.json registry.
 Each command receives explicit inputs so callers and tests exercise the same seam.
 """
 
@@ -454,12 +455,12 @@ def parse_agent_registry(raw, defaults=None):
         return []
     profiles = json.loads(raw)
     if not isinstance(profiles, list) or not profiles:
-        raise ValueError("AI_AGENTS_JSON must be a non-empty JSON array")
+        raise ValueError("agent registry must be a non-empty JSON array")
     agents, seen = [], set()
     for item in profiles:
         if not isinstance(item, dict):
-            raise ValueError("each AI_AGENTS_JSON entry must be an object")
-        unknown = set(item) - {"id", "adapter", "command", "model", "effort", "args", "env", "overrides"}
+            raise ValueError("each agent registry entry must be an object")
+        unknown = set(item) - {"id", "adapter", "command", "model", "effort", "args", "env", "overrides", "default"}
         if unknown:
             raise ValueError(f"agent profile has unknown fields: {', '.join(sorted(unknown))}")
         for key in ("id", "adapter", "command", "model", "effort"):
@@ -469,11 +470,11 @@ def parse_agent_registry(raw, defaults=None):
         adapter = item.get("adapter", "").strip()
         command = item.get("command", "").strip()
         if not agent_id or agent_id in seen:
-            raise ValueError("AI_AGENTS_JSON agent ids must be non-empty and unique")
+            raise ValueError("agent registry names must be non-empty and unique")
         if not adapter:
             raise ValueError(f"agent {agent_id} requires an adapter name")
         if not command:
-            raise ValueError(f"AI_AGENTS_JSON agent {agent_id} requires a command")
+            raise ValueError(f"agent {agent_id} requires a command")
         extra_args = item.get("args", [])
         environment = item.get("env", {})
         overrides = item.get("overrides", {})
@@ -494,6 +495,40 @@ def parse_agent_registry(raw, defaults=None):
             "model": str(overrides.get("model", "")),
         })
     return agents
+
+
+def load_agent_registry(config_file):
+    """Load the shared agent-name map and order default registrations first."""
+    path = Path(config_file)
+    if not path.is_file():
+        return []
+    profiles = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(profiles, dict):
+        raise ValueError(f"{path} must contain an object keyed by agent name")
+    normalized = []
+    for name, profile in profiles.items():
+        if not isinstance(name, str) or not name.strip() or not isinstance(profile, dict):
+            raise ValueError("agent registry entries must map non-empty names to objects")
+        unknown = set(profile) - {"default", "adapter", "command", "model", "effort", "args", "env", "config"}
+        if unknown:
+            raise ValueError(f"agent {name} has unknown fields: {', '.join(sorted(unknown))}")
+        if "default" in profile and not isinstance(profile["default"], bool):
+            raise ValueError(f"agent {name} default must be a boolean")
+        config = profile.get("config", {})
+        if not isinstance(config, dict):
+            raise ValueError(f"agent {name} config must be an object")
+        normalized.append({
+            "id": name,
+            "default": bool(profile.get("default", False)),
+            "adapter": profile.get("adapter", ""),
+            "command": profile.get("command", ""),
+            **{key: profile[key] for key in ("model", "effort") if key in profile},
+            "args": profile.get("args", []),
+            "env": profile.get("env", {}),
+            "overrides": config,
+        })
+    normalized.sort(key=lambda profile: not profile["default"])
+    return parse_agent_registry(json.dumps(normalized))
 
 
 ADAPTER_PROTOCOL_VERSION = 1
@@ -1259,11 +1294,12 @@ def worker_daemon(root):
                 else root / f".worker.{worker_id}.log")
     pid_file = (resolve("PID_FILE", ".worker.pid") if worker_id == "default"
                 else root / f".worker.{worker_id}.pid")
-    agents = parse_agent_registry(config.get("AI_AGENTS_JSON", ""))
+    agent_config_file = resolve("AGENT_CONFIG_FILE", "agents/agents.json")
+    agents = load_agent_registry(agent_config_file)
     if not agents and tasks_file.is_file() and any(
             line.strip() and not line.lstrip().startswith("#")
             for line in tasks_file.read_text(encoding="utf-8").splitlines()):
-        raise ValueError("AI_AGENTS_JSON must register at least one executable adapter")
+        raise ValueError(f"{agent_config_file} must register at least one executable adapter")
     safe_worker_id = re.sub(r"[^A-Za-z0-9_.-]", "_", worker_id)
     agent_state_path = resolve(
         "AI_AGENT_STATE_FILE", f".worker-agent-state.{safe_worker_id}.json")

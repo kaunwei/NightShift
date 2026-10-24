@@ -8,10 +8,6 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$SCRIPT_DIR" || exit 1
-if [ -f "$SCRIPT_DIR/.worker.env" ]; then
-  # shellcheck source=/dev/null
-  source "$SCRIPT_DIR/.worker.env"
-fi
 STATUS_FILE="${STATUS_FILE:-worker.status}"
 if [ "${WORKER_ID:-default}" != "default" ]; then
   STATUS_FILE="worker.${WORKER_ID}.status"
