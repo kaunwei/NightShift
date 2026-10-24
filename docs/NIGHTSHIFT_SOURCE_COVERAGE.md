@@ -1,6 +1,6 @@
 # NightShift source coverage index
 
-Baseline: 2026-10-24, updated for external adapters, per-registration scores, env-file-free configuration, in-place execution and on-demand trials. Companion to [NIGHTSHIFT_SPEC.md](NIGHTSHIFT_SPEC.md). This index records every NightShift-owned skill/reference, launcher, runtime, helper and installer/update entry. Matt skills are references only.
+Baseline: 2026-10-25, updated for external adapters, per-registration scores, env-file-free configuration, in-place execution and on-demand trials. Companion to [NIGHTSHIFT_SPEC.md](NIGHTSHIFT_SPEC.md). This index records every NightShift-owned skill/reference, launcher, runtime, helper and installer/update entry. Matt skills are references only.
 
 ## Preservation rule
 
@@ -14,22 +14,22 @@ For every later simplification, compare the changed source hashes and each affec
 | [.agents/skills/nightshift/planner/SKILL.md](../.agents/skills/nightshift/planner/SKILL.md) | c474f96c1471344a45fa4e19cf7212d6c70e80802428b5cc5a8450d6ed9e5109 |
 | [.gitignore](../.gitignore) | 6bcb06e87cf8ae73bc3d29f56d420ce9112db6693f8a002b59e6d7426354405c |
 | [.skills/universal-build-verify.md](../.skills/universal-build-verify.md) | e65a72134c609d22936a9943b5edbdd4be350300ec57880da1e11031ae6157ef |
-| [README.md](../README.md) | 0ce554fa199fb2cb3338b29e74980c2cb3394260aea5c7e8423eea47054c6a4c |
-| [scripts/adapters/agents.json](../scripts/adapters/agents.json) | ba92e28b8b08ef2a65e8fadfdc16e88a843ee8338591ca79f2b0f41659d50702 |
-| [install.sh](../install.sh) | 0aab0a7e4fe14cf35d1731f8eb8511dfd9c057521ba7faaf129ebd418f93d709 |
-| [scripts/adapters/agy.py](../scripts/adapters/agy.py) | ef8c29888ee224b876517b088e215a29f662ad53750d7a43394ada6e93e145d5 |
-| [scripts/adapters/codex.py](../scripts/adapters/codex.py) | 01365f98b3591ec5a2de3bd8e0d968fae86beb58460ae0ae320c1f938d6fecfa |
-| [scripts/adapters/generic.py](../scripts/adapters/generic.py) | 9ec0467e3f7322f117838963c77c7f483c0e6b5c0cc43ef64f48b78157483df7 |
+| [README.md](../README.md) | 72c08ee5176bfa0c9a9b50eb9b389e1f8f933717e389711d971a4c8940c1c5d4 |
+| [scripts/adapters/agents.json](../scripts/adapters/agents.json) | e5a63b68ec13521239e0a762c7daad710207767ff91c37a95ec0943520a6b07b |
+| [install.sh](../install.sh) | be34d79ad7d2511c8c5d93033dbb630e976d5c84a8d2bbe92f78ecf343932950 |
+| [scripts/adapters/agy.py](../scripts/adapters/agy.py) | 89f36d39014490b32c883df9ec1d0c4f6df37f6bee1302e1e2f77a863e1dff35 |
+| [scripts/adapters/codex.py](../scripts/adapters/codex.py) | af91815a4e5c5ca9eec4d65b121c0b5157b72018ddc92ce5d9b415f25afd2b2f |
+| [scripts/adapters/generic.py](../scripts/adapters/generic.py) | fa8626610244c5d1bb6c037a6e6e6a8490a2b04c3c571108ed9b915d99b348e4 |
 | [scripts/extract_skeleton.sh](../scripts/extract_skeleton.sh) | 1ed2a93cee0194d1828336a50298ce3d7d8b981875dfaf36bd1adea469e5db01 |
 | [scripts/probe_line.sh](../scripts/probe_line.sh) | 6b56db490c2b82dc864617a88c82c49b75d0f759c3ace06dece014b2c2d87cd3 |
 | [scripts/reorder_queue.sh](../scripts/reorder_queue.sh) | 5cfc56907dafd4b22960199cfff8a413d8542a1251357867d7b5468bee88210a |
 | [scripts/status.sh](../scripts/status.sh) | 2449d0718c5a364e9358947d88e0ab66723b43a4ae866cde9787d636d2f814f2 |
 | [scripts/watch_worker.sh](../scripts/watch_worker.sh) | a073c874ac4c05d9a6e976c682155d19be6ad613e6730575b515f8cce2597c0d |
-| [scripts/worker_runtime.py](../scripts/worker_runtime.py) | e95bdd6ffe1b08d9ec8716daef21d1031525138fad372a0dd2184e9c3df2cb0f |
+| [scripts/worker_runtime.py](../scripts/worker_runtime.py) | 9677b727768368249f15b3ed9b630e65af82cf4ef629834260d94260b80b9edc |
 | [test/README.md](../test/README.md) | d6d42b638942f532b6934c4d755f32fc45c9693b29a6628b3bdf328b85095942 |
 | [test/fixtures/trial-demo/README.md](../test/fixtures/trial-demo/README.md) | 4384b3061cefc038ccc5b01f566f78afaca4984f7204a43e58f20b44d54db63b |
-| [test/test_worker_runtime.py](../test/test_worker_runtime.py) | 74be96c7c8a1d171a1e7a562a49b325f6df0c5a87954ad3cd555a149552aab18 |
-| [update.sh](../update.sh) | 53b5b9d14a3dffa163ad2f765b21b77f067f56876614a0a21dfe0bdb612fa5af |
+| [test/test_worker_runtime.py](../test/test_worker_runtime.py) | 63672d53f3c173c4ed2a772e5c119acc94e45710b9756957ce7fab14bd16e977 |
+| [update.sh](../update.sh) | be34d79ad7d2511c8c5d93033dbb630e976d5c84a8d2bbe92f78ecf343932950 |
 | [worker.sh](../worker.sh) | 27617d89c2701c47e5b01c82cb2218589cb682f4653b9580e17df86ac284b28f |
 
 ## Runtime function coverage

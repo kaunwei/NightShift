@@ -36,7 +36,7 @@ def runtime(*args, env=None):
 
 
 def write_legacy_registry(root, raw):
-    """Translate old test fixtures to the new on-disk public registry seam."""
+    """Translate old integration fixtures to the public registry seam."""
     profiles = json.loads(raw)
     if not isinstance(profiles, list):
         profiles = [profiles]
@@ -45,10 +45,19 @@ def write_legacy_registry(root, raw):
         if not isinstance(profile, dict):
             profile = {"invalid": profile}
         name = profile.get("id", f"agent-{index}")
+        agent_config = dict(profile.get("config", profile.get("overrides", {})))
+        agent_config.update({key: profile[key] for key in ("model", "effort") if key in profile})
+        command = agent_config.pop("executable", profile.get("command", ""))
+        agent_args = agent_config.pop("args", profile.get("args", []))
+        agent_env = agent_config.pop("env", profile.get("env", {}))
         entry = {key: value for key, value in profile.items()
-                 if key not in {"id", "overrides", "config"}}
-        config = profile.get("config", profile.get("overrides", {}))
-        entry.update({"default": index == 0, "config": config})
+                 if key not in {"id", "adapter", "command", "args", "env", "model", "effort", "overrides", "config"}}
+        entry.update({
+            "default": index == 0,
+            "worker": {},
+            "agent": {"adapter": profile.get("adapter", ""), "command": command,
+                      "args": agent_args, "env": agent_env, "config": agent_config},
+        })
         registry[name] = entry
     agent_dir = Path(root) / "scripts/adapters"
     agent_dir.mkdir(parents=True, exist_ok=True)
@@ -192,13 +201,42 @@ class InPlaceExecutionContractTests(unittest.TestCase):
 
 
 class AgentConfigContractTests(unittest.TestCase):
+    def test_agent_config_separates_worker_timeout_from_real_agent_launch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "agents.json"
+            path.write_text(json.dumps({
+                "codex-fast": {
+                    "default": True,
+                    "worker": {"task_timeout_seconds": 73},
+                    "agent": {
+                        "adapter": "codex",
+                        "command": "/opt/bin/codex",
+                        "args": ["--profile", "fast"],
+                        "env": {"CODEX_ORG": "nightshift-test"},
+                        "config": {"model": "gpt-6-luna", "effort": "low"},
+                    },
+                },
+            }))
+
+            (agent,) = runtime_module.load_agent_registry(path)
+
+            self.assertEqual(agent["worker"]["task_timeout_seconds"], 73)
+            self.assertEqual(agent["adapter"], "codex")
+            self.assertEqual(agent["command"], "/opt/bin/codex")
+            self.assertEqual(agent["args"], ["--profile", "fast"])
+            self.assertEqual(agent["env"], {"CODEX_ORG": "nightshift-test"})
+            self.assertEqual(agent["overrides"], {
+                "model": "gpt-6-luna", "effort": "low",
+                "command": "/opt/bin/codex", "args": ["--profile", "fast"],
+            })
+
     def test_registry_orders_every_default_agent_first_and_allows_multiple_defaults(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "agents.json"
             path.write_text(json.dumps({
-                "backup": {"default": False, "adapter": "opaque", "command": "backup"},
-                "main": {"default": True, "adapter": "opaque", "command": "main"},
-                "secondary-default": {"default": True, "adapter": "opaque", "command": "secondary"},
+                "backup": {"default": False, "worker": {}, "agent": {"adapter": "opaque", "command": "backup"}},
+                "main": {"default": True, "worker": {}, "agent": {"adapter": "opaque", "command": "main"}},
+                "secondary-default": {"default": True, "worker": {}, "agent": {"adapter": "opaque", "command": "secondary"}},
             }))
 
             agents = runtime_module.load_agent_registry(path)
@@ -213,8 +251,8 @@ class AgentConfigContractTests(unittest.TestCase):
             config_dir = root / "scripts/adapters"
             config_dir.mkdir(parents=True)
             (config_dir / "agents.json").write_text(json.dumps({
-                "backup": {"default": False, "adapter": "opaque", "command": "backup"},
-                "main": {"default": True, "adapter": "opaque", "command": "main"},
+                "backup": {"default": False, "worker": {}, "agent": {"adapter": "opaque", "command": "backup"}},
+                "main": {"default": True, "worker": {}, "agent": {"adapter": "opaque", "command": "main"}},
             }))
             env = {**os.environ, "RUN_ONCE": "1", "POLL_INTERVAL": "0"}
 
@@ -2226,7 +2264,8 @@ class WorkerIntegrationTests(unittest.TestCase):
             copy_runtime_fixture(root / "scripts/worker_runtime.py")
             (root / "scripts/adapters").mkdir(parents=True, exist_ok=True)
             (root / "scripts/adapters/agents.json").write_text(json.dumps({
-                "primary": {"default": True, "adapter": "opaque", "command": "unused"}
+                "primary": {"default": True, "worker": {},
+                            "agent": {"adapter": "opaque", "command": "unused"}}
             }))
             (root / "tasks.txt").write_text("# no tasks\n")
             subprocess.run(["git", "init", "-q", str(root)], check=True)
@@ -2259,7 +2298,7 @@ class WorkerIntegrationTests(unittest.TestCase):
             result = subprocess.run(["bash", str(root / "worker.sh")], cwd=root,
                                     capture_output=True, text=True, timeout=10)
 
-            self.assertEqual(result.returncode, 1)
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
             self.assertIn("already running", result.stderr)
             self.assertEqual(pid_file.read_text(), f"{os.getpid()}\n")
             self.assertFalse((root / "tasks.txt").exists())
@@ -2608,7 +2647,11 @@ class InstallerIntegrationTests(unittest.TestCase):
             self.assertIn(".worker-agent-events.jsonl", (target / ".gitignore").read_text())
             self.assertIn(".trials/", (target / ".gitignore").read_text())
             agent_registry = target / "scripts/adapters/agents.json"
-            custom_registry = '{"custom":{"default":true,"adapter":"opaque","command":"custom"}}\n'
+            custom_registry = json.dumps({"custom": {
+                "default": True, "adapter": "codex", "command": "python3",
+                "args": ["scripts/adapters/codex.py"],
+                "config": {"executable": "/opt/bin/codex", "model": "custom-model", "effort": "low"},
+            }}) + "\n"
             legacy_registry = target / "agents/agents.json"
             legacy_registry.parent.mkdir()
             legacy_registry.write_text(custom_registry)
@@ -2627,13 +2670,23 @@ class InstallerIntegrationTests(unittest.TestCase):
             worker_contract = (target / ".skills/universal-build-verify.md").read_text()
             self.assertNotIn("OPERATIONS.md", planner_skill + worker_contract)
             self.assertIn("full discovered graph", planner_skill)
-            self.assertEqual(agent_registry.read_text(), custom_registry)
+            migrated_registry = json.loads(agent_registry.read_text())
+            self.assertEqual(migrated_registry["custom"], {
+                "default": True,
+                "worker": {"task_timeout_seconds": 1800},
+                "agent": {"adapter": "codex", "command": "/opt/bin/codex", "args": [],
+                          "env": {}, "config": {"model": "custom-model", "effort": "low"}},
+            })
             self.assertFalse(legacy_registry.exists())
             self.assertFalse((target / ".worker.env.example").exists())
             self.assertEqual((target / "update.sh").read_bytes(), (ROOT / "update.sh").read_bytes())
             self.assertEqual(deployed_runtime.read_bytes(), (ROOT / "scripts/worker_runtime.py").read_bytes())
             # Once migrated, updates preserve the current config exactly.
-            preserved_registry = '{"custom":{"default":true,"adapter":"opaque","command":"changed"}}\n'
+            preserved_registry = json.dumps({"custom": {
+                "default": True, "worker": {"task_timeout_seconds": 91},
+                "agent": {"adapter": "opaque", "command": "changed", "args": [],
+                          "env": {}, "config": {"model": "retained"}},
+            }}) + "\n"
             agent_registry.write_text(preserved_registry)
             second_update = subprocess.run(["bash", str(ROOT / "install.sh"), str(target)],
                                            cwd=ROOT, capture_output=True, text=True, timeout=30)

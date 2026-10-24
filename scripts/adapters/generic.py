@@ -24,7 +24,7 @@ def get_config(value):
     overrides = value.get("overrides", {})
     return {"protocol_version": 1, "initial_score": int(overrides.get("initial_score", 3)),
             "limits": {"poll_interval_seconds": .25, "callback_timeout_seconds": 30},
-            "configuration": {"executable": overrides.get("executable", ""),
+            "configuration": {"executable": overrides.get("command", overrides.get("executable", "")),
                               "args": overrides.get("args", []),
                               "model": overrides.get("model", ""),
                               "effort": overrides.get("effort", ""),

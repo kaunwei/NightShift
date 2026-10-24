@@ -29,7 +29,8 @@ def config(request):
                               "effort": overrides.get("effort", "medium"),
                               "mode": overrides.get("mode", "accept-edits"),
                               "sandbox": overrides.get("sandbox", "0"),
-                              "executable": overrides.get("executable", "agy"),
+                              "executable": overrides.get("command", overrides.get("executable", "agy")),
+                              "agent_args": overrides.get("args", []),
                               "additional_dirs": overrides.get("additional_dirs", ""),
                               "extra_args": overrides.get("extra_args", []),
                               "execution_timeout_seconds": overrides.get("execution_timeout_seconds", 1800),
@@ -63,6 +64,10 @@ def start(request):
     if not isinstance(extra_args, list) or not all(isinstance(arg, str) for arg in extra_args):
         raise ValueError("AgY extra_args must be a string array")
     argv.extend(extra_args)
+    agent_args = cfg.get("agent_args", [])
+    if not isinstance(agent_args, list) or not all(isinstance(arg, str) for arg in agent_args):
+        raise ValueError("AgY agent args must be a string array")
+    argv.extend(agent_args)
     try:
         help_text = subprocess.run([cfg["executable"], "--help"], cwd=request["working_directory"],
                                    capture_output=True, text=True, timeout=10).stdout

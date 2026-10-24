@@ -10,6 +10,7 @@ import argparse
 from datetime import datetime, timezone
 import hashlib
 import json
+import math
 import os
 import platform
 from pathlib import Path
@@ -509,26 +510,60 @@ def load_agent_registry(config_file):
     for name, profile in profiles.items():
         if not isinstance(name, str) or not name.strip() or not isinstance(profile, dict):
             raise ValueError("agent registry entries must map non-empty names to objects")
-        unknown = set(profile) - {"default", "adapter", "command", "model", "effort", "args", "env", "config"}
+        unknown = set(profile) - {"default", "worker", "agent"}
         if unknown:
             raise ValueError(f"agent {name} has unknown fields: {', '.join(sorted(unknown))}")
         if "default" in profile and not isinstance(profile["default"], bool):
             raise ValueError(f"agent {name} default must be a boolean")
-        config = profile.get("config", {})
+        worker = profile.get("worker", {})
+        agent = profile.get("agent")
+        if not isinstance(worker, dict):
+            raise ValueError(f"agent {name} worker config must be an object")
+        worker_unknown = set(worker) - {"task_timeout_seconds"}
+        if worker_unknown:
+            raise ValueError(f"agent {name} worker config has unknown fields: {', '.join(sorted(worker_unknown))}")
+        timeout = worker.get("task_timeout_seconds")
+        if timeout is not None and (isinstance(timeout, bool) or not isinstance(timeout, (int, float))
+                                    or not math.isfinite(timeout) or timeout <= 0):
+            raise ValueError(f"agent {name} worker.task_timeout_seconds must be a positive number")
+        if not isinstance(agent, dict):
+            raise ValueError(f"agent {name} requires an agent config object")
+        agent_unknown = set(agent) - {"adapter", "command", "args", "env", "config"}
+        if agent_unknown:
+            raise ValueError(f"agent {name} agent config has unknown fields: {', '.join(sorted(agent_unknown))}")
+        adapter = agent.get("adapter", "")
+        command = agent.get("command", "")
+        if not isinstance(adapter, str) or not adapter.strip():
+            raise ValueError(f"agent {name} requires an adapter name")
+        if not isinstance(command, str) or not command.strip():
+            raise ValueError(f"agent {name} requires an agent command")
+        extra_args = agent.get("args", [])
+        environment = agent.get("env", {})
+        config = agent.get("config", {})
+        if not isinstance(extra_args, list) or not all(isinstance(arg, str) for arg in extra_args):
+            raise ValueError(f"agent {name} agent.args must be an array of strings")
+        if not isinstance(environment, dict) or not all(
+                isinstance(key, str) and isinstance(value, str) and key and "=" not in key
+                and "\0" not in key + value for key, value in environment.items()):
+            raise ValueError(f"agent {name} agent.env must map valid names to strings")
         if not isinstance(config, dict):
-            raise ValueError(f"agent {name} config must be an object")
+            raise ValueError(f"agent {name} agent.config must be an object")
+        for key in ("model", "effort"):
+            if key in config and not isinstance(config[key], str):
+                raise ValueError(f"agent {name} agent.config.{key} must be a string")
         normalized.append({
             "id": name,
             "default": bool(profile.get("default", False)),
-            "adapter": profile.get("adapter", ""),
-            "command": profile.get("command", ""),
-            **{key: profile[key] for key in ("model", "effort") if key in profile},
-            "args": profile.get("args", []),
-            "env": profile.get("env", {}),
-            "overrides": config,
+            "adapter": adapter.strip(),
+            "command": command.strip(),
+            "args": extra_args,
+            "env": environment,
+            "worker": worker,
+            "overrides": {**config, "command": command.strip(), "args": extra_args},
+            "model": config.get("model", ""),
         })
     normalized.sort(key=lambda profile: not profile["default"])
-    return parse_agent_registry(json.dumps(normalized))
+    return normalized
 
 
 ADAPTER_PROTOCOL_VERSION = 1
@@ -735,6 +770,9 @@ def execute_registered_agents(args, agents, state_path, rollback):
         args.recovery_failed = False
         attempt.adapter = agent["adapter"]
         attempt.executable = agent["command"]
+        attempt.adapter_command = sys.executable
+        attempt.adapter_args = [str(Path(__file__).resolve().parent / "adapters" / f"{agent['adapter']}.py")]
+        attempt.timeout = agent["worker"].get("task_timeout_seconds", args.timeout)
         attempt.model = agent["model"]
         attempt.extra_args = agent["args"]
         attempt.agent_env = agent["env"]
@@ -1136,8 +1174,8 @@ def execute_adapter_task(args):
     adapter_output_dir = Path(artifact_root) / attempt_id
     adapter_output_dir.mkdir(parents=True, exist_ok=True)
     prompt_path = Path(args.prompt_file)
-    adapter_command = args.executable
-    adapter_args = getattr(args, "extra_args", ())
+    adapter_command = getattr(args, "adapter_command", args.executable)
+    adapter_args = getattr(args, "adapter_args", getattr(args, "extra_args", ()))
     overrides = getattr(args, "agent_overrides", None)
     if overrides is None:
         try:

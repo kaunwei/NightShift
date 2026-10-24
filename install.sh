@@ -105,6 +105,49 @@ else
     echo "  ✓ Removed obsolete agents/agents.json"
   fi
 fi
+python3 - "$TARGET_DIR/scripts/adapters/agents.json" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+registry = json.loads(path.read_text(encoding="utf-8"))
+if not isinstance(registry, dict):
+    raise SystemExit("agent registry must be a JSON object keyed by agent name")
+migrated = False
+for name, profile in registry.items():
+    if not isinstance(profile, dict) or "agent" in profile:
+        continue
+    if not {"adapter", "command"}.intersection(profile):
+        continue
+    config = profile.get("config", {})
+    if not isinstance(config, dict):
+        raise SystemExit(f"legacy agent {name} config must be an object")
+    config = dict(config)
+    adapter = profile.get("adapter", "")
+    legacy_adapter_launcher = (
+        Path(profile.get("command", "")).name in ("python", "python3")
+        and bool(profile.get("args"))
+        and Path(profile["args"][0]).name == f"{adapter}.py"
+    )
+    configured_executable = config.pop("executable", None)
+    command = configured_executable or profile.get("command", "")
+    if legacy_adapter_launcher and not configured_executable:
+        command = adapter
+    args = config.pop("args", [] if legacy_adapter_launcher else profile.get("args", []))
+    env = config.pop("env", profile.get("env", {}))
+    if not isinstance(args, list) or not all(isinstance(arg, str) for arg in args):
+        raise SystemExit(f"legacy agent {name} args must be an array of strings")
+    worker = profile.get("worker", {"task_timeout_seconds": 1800})
+    replacement = {"default": bool(profile.get("default", False)), "worker": worker,
+                   "agent": {"adapter": adapter, "command": command, "args": args,
+                             "env": env, "config": config}}
+    registry[name] = replacement
+    migrated = True
+if migrated:
+    path.write_text(json.dumps(registry, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    print("  ✓ Migrated legacy agent entries to separate worker and agent config")
+PY
 if [ -f "$TARGET_DIR/.worker.env.example" ]; then
   rm -f "$TARGET_DIR/.worker.env.example"
   echo "  ✓ Removed deprecated .worker.env.example"

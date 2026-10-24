@@ -64,20 +64,19 @@ The runtime implements configuration discovery, asynchronous `start`, local `sta
 
 ## Migrating a generic executable wrapper
 
-Set the profile adapter to `generic` and the command to Python with the shipped compatibility adapter as its argument. Put the previous wrapper executable and fixed arguments in its config:
+Set `agent.adapter` to `generic` and `agent.command` to the real wrapper executable. Put fixed wrapper arguments and environment in `agent.args` and `agent.env`:
 
 ```json
-{"custom":{"default":true,"adapter":"generic","command":"python3",
-  "args":["scripts/adapters/generic.py"],
-  "config":{"executable":"./my-worker","args":["--quiet"],
-    "model":"model-name","effort":"high","env":{"MY_SETTING":"value"}}}}
+{"custom":{"default":true,"worker":{"task_timeout_seconds":1800},
+  "agent":{"adapter":"generic","command":"./my-worker","args":["--quiet"],
+    "env":{"MY_SETTING":"value"},"config":{"model":"model-name","effort":"high"}}}}
 ```
 
 The wrapper receives `NIGHTSHIFT_PROMPT_FILE`, `NIGHTSHIFT_RESULT_FILE`, `NIGHTSHIFT_TASK_ID`, `NIGHTSHIFT_EXECUTION_KIND` (`main` or `closeout`), `NIGHTSHIFT_MODEL`, `NIGHTSHIFT_EFFORT`, `NIGHTSHIFT_ACTION_LIMIT`, `NIGHTSHIFT_EXECUTION_TIMEOUT`, `PORT`, and `TEST_PORT`. It must write one JSON object to the result path with a supported `outcome`; successful outcomes also require the standard evidence, change, and `commit_message` fields. The wrapper owns enforcement of action limits and duration using the supplied values. Text-only legacy wrappers fail with an actionable structured-result diagnostic; migrate them to write protocol JSON before switching registrations.
 
 ## Legacy configuration migration
 
-Put worker runtime settings in `worker.sh`. Put agent registrations in the single `scripts/adapters/agents.json` object, keyed by stable agent name. Each entry has `default`, `adapter`, `command`, optional `args` and `env`, and a `config` object passed unchanged to the selected adapter. The Worker orders entries with `default: true` first and retains JSON order for the rest. Codex and AgY settings belong in each entry's `config`; generic wrappers use the compatibility adapter above. Keep agent names stable so per-agent score history remains associated with the same capability. The legacy shared `.worker-score.json` is retained for inspection and is not assigned to an agent automatically. The installer deploys the adapter scripts and initializes `scripts/adapters/agents.json` only when it is missing; updates preserve the project's registry and migrate an existing `agents/agents.json` in place.
+Put worker-wide runtime settings in `worker.sh`. Put agent registrations in the single `scripts/adapters/agents.json` object, keyed by stable agent name. Each entry has `default`, a `worker` object for Worker limits such as `task_timeout_seconds`, and an `agent` object for adapter name, real executable command, optional arguments/environment, and provider-specific `config`. The Worker launches the selected Python protocol adapter internally; `agent.command` names the executable that adapter runs (for example `codex`, `agy`, or a generic wrapper), never the Python adapter launcher. The Worker orders entries with `default: true` first and retains JSON order for the rest. Codex and AgY settings belong in each `agent.config`; generic wrapper settings use the compatibility adapter above. Keep agent names stable so per-agent score history remains associated with the same capability. The legacy shared `.worker-score.json` is retained for inspection and is not assigned to an agent automatically. The installer deploys the adapter scripts and initializes `scripts/adapters/agents.json` only when it is missing; updates preserve the project's registry and migrate an existing `agents/agents.json` in place.
 
 NightShift can be deployed into an existing repository with `install.sh`. The script requires the target directory to exist and refuses to install into the NightShift source repository itself.
 
@@ -109,7 +108,7 @@ Helpers use their own defaults and environment overrides; they do not source the
 
 ## Configure and run
 
-On a fresh installation, `worker.sh` supplies worker runtime defaults and `scripts/adapters/agents.json` supplies the default Codex and backup AgY registrations. Configure at least one named agent before adding work to the queue. Each entry selects an adapter and command; its `config` object is passed to that adapter, and `default: true` makes it the first candidate. Failover follows the remaining JSON order after quota exhaustion or a confirmed timeout. The runtime restores the failed attempt and raises a durable Planner gate before a replacement starts. After Planner review, use the `agent-event-ack` CLI shown above with resolution `acknowledged` or `revised`, then let the watcher resolve the gate. When all registrations are quota-exhausted, the task remains queued until the exhausted state is reset; explicit `RUN_ONCE=1` exits instead of waiting.
+On a fresh installation, `worker.sh` supplies worker runtime defaults and `scripts/adapters/agents.json` supplies the default Codex and backup AgY registrations. Configure at least one named agent before adding work to the queue. Each entry sets its Worker timeout under `worker.task_timeout_seconds`, then selects an adapter and real executable command under `agent`; provider options go in `agent.config`. `default: true` makes it a first candidate. Failover follows the remaining JSON order after quota exhaustion or a confirmed timeout. The runtime restores the failed attempt and raises a durable Planner gate before a replacement starts. After Planner review, use the `agent-event-ack` CLI shown above with resolution `acknowledged` or `revised`, then let the watcher resolve the gate. When all registrations are quota-exhausted, the task remains queued until the exhausted state is reset; explicit `RUN_ONCE=1` exits instead of waiting.
 
 Use `/planner` for ticket planning and acceptance, `/explore` for read-only seam research, and `./worker.sh` to run the queue. The runtime handles one ticket at a time. It runs directly in the project directory and does not start a Planner agent or maintain an isolated Worker branch. See the [complete behavior specification](NIGHTSHIFT_SPEC.md) before relying on any workflow detail.
 

@@ -32,7 +32,8 @@ def config(request):
                               "effort": overrides.get("effort", "medium"),
                               "approval_mode": approval_mode,
                               "sandbox": overrides.get("sandbox", "workspace-write"),
-                              "executable": overrides.get("executable", "codex"),
+                              "executable": overrides.get("command", overrides.get("executable", "codex")),
+                              "agent_args": overrides.get("args", []),
                               "ephemeral": str(overrides.get("ephemeral", "1")),
                               "additional_dirs": overrides.get("additional_dirs", ""),
                               "extra_args": overrides.get("extra_args", [])}}
@@ -69,6 +70,10 @@ def start(request):
     if not isinstance(extra_args, list) or not all(isinstance(arg, str) for arg in extra_args):
         raise ValueError("Codex extra_args must be a string array")
     argv.extend(extra_args)
+    agent_args = cfg.get("agent_args", [])
+    if not isinstance(agent_args, list) or not all(isinstance(arg, str) for arg in agent_args):
+        raise ValueError("Codex agent args must be a string array")
+    argv.extend(agent_args)
     limit = int(request.get("limits", {}).get("action_limit", 12))
     runner = r'''import json, os, signal, subprocess, sys
 argv, cwd, env, log, message, result, status, limit = sys.argv[1:]
