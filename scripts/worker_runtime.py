@@ -82,6 +82,89 @@ def score_summary(state):
             "successes_in_window": len(state["success_window"])}
 
 
+def registered_agent_score_path(root, registration_id):
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", registration_id).strip("._-") or "agent"
+    digest = hashlib.sha256(registration_id.encode("utf-8")).hexdigest()[:12]
+    return Path(root) / f"{safe[:48]}-{digest}.json"
+
+
+def initialize_agent_score(root, registration_id, initial_score):
+    if not isinstance(initial_score, int) or not 1 <= initial_score <= 5:
+        raise ValueError("adapter get_config initial_score must be an integer from 1 through 5")
+    path = registered_agent_score_path(root, registration_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock = Path(f"{path}.lock")
+    for _ in range(100):
+        try:
+            lock.mkdir()
+            break
+        except FileExistsError:
+            time.sleep(0.05)
+    else:
+        raise TimeoutError(f"agent score lock remains held: {lock}")
+    try:
+        if path.exists():
+            state = read_score_state(path)
+            if state.get("registration_id") != registration_id:
+                raise ValueError(f"agent score identity mismatch: {path}")
+            return state
+        state = {"version": 1, "registration_id": registration_id,
+                 "score": initial_score, "success_window": [],
+                 "failures": {}, "feedback": []}
+        atomic_write(path, json.dumps(state, ensure_ascii=False, indent=2) + "\n")
+        return state
+    finally:
+        lock.rmdir()
+
+
+def read_agent_score_state(root, registration_id):
+    path = registered_agent_score_path(root, registration_id)
+    if not path.is_file():
+        raise ValueError(f"agent score has not been initialized by get_config: {registration_id}")
+    state = read_score_state(path)
+    if state.get("registration_id") != registration_id:
+        raise ValueError(f"agent score identity mismatch: {registration_id}")
+    return state
+
+
+def append_agent_event(path, event):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock = Path(f"{path}.lock")
+    for _ in range(100):
+        try:
+            lock.mkdir()
+            break
+        except FileExistsError:
+            time.sleep(0.05)
+    else:
+        raise TimeoutError(f"agent event lock remains held: {lock}")
+    try:
+        with path.open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps(event, ensure_ascii=False) + "\n")
+    finally:
+        lock.rmdir()
+
+
+def record_agent_score_result(root, registration_id, task_id, result, evidence="",
+                              events_path="", mid_batch=False):
+    path = registered_agent_score_path(root, registration_id)
+    before = read_agent_score_state(root, registration_id)
+    updated = record_score_result(path, task_id, result, evidence)
+    if before["score"] != updated["score"] and events_path:
+        append_agent_event(events_path, {
+            "event_id": str(uuid.uuid4()), "registration_id": registration_id,
+            "cause": "mid_batch_score_change" if mid_batch else "batch_score_change",
+            "task_id": task_id, "previous_registration_id": registration_id,
+            "current_registration_id": registration_id,
+            "previous_score": before["score"], "current_score": updated["score"],
+            "previous_level": score_task_level(before["score"]),
+            "current_level": score_task_level(updated["score"]),
+            "at": datetime.now(timezone.utc).isoformat(),
+        })
+    return {**updated, "registration_id": registration_id}
+
+
 def _record_score_result(path, task_id, result, evidence=""):
     """Update shared Worker score from planner feedback or hard runtime evidence."""
     if result not in ("accept", "reject", "no_fault", "hard_failure", "success"):
@@ -436,6 +519,7 @@ def execute_adapter_protocol(command, request, extra_args=(), trace=None,
             if current == "complete" and not status.get("result_location"):
                 raise ValueError("completed adapter status requires result_location")
             return {**status, "execution_id": execution_id,
+                    "adapter_initial_score": configuration["initial_score"],
                     "elapsed_seconds": time.monotonic() - started}
         if current != "running":
             raise ValueError(f"adapter returned unsupported status: {current!r}")
@@ -495,6 +579,8 @@ def execute_registered_agents(args, agents, state_path, rollback):
         attempt.extra_args = agent["args"]
         attempt.agent_env = agent["env"]
         attempt.agent_id = agent["id"]
+        args.executed_agent_id = agent["id"]
+        attempt.executed_agent_id = agent["id"]
         attempt.agent_overrides = agent["overrides"]
         for output_name in ("output_file", "result_file"):
             output = Path(getattr(attempt, output_name, "") or ".")
@@ -1025,7 +1111,7 @@ def execute_adapter_task(args):
     result_path.parent.mkdir(parents=True, exist_ok=True)
     prompt_path = Path(args.prompt_file)
     request = {
-        "registration_id": getattr(args, "agent_id", args.provider),
+        "registration_id": getattr(args, "agent_id", "") or args.provider,
         "overrides": {"model": args.model, "effort": args.effort,
                       **getattr(args, "agent_overrides", {})},
         "task_id": args.task_id,
@@ -1045,6 +1131,10 @@ def execute_adapter_task(args):
                                       getattr(args, "extra_args", ()),
                                       callback_timeout=getattr(args, "callback_timeout", 30),
                                       execution_timeout=getattr(args, "execution_timeout", args.timeout))
+    score_root = getattr(args, "agent_score_state_file", "")
+    if score_root and status.get("adapter_initial_score") is not None:
+        initialize_agent_score(score_root, request["registration_id"],
+                               status["adapter_initial_score"])
     if status.get("result_location"):
         result_path = Path(status["result_location"])
         if not result_path.is_file():
@@ -1294,6 +1384,8 @@ def worker_daemon(root):
         "WORKER_GHOST_STATE_FILE", f".worker-ghost-state.{safe_worker_id}.json")
     ghost_artifact_root = resolve("WORKER_GHOST_ARTIFACT_DIR", ".worker-ghosts")
     score_state_path = resolve("WORKER_SCORE_FILE", ".worker-score.json")
+    agent_score_state_path = resolve("WORKER_AGENT_SCORES_DIR", ".worker-agent-scores")
+    agent_events_path = resolve("WORKER_AGENT_EVENTS_FILE", ".worker-agent-events.jsonl")
     timeout_value = float(config.get("TASK_TIMEOUT", "1800"))
     timeout = int(timeout_value) if timeout_value.is_integer() else timeout_value
     step_base = int(config.get("STEP_BASE", "12"))
@@ -1476,11 +1568,23 @@ def worker_daemon(root):
                     base=base, progress_file=str(progress_file),
                     ghost_state_path=str(ghost_state_path),
                     ghost_artifact_root=str(ghost_artifact_root),
+                    agent_score_state_file=str(agent_score_state_path),
+                    agent_events_file=str(agent_events_path),
                     attempt_snapshot_root=str(root / ".scratch/attempts" /
                                               re.sub(r"[^A-Za-z0-9_.-]", "_", task_id)),
                     recovery_failed=False,
                     recovery_halted=False,
                 )
+
+                def record_task_score(result, evidence=""):
+                    registration_id = getattr(cli_args, "executed_agent_id", "")
+                    if (registration_id and registered_agent_score_path(
+                            agent_score_state_path, registration_id).is_file()):
+                        return record_agent_score_result(
+                            agent_score_state_path, registration_id, task_id,
+                            result, evidence, agent_events_path,
+                        )
+                    return record_score_result(score_state_path, task_id, result, evidence)
 
                 def recover_current_attempt(snapshot=None, attempt_id=None):
                     nonlocal final_state
@@ -1596,8 +1700,7 @@ def worker_daemon(root):
                     break
                 elif outcome == "timeout":
                     print(f"[{stamp_now}] [TIMEOUT] Task exceeded {timeout}s limit!")
-                    record_score_result(score_state_path, task_id, "hard_failure",
-                                        f"timeout after {timeout}s")
+                    record_task_score("hard_failure", f"timeout after {timeout}s")
                     if recover_current_attempt() is None:
                         break
                     summary = ("=" * 80 + f"\n[BLOCKED] {task_id}: Timeout Exceeded ({timeout}s)\n"
@@ -1611,7 +1714,7 @@ def worker_daemon(root):
                     reason = ("Codex/AgY action budget exhausted" if outcome == "step_budget"
                               else "Restricted ghost closeout failed or attempted implementation")
                     print(f"[{stamp_now}] [HARD FAILURE] {task_id}: {reason}")
-                    record_score_result(score_state_path, task_id, "hard_failure", reason)
+                    record_task_score("hard_failure", reason)
                     if recover_current_attempt() is None:
                         break
                     prepend_progress(progress_file,
@@ -1705,7 +1808,7 @@ def worker_daemon(root):
                         update_status("BLOCKED", f"{task} (GUARD VIOLATION)", duration,
                                       current, total, max(0, remaining - 1), percent, bar)
                     else:
-                        record_score_result(score_state_path, task_id, "success")
+                        record_task_score("success")
                         attempts_match = re.search(r"Attempts:\s*(\d+)", result_text)
                         if not attempts_match and progress_file.exists():
                             attempts_match = re.search(r"Attempts:\s*(\d+)", progress_file.read_text(encoding="utf-8", errors="replace"))
@@ -2328,11 +2431,15 @@ def main(argv=None):
     commands = parser.add_subparsers(dest="command", required=True)
     score_read = commands.add_parser("score-read")
     score_read.add_argument("--state", required=True)
+    score_read.add_argument("--agent-id", default="")
     score_record = commands.add_parser("score-record")
     score_record.add_argument("--state", required=True)
     score_record.add_argument("--task-id", required=True)
     score_record.add_argument("--result", choices=("accept", "reject", "no_fault", "hard_failure", "success"), required=True)
     score_record.add_argument("--evidence", default="")
+    score_record.add_argument("--agent-id", default="")
+    score_record.add_argument("--events", default="")
+    score_record.add_argument("--mid-batch", action="store_true")
     ghost_prompt = commands.add_parser("ghost-prompt")
     ghost_prompt.add_argument("--output", required=True)
     ghost_prompt.add_argument("--task-id", required=True)
@@ -2401,6 +2508,8 @@ def main(argv=None):
     task_cli.add_argument("--base", default="")
     task_cli.add_argument("--progress-file", default="progress.log")
     task_cli.add_argument("--ghost-state-file", default="")
+    task_cli.add_argument("--agent-id", default="")
+    task_cli.add_argument("--score-state-file", default="")
     attempt_snapshot = commands.add_parser("attempt-snapshot")
     attempt_snapshot.add_argument("--work-dir", required=True)
     attempt_snapshot.add_argument("--task-id", required=True)
@@ -2469,10 +2578,18 @@ def main(argv=None):
     daemon.add_argument("--root", required=True)
     args = parser.parse_args(argv)
     if args.command == "score-read":
-        state = read_score_state(args.state)
+        state = (read_agent_score_state(args.state, args.agent_id) if args.agent_id
+                 else read_score_state(args.state))
         print(json.dumps(score_summary(state), ensure_ascii=False))
     elif args.command == "score-record":
-        print(json.dumps(record_score_result(args.state, args.task_id, args.result, args.evidence), ensure_ascii=False))
+        if args.agent_id:
+            event_path = args.events or str(Path(args.state).parent / ".worker-agent-events.jsonl")
+            result = record_agent_score_result(args.state, args.agent_id, args.task_id,
+                                               args.result, args.evidence,
+                                               event_path, args.mid_batch)
+        else:
+            result = record_score_result(args.state, args.task_id, args.result, args.evidence)
+        print(json.dumps(result, ensure_ascii=False))
     elif args.command == "ghost-prompt":
         atomic_write(args.output, build_ghost_closeout_prompt(args.task_id, args.verify, args.progress_file))
     elif args.command == "queue-pop":
@@ -2490,6 +2607,8 @@ def main(argv=None):
     elif args.command == "task-cli":
         if args.ghost_state_file:
             args.ghost_state_path = args.ghost_state_file
+        if args.score_state_file:
+            args.agent_score_state_file = args.score_state_file
         return execute_task_cli(args)
     elif args.command == "attempt-snapshot":
         print(capture_attempt_baseline(args.work_dir, args.task_id, args.attempt_id,

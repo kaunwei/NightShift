@@ -6,6 +6,9 @@ worker*.status
 .worker-agent-state*.json
 .worker-score*.json
 .worker-score*.json.lock/
+.worker-agent-scores/
+.worker-agent-events.jsonl
+.worker-agent-events.jsonl.lock/
 .worker-ghost-state*.json
 .worker-ghost-state*.json.lock/
 .worker-ghosts/

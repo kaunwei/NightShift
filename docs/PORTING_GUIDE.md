@@ -30,6 +30,18 @@ The runtime may issue at most one private `closeout` per original task ID, inclu
 
 Before an execution attempt, the runtime snapshots the current commit, index, tracked dirty files, and untracked workspace files. If an attempt fails and the old execution has stopped, it archives its diff, status, commits, and changed files under `.scratch/failed_tasks/`, then restores the captured state before another registration starts. The archive is unique per attempt. If the baseline is missing, the reset fails, or exact restoration cannot be confirmed, the task is requeued and dispatch stops; the next adapter is not started. Runtime queue, score, agent, ghost, and progress state remains current across restoration.
 
+## Per-registration capability scores
+
+For protocol adapters, the first successful `get_config` initializes a score file for that registration from `initial_score` (1–5). Registration IDs are the score identity: two model profiles using one executable keep separate score, acceptance window, and failure history. No score is inferred from the adapter name. Feedback uses the existing arithmetic and can target a registration directly:
+
+```sh
+python3 scripts/worker_runtime.py score-read --state .worker-agent-scores --agent-id model-a
+python3 scripts/worker_runtime.py score-record --state .worker-agent-scores --agent-id model-a \
+  --task-id TASK-123 --result accept --events .worker-agent-events.jsonl
+```
+
+Add `--mid-batch` when a score change occurs before the next batch boundary; the durable event records cause, task, registration, previous/current score, and previous/current task level. Normal feedback records a batch-boundary cause. Ghost execution does not initialize or update its own score. Existing `.worker-score.json` remains intact for inspection; NightShift does not guess which registration owns its historical shared score. New score files live under `.worker-agent-scores/`.
+
 The runtime currently implements configuration discovery, asynchronous `start`, and local `status` for arbitrary adapter names. Cancellation and closeout are wired into the subsequent lifecycle migration tickets. Until those tickets are complete, configure migrated built-in providers on their existing paths.
 
 NightShift can be deployed into an existing repository with `install.sh`. The script requires the target directory to exist and refuses to install into the NightShift source repository itself.

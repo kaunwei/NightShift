@@ -74,6 +74,67 @@ class AgentConfigContractTests(unittest.TestCase):
             self.assertIn("Queue is empty", result.stdout)
 
 
+class AgentScoreContractTests(unittest.TestCase):
+    def test_get_config_initializes_independent_scores_for_each_registration(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = root / "repo"
+            repo.mkdir()
+            subprocess.run(["git", "init", "-q", str(repo)], check=True)
+            subprocess.run(["git", "-C", str(repo), "config", "user.name", "Score Test"], check=True)
+            subprocess.run(["git", "-C", str(repo), "config", "user.email", "score@example.invalid"], check=True)
+            (repo / "baseline.txt").write_text("baseline\n")
+            subprocess.run(["git", "-C", str(repo), "add", "baseline.txt"], check=True)
+            subprocess.run(["git", "-C", str(repo), "commit", "-qm", "baseline"], check=True)
+            adapter = root / "adapter.py"
+            adapter.write_text(
+                "import json, pathlib, sys\nrequest=json.load(sys.stdin); op=sys.argv[1]\n"
+                "if op == 'get_config': response={'protocol_version':1,'initial_score':3 if request['registration_id']=='low' else 5}\n"
+                "elif op == 'start':\n"
+                " pathlib.Path(request['result_path']).write_text(json.dumps({'outcome':'no_change','changed':False,'no_change_reason':'already satisfied'}))\n"
+                " p=pathlib.Path(request['output_dir']); (p/'status.json').write_text(json.dumps({'status':'complete','result_location':request['result_path']}))\n"
+                " response={'execution_id':request['registration_id'],'status_location':str(p/'status.json')}\n"
+                "else: response=json.loads(pathlib.Path(request['status_location']).read_text())\n"
+                "print(json.dumps(response))\n"
+            )
+            state_root = root / "agent-scores"
+            legacy_state = root / ".worker-score.json"
+            legacy_state.write_text(json.dumps({"version":1,"score":2,"success_window":[],"failures":{},"feedback":[]}))
+            def execute(registration_id):
+                return runtime("task-cli", "--provider", "shared-adapter", "--agent-id", registration_id,
+                               "--executable", sys.executable, "--extra-arg", adapter,
+                               "--work-dir", repo, "--prompt-file", root / "prompt.json",
+                               "--output-file", root / f"{registration_id}.log",
+                               "--result-file", root / f"{registration_id}.json",
+                               "--score-state-file", state_root, "--base", "HEAD",
+                               "--task-id", f"TASK-{registration_id}")
+            low = execute("low")
+            high = execute("high")
+            self.assertEqual(low.returncode, 0, low.stderr)
+            self.assertEqual(high.returncode, 0, high.stderr)
+            low_score = runtime("score-read", "--state", state_root, "--agent-id", "low")
+            high_score = runtime("score-read", "--state", state_root, "--agent-id", "high")
+            self.assertEqual(json.loads(low_score.stdout)["score"], 3)
+            self.assertEqual(json.loads(high_score.stdout)["score"], 5)
+            self.assertEqual(json.loads(legacy_state.read_text())["score"], 2)
+            events = root / "agent-events.jsonl"
+            for number in range(5):
+                recorded = runtime("score-record", "--state", state_root, "--agent-id", "low",
+                                   "--task-id", f"TASK-ACCEPT-{number}", "--result", "accept",
+                                   "--events", events, "--mid-batch")
+                self.assertEqual(recorded.returncode, 0, recorded.stderr)
+            low_after = json.loads(runtime("score-read", "--state", state_root,
+                                           "--agent-id", "low").stdout)
+            high_after = json.loads(runtime("score-read", "--state", state_root,
+                                            "--agent-id", "high").stdout)
+            self.assertEqual(low_after["score"], 4)
+            self.assertEqual(high_after["score"], 5)
+            event = json.loads(events.read_text().splitlines()[-1])
+            self.assertEqual(event["registration_id"], "low")
+            self.assertEqual(event["cause"], "mid_batch_score_change")
+            self.assertEqual((event["previous_score"], event["current_score"]), (3, 4))
+
+
 class AdapterDeadlineContractTests(unittest.TestCase):
     def run_adapter(self, status_body, cancel_response, callback_timeout="0.1", execution_timeout="2"):
         directory = tempfile.TemporaryDirectory()
@@ -1995,6 +2056,8 @@ class InstallerIntegrationTests(unittest.TestCase):
             self.assertIn(".worker-agent-state*.json", (target / ".gitignore").read_text())
             self.assertIn(".worker-score*.json", (target / ".gitignore").read_text())
             self.assertIn(".worker-score*.json.lock/", (target / ".gitignore").read_text())
+            self.assertIn(".worker-agent-scores/", (target / ".gitignore").read_text())
+            self.assertIn(".worker-agent-events.jsonl", (target / ".gitignore").read_text())
             (target / ".worker.env").write_text("AI_CLI=agy\nCUSTOM_SETTING=preserve\n")
             deployed_runtime.write_text("stale runtime\n")
             update = subprocess.run(["bash", str(ROOT / "install.sh"), str(target)],
