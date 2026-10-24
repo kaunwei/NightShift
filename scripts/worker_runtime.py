@@ -417,6 +417,38 @@ def restore_task_front(queue_path, task):
         lock.rmdir()
 
 
+def insert_task_front(queue_path, task):
+    """Insert a normal task before pending work under the queue claim lock."""
+    queue = Path(queue_path)
+    task_line = task.strip("\r\n")
+    task_id = task_line.split("|", 1)[0].strip()
+    if not task_id or "\n" in task_line or task_id.startswith("#"):
+        raise ValueError("queue insertion requires one task line with a task ID")
+
+    lock = Path(f"{queue}.lock")
+    for _ in range(50):
+        try:
+            lock.mkdir()
+            break
+        except FileExistsError:
+            time.sleep(0.1)
+    else:
+        raise TimeoutError(f"queue lock remains held: {lock}")
+
+    try:
+        lines = queue.read_text(encoding="utf-8").splitlines(keepends=True) if queue.exists() else []
+        queued_ids = {line.split("|", 1)[0].strip() for line in lines
+                      if line.strip() and not line.lstrip().startswith("#")}
+        if task_id in queued_ids:
+            return False
+        insertion = next((index for index, line in enumerate(lines)
+                          if line.strip() and not line.lstrip().startswith("#")), len(lines))
+        atomic_write(queue, "".join(lines[:insertion] + [task_line + "\n"] + lines[insertion:]))
+        return True
+    finally:
+        lock.rmdir()
+
+
 def parse_agent_registry(raw, defaults=None):
     if not raw.strip():
         return []
@@ -2253,6 +2285,9 @@ def main(argv=None):
     ghost_prompt.add_argument("--progress-file", default="progress.log")
     pop = commands.add_parser("queue-pop")
     pop.add_argument("path")
+    insert = commands.add_parser("queue-insert")
+    insert.add_argument("--tasks", required=True)
+    insert.add_argument("--task", required=True)
     field = commands.add_parser("task-field")
     field.add_argument("raw")
     field.add_argument("key", choices=FIELD_NAMES)
@@ -2381,6 +2416,8 @@ def main(argv=None):
         task = pop_task(args.path)
         if task:
             print(task)
+    elif args.command == "queue-insert":
+        print(json.dumps({"inserted": insert_task_front(args.tasks, args.task)}))
     elif args.command == "task-field":
         print(task_field(args.raw, args.key))
     elif args.command == "status-display":

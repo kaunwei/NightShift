@@ -23,6 +23,18 @@ Own the task graph and acceptance decision. Workers implement bounded tickets; t
 4. **Dispatch in dependency order.** Queue format: `TASK-ID | LEVEL: 1-3 | [AFTER: TASK-ID] | TARGET: paths | ACTION: behavior | VERIFY: command | FORBIDDEN_SHORTCUTS: ... | CONSTRAINTS: ...`. Enqueue the full discovered graph, blockers first. Prefer a verified prefactor followed by independently demonstrable slices. Use `[CODE: REFACTOR]` only for at most 5 files at score 3+, with no assertion decrease and structural proof deprecated symbols are gone; larger or score-1 work uses green-to-green `[CODE: EXPAND]`, `[CODE: MIGRATE]`, or `[CODE: CONTRACT]` tickets. Multi-interface refactors need inseparable intermediate builds, one cohesive interface/implementation/test slice, a Level-3 blueprint below score 3, and topology evidence from a current diagnostic or research report. After every 10 completed tasks, queue a review of those tasks and an architecture review of the last 20 commits' hotspots.
 5. **Review evidence and accept.** Read the task record and runtime mechanical audit. Confirm the requested behavior, verification evidence, target scope, and any report pointers. Use [`code-review`](../../engineering/code-review/SKILL.md) when the change warrants an independent review. Record one compact score result with an evidence pointer; the runtime changes stars, never the Planner.
 
+## On-demand trial delivery
+
+When a user asks to try the current program, create one ordinary queue task for the next task boundary. Give it a unique `TRIAL-...` task ID and include the target program, project-specific build command, a minimum runnable check, the delivery path, required files, and evidence. Insert it at the head of pending work with the runtime queue interface; the running task finishes first, an idle Worker claims it next, and existing queued tasks retain their order:
+
+```sh
+python3 scripts/worker_runtime.py queue-insert --tasks tasks.txt --task 'TRIAL-ID | LEVEL: 1 | TARGET: ... | ACTION: ... | VERIFY: ...'
+```
+
+`queue-insert` acquires the same queue lock as task claims, reads the current queue while holding that lock, and treats an already queued task ID as an idempotent success. Do not replace the queue from a stale copy to preempt work.
+
+The trial task builds the version present when it starts, after the preceding task has finished. Copy the runnable binary and any required standalone files into `.trials/<TASK-ID>/`; do not use a symlink to a development build output. Include a manifest or `TRIAL.md` with the source task, source commit and program version when available, exact build and runnable-check results, artifact paths, and a launch command that works from the target project. Use one directory per trial so later builds cannot overwrite prior deliveries. Add shared or development-tree resources and any uncertainty to the handoff. A successful runtime audit does not prove a runnable trial by itself: require evidence from the project-appropriate executable check. If build or check fails, report the failure and concrete repair target; do not point to an older binary. The runtime treats this as an ordinary task and continues with the rest of the queue after completion.
+
 ## Acceptance and score
 
 - Record `accept`, `reject`, or `no_fault` with `python3 scripts/worker_runtime.py score-record --state .worker-score.json --task-id TASK-ID --result RESULT --evidence FILE#Lx`. `no_fault` is for environment/scope failures, not unsuccessful implementation.

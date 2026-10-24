@@ -638,6 +638,43 @@ class AdapterGhostCloseoutContractTests(unittest.TestCase):
                 self.assertEqual((root / "tasks.txt").read_text(), task)
 
 
+class QueueInsertContractTests(unittest.TestCase):
+    def test_inserts_trial_task_before_pending_work_and_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tasks = Path(directory) / "tasks.txt"
+            original = "# task queue\nTASK-A | TARGET: a.py | ACTION: existing A\nTASK-B | TARGET: b.py | ACTION: existing B\n"
+            tasks.write_text(original)
+            trial = "TASK-TRIAL-1 | TARGET: app | ACTION: build trial\n"
+
+            inserted = runtime("queue-insert", "--tasks", tasks, "--task", trial)
+            repeated = runtime("queue-insert", "--tasks", tasks, "--task", trial)
+
+            self.assertEqual(inserted.returncode, 0, inserted.stderr)
+            self.assertEqual(repeated.returncode, 0, repeated.stderr)
+            self.assertEqual(tasks.read_text(),
+                             "# task queue\n" + trial + "TASK-A | TARGET: a.py | ACTION: existing A\n"
+                             "TASK-B | TARGET: b.py | ACTION: existing B\n")
+            self.assertIn('"inserted": false', repeated.stdout)
+
+    def test_insert_racing_with_claim_preserves_every_unclaimed_task(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tasks = Path(directory) / "tasks.txt"
+            tasks.write_text("TASK-A | ACTION: A\nTASK-B | ACTION: B\n")
+            trial = "TRIAL-RACE | ACTION: trial\n"
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                claim_future = executor.submit(runtime, "queue-pop", tasks)
+                insert_future = executor.submit(runtime, "queue-insert", "--tasks", tasks,
+                                                "--task", trial)
+                claimed, inserted = claim_future.result(), insert_future.result()
+
+            self.assertEqual(claimed.returncode, 0, claimed.stderr)
+            self.assertEqual(inserted.returncode, 0, inserted.stderr)
+            claimed_id = claimed.stdout.strip().split("|", 1)[0].strip()
+            pending_ids = [line.split("|", 1)[0].strip() for line in tasks.read_text().splitlines()
+                           if line.strip() and not line.lstrip().startswith("#")]
+            self.assertCountEqual([claimed_id, *pending_ids], ["TASK-A", "TASK-B", "TRIAL-RACE"])
+
+
 class QueueContractTests(unittest.TestCase):
     def test_pop_preserves_comments_and_only_removes_first_task(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1856,6 +1893,65 @@ class WorkerIntegrationTests(unittest.TestCase):
             self.assertEqual(calls.read_text().splitlines(), ["called"])
             self.assertFalse((root / ".worker-agent-state.default.json").exists())
 
+    def test_trial_artifact_is_delivered_before_the_next_normal_task_continues(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "repo"
+            root.mkdir()
+            for name in ("worker.sh", ".gitignore"):
+                shutil.copy2(ROOT / name, root / name)
+            (root / "scripts").mkdir()
+            copy_runtime_fixture(root / "scripts/worker_runtime.py")
+            trial_dir = ".trials/TRIAL-1"
+            trial_task = (
+                f"TRIAL-1 | LEVEL: 1 | TARGET: {trial_dir} | ACTION: build and deliver trial | "
+                f"VERIFY: test -x {trial_dir}/bin/app\n"
+            )
+            next_task = (
+                f"TASK-NEXT | LEVEL: 1 | TARGET: {trial_dir}/manifest.json | "
+                f"ACTION: verify trial delivery and continue | VERIFY: test -x {trial_dir}/bin/app\n"
+            )
+            (root / "tasks.txt").write_text(trial_task + next_task)
+            calls = Path(directory) / "calls"
+            fake = Path(directory) / "codex"
+            fake.write_text(
+                "#!/bin/sh\n"
+                "while [ \"$#\" -gt 0 ]; do\n"
+                "  if [ \"$1\" = --output-last-message ]; then result=$2; shift; fi\n"
+                "  shift\n"
+                "done\n"
+                f"count=0; [ -f {str(calls)!r} ] && count=$(cat {str(calls)!r}); count=$((count + 1)); echo $count > {str(calls)!r}\n"
+                "if [ \"$count\" = 1 ]; then\n"
+                f"  mkdir -p {trial_dir}/bin\n"
+                f"  printf '#!/bin/sh\\necho runnable\\n' > {trial_dir}/bin/app; chmod +x {trial_dir}/bin/app\n"
+                f"  printf '{{\"task_id\":\"TRIAL-1\",\"source_revision\":\"fixture\",\"launch_command\":\"{trial_dir}/bin/app\"}}\\n' > {trial_dir}/manifest.json\n"
+                "fi\n"
+                "printf '{\"outcome\":\"no_change\",\"changed\":false,\"no_change_reason\":\"trial artifact only\"}\\n' > \"$result\"\n"
+            )
+            fake.chmod(0o755)
+            (root / ".worker.env").write_text(
+                "RUN_ONCE=1\nPOLL_INTERVAL=0\nTASK_TIMEOUT=30\n"
+                "AI_AGENTS_JSON='" + json.dumps([codex_registration("trial", fake)]) + "'\n"
+            )
+            subprocess.run(["git", "-C", str(root), "init", "-q"], check=True)
+            subprocess.run(["git", "-C", str(root), "config", "user.name", "Trial Test"], check=True)
+            subprocess.run(["git", "-C", str(root), "config", "user.email", "trial@example.invalid"], check=True)
+            subprocess.run(["git", "-C", str(root), "add", "worker.sh", "scripts", ".gitignore", "tasks.txt"], check=True)
+            subprocess.run(["git", "-C", str(root), "commit", "-qm", "fixture"], check=True)
+
+            result = subprocess.run(["bash", str(root / "worker.sh")], cwd=root,
+                                    env={**os.environ, "PATH": f"{fake.parent}{os.pathsep}{os.environ['PATH']}"},
+                                    capture_output=True, text=True, timeout=45)
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual((root / f"{trial_dir}/bin/app").read_text(), "#!/bin/sh\necho runnable\n")
+            manifest = json.loads((root / f"{trial_dir}/manifest.json").read_text())
+            self.assertEqual(manifest["task_id"], "TRIAL-1")
+            self.assertEqual(manifest["launch_command"], f"{trial_dir}/bin/app")
+            self.assertIn("[DONE] TRIAL-1", (root / "tasks.done").read_text())
+            self.assertIn("[DONE] TASK-NEXT", (root / "tasks.done").read_text())
+            self.assertEqual((root / "tasks.txt").read_text(), "")
+            self.assertEqual((root / ".git" / "HEAD").exists(), True)
+
     def test_status_dashboard_uses_project_paths_from_an_external_cwd(self):
         with tempfile.TemporaryDirectory() as directory:
             external = Path(directory)
@@ -2350,6 +2446,8 @@ class InstallerIntegrationTests(unittest.TestCase):
             self.assertIn(".worker-score*.json.lock/", (target / ".gitignore").read_text())
             self.assertIn(".worker-agent-scores/", (target / ".gitignore").read_text())
             self.assertIn(".worker-agent-events.jsonl", (target / ".gitignore").read_text())
+            self.assertIn(".trials/", (target / ".gitignore").read_text())
+            self.assertIn(".trials/", (target / ".gitignore").read_text())
             (target / ".worker.env").write_text("AI_CLI=agy\nCUSTOM_SETTING=preserve\n")
             deployed_runtime.write_text("stale runtime\n")
             update = subprocess.run(["bash", str(ROOT / "install.sh"), str(target)],

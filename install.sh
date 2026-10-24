@@ -227,6 +227,7 @@ REQUIRED_IGNORES=(
   "tasks.txt.lock/"
   ".worker-tree/"
   ".preview/"
+  ".trials/"
   "tasks.done"
   "tasks.done.*"
 )
