@@ -12,22 +12,22 @@ For every later simplification, compare the changed source hashes and each affec
 | --- | --- |
 | [.agents/skills/nightshift/explore/SKILL.md](../.agents/skills/nightshift/explore/SKILL.md) | 20acb1a3011c4b8babaab8bde25f1f775ff73507bff087529aab19e796191ef8 |
 | [.agents/skills/nightshift/planner/OPERATIONS.md](../.agents/skills/nightshift/planner/OPERATIONS.md) | e7a8fc373ea3086b8c6e24d71779fce0a9f8854b590d5c55e676bd8582384980 |
-| [.agents/skills/nightshift/planner/SKILL.md](../.agents/skills/nightshift/planner/SKILL.md) | 0dfd5bd3fba964469afb8ad150d1851052ecb0ad51628abd37fc2d2d238c7555 |
-| [.skills/universal-build-verify.md](../.skills/universal-build-verify.md) | de6f1940b3af14bf3310cafdcbf648b0230a13be4f9591de510e3aeb9dde6b31 |
-| [.worker.env.example](../.worker.env.example) | aa1ec275e45463667662bec7042ed2de0d388cd1510d4eb6072179bd7f279da2 |
-| [install.sh](../install.sh) | 2894789967807618c088776d0e0e756c4be5f4b3884c65e59e3a5896291d9ecf |
+| [.agents/skills/nightshift/planner/SKILL.md](../.agents/skills/nightshift/planner/SKILL.md) | 3581bf2cf44e09d0044cb7d4cf0e0fe51ce5dd27791372837be817199a2a50f6 |
+| [.skills/universal-build-verify.md](../.skills/universal-build-verify.md) | e65a72134c609d22936a9943b5edbdd4be350300ec57880da1e11031ae6157ef |
+| [.worker.env.example](../.worker.env.example) | 6cafefe9bd42529ab77ccef4983bb375564e8977928432ddeed7f44010c6516d |
+| [install.sh](../install.sh) | 16e3223f98f69bbb5724b9710b461bf1c3a3ab231689182e06cccf0f01ec2c43 |
 | [scripts/extract_skeleton.sh](../scripts/extract_skeleton.sh) | 1ed2a93cee0194d1828336a50298ce3d7d8b981875dfaf36bd1adea469e5db01 |
 | [scripts/probe_line.sh](../scripts/probe_line.sh) | 6b56db490c2b82dc864617a88c82c49b75d0f759c3ace06dece014b2c2d87cd3 |
 | [scripts/reorder_queue.sh](../scripts/reorder_queue.sh) | 5cfc56907dafd4b22960199cfff8a413d8542a1251357867d7b5468bee88210a |
-| [scripts/status.sh](../scripts/status.sh) | 3ae98a6d11024cf865dc78e9a182bee0c0622149c391676471efe2e3884b6349 |
-| [scripts/watch_worker.sh](../scripts/watch_worker.sh) | 1428a8e732945280fee17e54975908c1d58637e0440159536268c212657018ef |
-| [scripts/worker_runtime.py](../scripts/worker_runtime.py) | 05f14ca021014e4459c09e4732b629442c15e81040c0a578f20fbfb491504f0e |
-| [update.sh](../update.sh) | d42f5dad5a21ee69b7f5269191987f3423778a2a164d26ca025e78832a970563 |
-| [worker.sh](../worker.sh) | c35fadf0729e61d2806c2bfbdc2e7bd07aede5602ae2353c2489efa0114a9fc0 |
+| [scripts/status.sh](../scripts/status.sh) | 9ed2de26a61bc4f8d21f221b98b55d5c96cd3bde92b83c545e4b51361a78c533 |
+| [scripts/watch_worker.sh](../scripts/watch_worker.sh) | 0f3d5547b0e2aa1b75d8750466a3c7eb5c4dfe9718b17d833903c6b9940de3e1 |
+| [scripts/worker_runtime.py](../scripts/worker_runtime.py) | 3379f394b5c2614413e2e5497f8ad3d758e3a104810751b5289cf63d035e2690 |
+| [update.sh](../update.sh) | 16e3223f98f69bbb5724b9710b461bf1c3a3ab231689182e06cccf0f01ec2c43 |
+| [worker.sh](../worker.sh) | 58a0ac90f09b8515aead302901be70de93cf06301f06992de4f96169b7b476f5 |
 
 ## Runtime function coverage
 
-All 45 top-level runtime functions are mapped below to numbered clauses in the spec's As-built behavior and limits section; nested closures are covered by their owning daemon/streaming function.
+All 57 top-level runtime functions are mapped below to numbered clauses in the spec's As-built behavior and limits section; nested closures are covered by their owning daemon/streaming function.
 
 | Function | As-built clause |
 | --- | --- |
@@ -36,46 +36,34 @@ All 45 top-level runtime functions are mapped below to numbered clauses in the s
 | [read_score_state](../scripts/worker_runtime.py#L58) | 12 |
 | [score_task_level](../scripts/worker_runtime.py#L74) | 12 |
 | [score_summary](../scripts/worker_runtime.py#L78) | 12 |
-| [_record_score_result](../scripts/worker_runtime.py#L83) | 12 |
-| [record_score_result](../scripts/worker_runtime.py#L113) | 12 |
-| [build_ghost_closeout_prompt](../scripts/worker_runtime.py#L130) | 10 |
-| [workspace_snapshot](../scripts/worker_runtime.py#L140) | 10 |
-| [run_codex_closeout](../scripts/worker_runtime.py#L158) | 10 |
-| [pop_task](../scripts/worker_runtime.py#L188) | 1–2 |
-| [restore_task_front](../scripts/worker_runtime.py#L213) | 1–2 |
-| [parse_agent_registry](../scripts/worker_runtime.py#L235) | 11 |
-| [quota_error](../scripts/worker_runtime.py#L264) | 11 |
-| [read_agent_state](../scripts/worker_runtime.py#L273) | 11 |
-| [execute_registered_agents](../scripts/worker_runtime.py#L283) | 11 |
-| [progress_bar](../scripts/worker_runtime.py#L321) | 1–2 |
-| [poll_next](../scripts/worker_runtime.py#L328) | 1–2 |
-| [task_field](../scripts/worker_runtime.py#L365) | 1–2 |
-| [write_status](../scripts/worker_runtime.py#L377) | 5 |
-| [display_status](../scripts/worker_runtime.py#L405) | 5 |
-| [codex_args](../scripts/worker_runtime.py#L427) | 6 |
-| [agy_args](../scripts/worker_runtime.py#L451) | 7–8 |
-| [count_agy_steps](../scripts/worker_runtime.py#L481) | 7–8 |
-| [count_codex_actions](../scripts/worker_runtime.py#L486) | 7–8 |
-| [is_codex_action_event](../scripts/worker_runtime.py#L501) | 7–8 |
-| [run_with_timeout](../scripts/worker_runtime.py#L511) | 9 |
-| [stream_with_timeout](../scripts/worker_runtime.py#L546) | 9 |
-| [execute_task_cli](../scripts/worker_runtime.py#L651) | 6–11 |
-| [build_task_prompt](../scripts/worker_runtime.py#L764) | 25 |
-| [env_bool](../scripts/worker_runtime.py#L790) | 26 |
-| [acquire_worker_lock](../scripts/worker_runtime.py#L794) | 3–5 |
-| [worker_daemon](../scripts/worker_runtime.py#L827) | 3–5 |
-| [git_audit](../scripts/worker_runtime.py#L1172) | 13–16 |
-| [run_verify](../scripts/worker_runtime.py#L1232) | 13–16 |
-| [first_report](../scripts/worker_runtime.py#L1268) | 13–16 |
-| [mechanical_audit](../scripts/worker_runtime.py#L1286) | 13–16 |
-| [git_at](../scripts/worker_runtime.py#L1372) | 17–18 |
-| [ensure_worktree](../scripts/worker_runtime.py#L1377) | 17–18 |
-| [publish_preview](../scripts/worker_runtime.py#L1410) | 17–18 |
-| [report_archive_path](../scripts/worker_runtime.py#L1447) | 19 |
-| [archive_active_reports](../scripts/worker_runtime.py#L1453) | 19 |
-| [archive_overlapping_reports](../scripts/worker_runtime.py#L1463) | 19 |
-| [rollback_failed_task](../scripts/worker_runtime.py#L1488) | 20 |
-| [main](../scripts/worker_runtime.py#L1537) | CLI inventory |
+| [_record_score_result](../scripts/worker_runtime.py#L293) | 12 |
+| [record_score_result](../scripts/worker_runtime.py#L323) | 12 |
+| [build_ghost_closeout_prompt](../scripts/worker_runtime.py#L340) | 10 |
+| [workspace_snapshot](../scripts/worker_runtime.py#L353) | 10 |
+| [pop_task](../scripts/worker_runtime.py#L373) | 1–2 |
+| [restore_task_front](../scripts/worker_runtime.py#L398) | 1–2 |
+| [parse_agent_registry](../scripts/worker_runtime.py#L420) | 11 |
+| [read_agent_state](../scripts/worker_runtime.py#L626) | 11 |
+| [execute_registered_agents](../scripts/worker_runtime.py#L639) | 11 |
+| [progress_bar](../scripts/worker_runtime.py#L755) | 1–2 |
+| [poll_next](../scripts/worker_runtime.py#L762) | 1–2 |
+| [task_field](../scripts/worker_runtime.py#L800) | 1–2 |
+| [write_status](../scripts/worker_runtime.py#L812) | 5 |
+| [display_status](../scripts/worker_runtime.py#L839) | 5 |
+| [run_with_timeout](../scripts/worker_runtime.py#L857) | 9 |
+| [build_task_prompt](../scripts/worker_runtime.py#L1140) | 25 |
+| [env_bool](../scripts/worker_runtime.py#L1173) | 26 |
+| [acquire_worker_lock](../scripts/worker_runtime.py#L1177) | 3–5 |
+| [worker_daemon](../scripts/worker_runtime.py#L1210) | 3–5 |
+| [git_audit](../scripts/worker_runtime.py#L1721) | 13–16 |
+| [run_verify](../scripts/worker_runtime.py#L1785) | 13–16 |
+| [first_report](../scripts/worker_runtime.py#L1821) | 13–16 |
+| [mechanical_audit](../scripts/worker_runtime.py#L1877) | 13–16 |
+| [report_archive_path](../scripts/worker_runtime.py#L1969) | 19 |
+| [archive_active_reports](../scripts/worker_runtime.py#L1975) | 19 |
+| [archive_overlapping_reports](../scripts/worker_runtime.py#L1985) | 19 |
+| [rollback_failed_task](../scripts/worker_runtime.py#L2164) | 20 |
+| [main](../scripts/worker_runtime.py#L2223) | CLI inventory |
 
 ## Complete public CLI inventory
 
@@ -89,11 +77,9 @@ All 45 top-level runtime functions are mapped below to numbered clauses in the s
 | adapter-exec / task-cli | Execute the configured protocol executable; enforce deadlines, cancellation, structured results, verification, script-owned commits, and one private closeout |
 | run-timeout | Execute argv, preserve normal exit, return 124 on timeout |
 | git-audit | Guard code and explanation for diff/scope/test/deletion failures |
-| ensure-worktree | Set up/reuse isolated worktree, report its path |
-| publish-preview | Export committed tree/build artifacts, write version, return commit |
 | archive-reports | Archive active nonhidden entries |
 | archive-overlapping-reports | Archive summaries containing changed-file paths |
-| rollback-failed-task | Preserve failed work and restore worktree paths with runtime exclusions |
+| rollback-failed-task | Preserve failed work and restore project-directory paths with runtime exclusions |
 | progress-prepend | Atomically put newest journal entry before history |
 | mechanical-audit | JSON status/error/verify_exit/messages; diagnostics on stderr |
 | poll-next | NUL-delimited 16-field paused/idle/task claim and progress/budget output |

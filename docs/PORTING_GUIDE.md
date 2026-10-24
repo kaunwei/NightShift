@@ -90,6 +90,10 @@ The installer copies or updates NightShift-owned files: `worker.sh`, `scripts/`,
 
 An update overwrites the deployed NightShift-owned runtime, helper, test, example, and skill files. It also removes a fixed list of legacy NightShift skill directories. Review the target repository's working tree before updating if those paths contain local edits. The installer does not edit the target's application code, `AGENTS.md`, `CLAUDE.md`, or `README.md`.
 
+## Upgrading from isolated Worker deployments
+
+The Worker now runs tasks in the target project directory. `WORKER_ISOLATION` may remain in an existing `.worker.env`, but the launcher/runtime ignore it. The installer does not delete `.worker-tree`, its branches, or `.preview`; those locations may contain unintegrated work. Before removing any of them yourself, inspect the worktree status and commits, compare its branch with the project branch, and review preview artifacts. Unmerged work is not copied into the project directory automatically. The status dashboard no longer reports preview versions.
+
 ## Configure and run
 
 On a fresh installation, `.worker.env` is initialized from `.worker.env.example`. On an existing installation, the current `.worker.env` is left intact; compare it with the updated example when new settings are introduced.

@@ -8,7 +8,6 @@ Each command receives explicit inputs so callers and tests exercise the same sea
 import argparse
 from datetime import datetime, timezone
 import hashlib
-from io import BytesIO
 import json
 import os
 import platform
@@ -19,7 +18,6 @@ import shutil
 import signal
 import sys
 import subprocess
-import tarfile
 import tempfile
 import time
 import threading
@@ -816,7 +814,6 @@ def write_status(args):
         "worker_id": args.worker_id,
         "os": args.os_name,
         "platform": args.platform,
-        "isolation": args.isolation == "true",
         "work_dir": args.work_dir,
         "state": args.state,
         "current_task": args.current_task or None,
@@ -855,10 +852,6 @@ def display_status(path):
           f"({data.get('elapsed_seconds', 0)}s elapsed)")
     print(f"Progress       : {data.get('progress', {}).get('bar', '[---]')}")
     print(f"Worker Score   : {data.get('worker_score', 5)}/5 | Recommended task level: L{data.get('recommended_task_level', 1)}")
-    if data.get("isolation"):
-        print(f"Isolation Mode : ENABLED (Sandboxed in {data.get('work_dir', '-')})")
-    else:
-        print("Isolation Mode : DISABLED (In-place execution)")
 
 
 def run_with_timeout(seconds, command):
@@ -1254,9 +1247,7 @@ def worker_daemon(root):
     step_per_file = int(config.get("STEP_PER_FILE", "5"))
     poll_interval = float(config.get("POLL_INTERVAL", "5"))
     worker_port = config.get("WORKER_PORT", "3001")
-    isolated = env_bool("WORKER_ISOLATION", "1")
-    work_dir = root / ".worker-tree" if isolated else root
-    isolation_flag = "true" if isolated else "false"
+    work_dir = root
     system = platform.system()
     linux_release = Path("/etc/os-release")
     is_ubuntu = (linux_release.is_file()
@@ -1288,7 +1279,7 @@ def worker_daemon(root):
                       percentage="0%", bar=""):
         status_args = argparse.Namespace(
             path=str(status_file), worker_id=worker_id, os_name=active_os,
-            platform=platform_name, isolation=isolation_flag, work_dir=str(work_dir),
+            platform=platform_name, work_dir=str(work_dir),
             state=state, current_task=task, elapsed=int(elapsed),
             current_index=int(current), total_tasks=int(total), remaining=int(remaining),
             percentage=percentage, bar=bar or progress_bar(int(current), int(total)),
@@ -1309,8 +1300,6 @@ def worker_daemon(root):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.touch(exist_ok=True)
         (root / ".reports/.archive").mkdir(parents=True, exist_ok=True)
-        if isolated:
-            ensure_worktree(root)
         inside = subprocess.run(["git", "-C", str(work_dir), "rev-parse", "--is-inside-work-tree"],
                                 capture_output=True, check=False).returncode == 0
         if inside:
@@ -1323,7 +1312,7 @@ def worker_daemon(root):
         print(" 24-Hour Unattended AI Worker Daemon Started")
         print(f" Worker ID: {worker_id} | OS: {platform_name} (CPUs: {os.cpu_count() or 4})")
         print(f" PID: {pid} | Registered adapters: {len(agents)}")
-        print(f" WorkDir: {work_dir} | Isolation: {isolation_flag}")
+        print(f" WorkDir: {work_dir}")
         print(f" Tasks: {tasks_file} | Status: {status_file}")
         print(f" Progress: {progress_file} | Log: {log_file}")
         print("=" * 78)
@@ -1709,12 +1698,6 @@ def worker_daemon(root):
                         prepend_progress(progress_file, f"[MECHANICAL_AUDIT] Status: PASS | Task: {task_id} | Verify_Exit: 0 | Tests_Run: >=1 | Whitelist: PASS | Tree: CLEAN | Diff: {diff_stat} | Attempts: {attempts} | Audit_NS: {time.time_ns()}")
                         if not (is_research or is_diagnostic):
                             archive_overlapping_reports(root, work_dir, base)
-                        if isolated:
-                            try:
-                                commit_hash = publish_preview(root, task_id, task)
-                                print(f"[WORKER] Staged preview drop-box at .preview/ (Commit: {commit_hash})")
-                            except (OSError, ValueError, subprocess.CalledProcessError) as error:
-                                print(f"[WORKER] Preview staging failed for {task_id}: {error}", file=sys.stderr)
                         new_done = done_count + 1
                         final_bar = progress_bar(new_done, total)
                         print(f"[{stamp()}] [SUCCESS] Task completed in {duration}s | {final_bar}")
@@ -1856,8 +1839,10 @@ def first_report(root, target):
 
 
 def publish_research_reports(root, work_dir, target):
-    """Copy declared report artifacts from the isolated worker tree to the project."""
+    """Copy declared report artifacts when the worker uses a separate tree."""
     root, work_dir = Path(root).resolve(), Path(work_dir).resolve()
+    if root == work_dir:
+        return
     source_reports = (work_dir / ".reports").resolve()
     for declared in (part.strip() for part in (target or "").split(",")):
         if not declared:
@@ -1979,87 +1964,6 @@ def mechanical_audit(args):
                     reason = "Regression Check Failed: Whole-suite regression tests failed."
     return {"status": guard_status, "error": reason, "verify_exit": verify_exit,
             "messages": messages}
-
-
-def git_at(directory, *argv, check=True):
-    return subprocess.run(["git", "-C", str(directory), *argv],
-                          check=check, capture_output=True)
-
-
-def ensure_worktree(root, branch="feature/worker-frontier"):
-    root = Path(root).resolve()
-    target = root / ".worker-tree"
-    if not (target / ".git").is_file():
-        if target.exists():
-            raise ValueError(f"worktree target exists but is not a Git worktree: {target}")
-        present = git_at(root, "show-ref", "--verify", "--quiet", f"refs/heads/{branch}", check=False)
-        if present.returncode:
-            git_at(root, "worktree", "add", "-b", branch, str(target), "HEAD")
-        else:
-            git_at(root, "worktree", "add", str(target), branch)
-    # Only advance the worker branch when the user's branch is ahead and the tree is clean.
-    ancestor = git_at(root, "merge-base", "--is-ancestor", branch, "HEAD", check=False)
-    if ancestor.returncode == 0 and not git_at(target, "status", "--porcelain").stdout:
-        source_head = git_at(root, "rev-parse", "HEAD").stdout.decode().strip()
-        target_head = git_at(target, "rev-parse", "HEAD").stdout.decode().strip()
-        if source_head != target_head:
-            git_at(target, "merge", "--ff-only", source_head)
-    for name in (".env", ".worker.env"):
-        source = root / name
-        if source.is_file():
-            shutil.copy2(source, target / name)
-    for name in ("node_modules", ".venv"):
-        source = root / name
-        destination = target / name
-        if source.is_dir() and not destination.exists() and not destination.is_symlink():
-            destination.symlink_to(source, target_is_directory=True)
-    reports = root / ".reports"
-    (reports / ".archive").mkdir(parents=True, exist_ok=True)
-    link = target / ".reports"
-    if link.is_symlink():
-        if link.resolve() != reports.resolve():
-            raise ValueError(f"worker report path points outside its managed report directory: {link}")
-        link.unlink()
-    if not link.exists():
-        link.mkdir(parents=True)
-    return target
-
-
-def publish_preview(root, task_id, title):
-    root = Path(root).resolve()
-    worktree = root / ".worker-tree"
-    preview = root / ".preview"
-    preview.mkdir(parents=True, exist_ok=True)
-    archive = git_at(worktree, "archive", "--format=tar", "HEAD").stdout
-    with tarfile.open(fileobj=BytesIO(archive)) as content:
-        for member in content:
-            destination = preview / member.name
-            if not destination.resolve().is_relative_to(preview.resolve()):
-                raise ValueError(f"unsafe archive path: {member.name}")
-            if member.isdir():
-                destination.mkdir(parents=True, exist_ok=True)
-            elif member.isfile():
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                with content.extractfile(member) as source, destination.open("wb") as output:
-                    shutil.copyfileobj(source, output)
-                destination.chmod(member.mode & 0o777)
-            elif member.issym():
-                link_target = (destination.parent / member.linkname).resolve()
-                if not link_target.is_relative_to(preview.resolve()):
-                    raise ValueError(f"unsafe archive link: {member.name}")
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                if destination.exists() or destination.is_symlink():
-                    destination.unlink()
-                destination.symlink_to(member.linkname)
-    for name in ("build/bin", "target/debug", "bin", "dist"):
-        source = worktree / name
-        if source.is_dir():
-            shutil.copytree(source, preview / name, dirs_exist_ok=True, symlinks=True)
-    commit = git_at(worktree, "rev-parse", "--short", "HEAD").stdout.decode().strip()
-    metadata = {"task_id": task_id, "commit": commit, "summary": title,
-                "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
-    atomic_write(preview / "version.json", json.dumps(metadata, ensure_ascii=False, indent=2) + "\n")
-    return commit
 
 
 def report_archive_path(root, timestamp, name):
@@ -2353,7 +2257,7 @@ def main(argv=None):
     field.add_argument("raw")
     field.add_argument("key", choices=FIELD_NAMES)
     status = commands.add_parser("status-write")
-    for name in ("path", "worker_id", "os_name", "platform", "isolation",
+    for name in ("path", "worker_id", "os_name", "platform",
                  "work_dir", "state", "current_task"):
         status.add_argument(name)
     for name in ("elapsed", "current_index", "total_tasks", "remaining"):
@@ -2414,13 +2318,6 @@ def main(argv=None):
     audit.add_argument("--constraints", default="")
     audit.add_argument("--title", default="")
     audit.add_argument("--level", type=int, default=1)
-    setup = commands.add_parser("ensure-worktree")
-    setup.add_argument("--root", required=True)
-    setup.add_argument("--branch", default="feature/worker-frontier")
-    preview = commands.add_parser("publish-preview")
-    preview.add_argument("--root", required=True)
-    preview.add_argument("--task-id", required=True)
-    preview.add_argument("--title", required=True)
     archive = commands.add_parser("archive-reports")
     archive.add_argument("--root", required=True)
     overlap = commands.add_parser("archive-overlapping-reports")
@@ -2517,10 +2414,6 @@ def main(argv=None):
         if reason:
             print(reason)
         return code
-    elif args.command == "ensure-worktree":
-        print(ensure_worktree(args.root, args.branch))
-    elif args.command == "publish-preview":
-        print(publish_preview(args.root, args.task_id, args.title))
     elif args.command == "archive-reports":
         archive_active_reports(args.root)
     elif args.command == "archive-overlapping-reports":

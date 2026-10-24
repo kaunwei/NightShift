@@ -33,14 +33,6 @@ else
   echo "Worker Status  : No worker.status found"
 fi
 
-# Check Preview Drop-box
-if [ -f ".preview/version.json" ]; then
-  PREV_TASK=$(grep -o '"task_id":[[:space:]]*"[^"]*"' .preview/version.json 2>/dev/null | cut -d'"' -f4 || echo "")
-  PREV_COMMIT=$(grep -o '"commit":[[:space:]]*"[^"]*"' .preview/version.json 2>/dev/null | cut -d'"' -f4 || echo "")
-  PREV_TIME=$(grep -o '"updated_at":[[:space:]]*"[^"]*"' .preview/version.json 2>/dev/null | cut -d'"' -f4 || echo "")
-  echo "Preview Ready  : $PREV_TASK ($PREV_COMMIT) updated at $PREV_TIME"
-fi
-
 if [ -f "$PAUSE_FILE" ]; then
   echo "Pause Flag     : [PAUSED] (PAUSE file detected - worker will hold after current task)"
 fi

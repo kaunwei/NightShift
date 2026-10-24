@@ -60,7 +60,7 @@ touch PAUSE                         # pause before the next ticket
 rm PAUSE                            # resume
 ```
 
-The queue reorder helper accepts a complete replacement queue from a file or standard input; it has no `prepend` subcommand. By default, the worker uses an isolated `.worker-tree` and publishes build/source artifacts to `.preview/` after a successful mechanical audit. Set `WORKER_ISOLATION=0` for in-place execution. A runtime audit PASS is not Planner acceptance, and preview publication does not merge work into the main checkout.
+The queue reorder helper accepts a complete replacement queue from a file or standard input; it has no `prepend` subcommand. Worker tasks execute directly in the project directory. Existing deployments may retain `WORKER_ISOLATION` in `.worker.env`; the setting is ignored. Upgrades preserve old `.worker-tree`, branches, and `.preview` contents so you can inspect or migrate unfinished work manually. A runtime audit PASS is not Planner acceptance.
 
 ## Regression tests
 

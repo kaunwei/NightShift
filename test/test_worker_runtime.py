@@ -87,6 +87,44 @@ class WorkerPromptContractTests(unittest.TestCase):
         self.assertNotIn("restore the clean tree", prompt)
 
 
+class InPlaceExecutionContractTests(unittest.TestCase):
+    def test_legacy_isolation_setting_does_not_create_or_select_worker_tree(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "tasks.txt").write_text("")
+            env = {**os.environ, "WORKER_ISOLATION": "1", "RUN_ONCE": "1",
+                   "POLL_INTERVAL": "0", "AI_AGENTS_JSON":
+                   json.dumps([{"id": "unused", "adapter": "opaque", "command": "unused"}])}
+
+            result = runtime("daemon", "--root", root, env=env)
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn(f"WorkDir: {root.resolve()}", result.stdout)
+            self.assertFalse((root / ".worker-tree").exists())
+            self.assertFalse((root / ".preview").exists())
+
+    @unittest.skipUnless((ROOT / "install.sh").is_file(), "source checkout only")
+    def test_installer_update_preserves_legacy_worker_data_and_environment(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "project"
+            root.mkdir()
+            (root / "worker.sh").write_text("legacy launcher\n")
+            (root / ".worker.env").write_text("WORKER_ISOLATION=1\nKEEP_ME=present\n")
+            (root / ".worker-tree").mkdir()
+            (root / ".worker-tree/unmerged.txt").write_text("unmerged work\n")
+            (root / ".preview").mkdir()
+            (root / ".preview/version.json").write_text("legacy preview\n")
+
+            result = subprocess.run(["bash", str(ROOT / "install.sh"), str(root)],
+                                    capture_output=True, text=True, timeout=30)
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual((root / ".worker.env").read_text(),
+                             "WORKER_ISOLATION=1\nKEEP_ME=present\n")
+            self.assertEqual((root / ".worker-tree/unmerged.txt").read_text(), "unmerged work\n")
+            self.assertEqual((root / ".preview/version.json").read_text(), "legacy preview\n")
+
+
 class AgentConfigContractTests(unittest.TestCase):
     def test_daemon_accepts_multiple_unrecognized_adapter_registrations(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -872,7 +910,7 @@ class WorkerScoreTests(unittest.TestCase):
             status = Path(directory) / "worker.status"
             task = 'TASK-1 | GOAL: write "a\\b"\nthen test'
             result = runtime(
-                "status-write", status, "default", "mac", "macOS", "true",
+                "status-write", status, "default", "mac", "macOS",
                 Path(directory) / 'folder "quoted"', "RUNNING", task,
                 "3", "1", "2", "1", "50%", "[###---]", "42",
                 "gpt-6-luna", "codex", "1800",
@@ -881,7 +919,7 @@ class WorkerScoreTests(unittest.TestCase):
             data = json.loads(status.read_text())
             self.assertEqual(data["current_task"], task)
             self.assertEqual(data["work_dir"], str(Path(directory) / 'folder "quoted"'))
-            self.assertIs(data["isolation"], True)
+            self.assertNotIn("isolation", data)
             self.assertEqual(data["model"], "gpt-6-luna")
             self.assertEqual(data["progress"]["remaining"], 1)
             display = runtime("status-display", status)
@@ -1318,63 +1356,6 @@ class MechanicalAuditContractTests(unittest.TestCase):
             self.assertEqual(audit["verify_exit"], 124)
 
 
-class IsolationPreviewContractTests(unittest.TestCase):
-    def test_worktree_setup_mirrors_config_and_preview_publishes_commit(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory) / "repo"
-            root.mkdir()
-            subprocess.run(["git", "init", "-q", str(root)], check=True)
-            def git(*args):
-                return subprocess.run(["git", "-C", str(root), *args],
-                                      check=True, capture_output=True, text=True).stdout.strip()
-            git("config", "user.name", "Preview Test")
-            git("config", "user.email", "preview@example.invalid")
-            (root / "source.txt").write_text("baseline\n")
-            (root / ".env").write_text("SAMPLE=1\n")
-            (root / ".gitignore").write_text(".env\n.worker.env\n.reports\n")
-            git("add", "source.txt", ".gitignore")
-            git("commit", "-qm", "baseline")
-
-            setup = runtime("ensure-worktree", "--root", root)
-            self.assertEqual(setup.returncode, 0, setup.stderr)
-            tree = root / ".worker-tree"
-            self.assertEqual((tree / "source.txt").read_text(), "baseline\n")
-            self.assertEqual((tree / ".env").read_text(), "SAMPLE=1\n")
-            self.assertTrue((tree / ".reports").is_dir())
-            self.assertFalse((tree / ".reports").is_symlink())
-            git_dir = subprocess.run(["git", "-C", str(tree), "rev-parse", "--git-path", "ORIG_HEAD"],
-                                     check=True, capture_output=True, text=True).stdout.strip()
-            orig_head = tree / git_dir
-            original_metadata = (orig_head.read_bytes(), orig_head.stat().st_mtime_ns) if orig_head.exists() else None
-            self.assertEqual(runtime("ensure-worktree", "--root", root).returncode, 0)
-            updated_metadata = (orig_head.read_bytes(), orig_head.stat().st_mtime_ns) if orig_head.exists() else None
-            self.assertEqual(updated_metadata, original_metadata,
-                             "an identical HEAD must not run git merge and rewrite ORIG_HEAD")
-
-            (root / "source.txt").write_text("new baseline\n")
-            git("add", "source.txt")
-            git("commit", "-qm", "advance root")
-            advanced = runtime("ensure-worktree", "--root", root)
-            self.assertEqual(advanced.returncode, 0, advanced.stderr)
-            self.assertEqual((tree / "source.txt").read_text(), "new baseline\n")
-
-            (tree / "source.txt").write_text("worker result\n")
-            (tree / "source-link.txt").symlink_to("source.txt")
-            subprocess.run(["git", "-C", str(tree), "add", "source.txt", "source-link.txt"], check=True)
-            subprocess.run(["git", "-C", str(tree), "commit", "-qm", "result"], check=True)
-            (tree / "build/bin").mkdir(parents=True)
-            (tree / "build/bin/app").write_text("compiled\n")
-            preview = runtime("publish-preview", "--root", root,
-                              "--task-id", "TASK-1", "--title", 'A "quoted" task')
-            self.assertEqual(preview.returncode, 0, preview.stderr)
-            self.assertEqual((root / ".preview/source.txt").read_text(), "worker result\n")
-            self.assertTrue((root / ".preview/source-link.txt").is_symlink())
-            self.assertEqual((root / ".preview/build/bin/app").read_text(), "compiled\n")
-            metadata = json.loads((root / ".preview/version.json").read_text())
-            self.assertEqual(metadata["task_id"], "TASK-1")
-            self.assertEqual(metadata["summary"], 'A "quoted" task')
-
-
 class ReportArchiveContractTests(unittest.TestCase):
     def test_research_archive_moves_active_reports_but_keeps_archive(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1612,7 +1593,7 @@ class WorkerIntegrationTests(unittest.TestCase):
             self.assertIn("Worker final response contained [BLOCKED]", (root / "progress.log").read_text())
             self.assertEqual(json.loads((root / "worker.status").read_text())["state"], "BLOCKED")
 
-    def test_isolated_research_task_publishes_only_its_new_report_artifacts(self):
+    def test_in_place_research_task_keeps_its_new_report_artifacts(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "repo"
             root.mkdir()
@@ -1664,7 +1645,7 @@ class WorkerIntegrationTests(unittest.TestCase):
             summary = root / ".reports/fake/SUMMARY.md"
             self.assertIn("Task=TASK-REPORT", summary.read_text().splitlines()[0])
             self.assertEqual((root / ".reports/fake/03-micro.md").read_text(), "# Fresh details\n")
-            self.assertFalse((root / ".worker-tree/.reports").is_symlink())
+            self.assertFalse((root / ".worker-tree").exists())
             self.assertTrue(list((root / ".reports/.archive").iterdir()))
 
     def test_worker_switches_to_next_registered_agent_after_quota_error(self):
@@ -1908,7 +1889,8 @@ class WorkerIntegrationTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("Worker State   : IDLE", result.stdout)
             self.assertIn("Completed: 2 | Remaining in Queue: 1", result.stdout)
-            self.assertIn("TASK-0 (abc123) updated at now", result.stdout)
+            self.assertNotIn("Preview Ready", result.stdout)
+            self.assertNotIn("TASK-0 (abc123)", result.stdout)
 
     def test_sentinel_does_not_treat_historical_pass_as_new_completion(self):
         with tempfile.TemporaryDirectory() as directory:
