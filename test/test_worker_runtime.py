@@ -195,6 +195,46 @@ class RegisteredAgentFailoverContractTests(unittest.TestCase):
         self.assertFalse(runtime_module.should_failover_agent(1, '{"status":"error"}'))
 
 
+class BuiltinAdapterContractTests(unittest.TestCase):
+    def test_codex_adapter_runs_fake_cli_and_returns_structured_result(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            executable = root / "fake-codex"
+            executable.write_text(
+                "#!/usr/bin/env python3\nimport json,sys\n"
+                "a=sys.argv; out=a[a.index('--output-last-message')+1]\n"
+                "open(out,'w').write(json.dumps({'outcome':'complete','changed':False,"
+                "'no_change_reason':'fixture','commit_message':'docs: no changes'}))\n"
+                "print(json.dumps({'type':'item.completed','item':{'type':'command_execution'}}))\n")
+            executable.chmod(0o755)
+            adapter = ROOT / "scripts/adapters/codex.py"
+            request = {"protocol_version":1,"registration_id":"codex-test","overrides":{
+                "executable":str(executable)},"task_id":"TASK-CODEX",
+                "working_directory":str(root),"prompt_path":str(root/'prompt.txt'),
+                "output_dir":str(root/'run'),"result_path":str(root/'result.json'),
+                "limits":{"action_limit":3}}
+            (root / "prompt.txt").write_text("implement nothing")
+            def callback(name, payload):
+                return subprocess.run([sys.executable,str(adapter),name],
+                    input=json.dumps(payload),text=True,capture_output=True,timeout=10)
+            config = callback("get_config", {"protocol_version":1,"registration_id":"codex-test",
+                                               "overrides":{"executable":str(executable)}})
+            self.assertEqual(json.loads(config.stdout)["initial_score"],5)
+            started = callback("start", {**request,"configuration":json.loads(config.stdout)["configuration"]})
+            self.assertEqual(started.returncode,0,started.stderr)
+            handle = json.loads(started.stdout)
+            deadline=time.monotonic()+5
+            result=None
+            while time.monotonic()<deadline:
+                checked=callback("status", {"protocol_version":1,**handle})
+                result=json.loads(checked.stdout)
+                if result["status"]!="running": break
+                time.sleep(.02)
+            self.assertEqual(result["status"],"complete")
+            self.assertEqual(json.loads(Path(result["result_location"]).read_text())["commit_message"],
+                             "docs: no changes")
+
+
 class AdapterDeadlineContractTests(unittest.TestCase):
     def run_adapter(self, status_body, cancel_response, callback_timeout="0.1", execution_timeout="2"):
         directory = tempfile.TemporaryDirectory()
