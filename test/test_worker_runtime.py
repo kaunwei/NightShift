@@ -148,6 +148,69 @@ class AdapterDeadlineContractTests(unittest.TestCase):
             finally:
                 directory_handle.cleanup()
 
+
+class AdapterGhostCloseoutContractTests(unittest.TestCase):
+    def test_missing_closeout_is_rescued_once_on_same_registration_and_committed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = root / "repo"
+            repo.mkdir()
+            subprocess.run(["git", "init", "-q", str(repo)], check=True)
+            subprocess.run(["git", "-C", str(repo), "config", "user.name", "Worker Test"], check=True)
+            subprocess.run(["git", "-C", str(repo), "config", "user.email", "worker@example.invalid"], check=True)
+            (repo / "output.txt").write_text("before\n")
+            subprocess.run(["git", "-C", str(repo), "add", "output.txt"], check=True)
+            subprocess.run(["git", "-C", str(repo), "commit", "-qm", "baseline"], check=True)
+            adapter = root / "adapter.py"
+            trace = root / "trace.jsonl"
+            adapter.write_text(
+                "import json, pathlib, sys\nrequest=json.load(sys.stdin); op=sys.argv[1]\n"
+                f"with open({str(trace)!r}, 'a') as f: f.write(json.dumps({{'op':op,'request':request}})+'\\n')\n"
+                "if op == 'get_config': response={'protocol_version':1,'initial_score':5,'limits':{'poll_interval_seconds':0.01}}\n"
+                "elif op == 'start':\n"
+                " pathlib.Path(request['working_directory'],'output.txt').write_text('after\\n')\n"
+                " pathlib.Path(request['result_path']).write_text(json.dumps({'outcome':'closeout_required','changed':True}))\n"
+                " p=pathlib.Path(request['output_dir']); (p/'main-status.json').write_text(json.dumps({'status':'complete','result_location':request['result_path']}))\n"
+                " response={'execution_id':'main-exec','status_location':str(p/'main-status.json')}\n"
+                "elif op == 'closeout':\n"
+                " assert request['execution_id'] == 'main-exec'\n"
+                " pathlib.Path(request['result_path']).write_text(json.dumps({'outcome':'complete','changed':True,'commit_message':'fix(parser): close out task'}))\n"
+                " p=pathlib.Path(request['output_dir']); (p/'ghost-status.json').write_text(json.dumps({'status':'complete','result_location':request['result_path']}))\n"
+                " response={'execution_id':'ghost-exec','status_location':str(p/'ghost-status.json')}\n"
+                "else: response=json.loads(pathlib.Path(request['status_location']).read_text())\n"
+                "print(json.dumps(response))\n"
+            )
+            result = runtime("task-cli", "--provider", "mystery", "--executable", sys.executable,
+                             "--extra-arg", adapter, "--work-dir", repo, "--prompt-file", root / "worker-prompt.txt",
+                             "--output-file", root / "main.log", "--result-file", root / "main-result.json",
+                             "--task-id", "TASK-GHOST", "--target", "output.txt", "--base", "HEAD")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            calls = [json.loads(line) for line in trace.read_text().splitlines()]
+            self.assertEqual([call['op'] for call in calls],
+                             ["get_config", "start", "status", "get_config", "closeout", "status"])
+            main_request = next(call['request'] for call in calls if call['op'] == 'start')
+            ghost_request = next(call['request'] for call in calls if call['op'] == 'closeout')
+            self.assertEqual(ghost_request["registration_id"], "mystery")
+            self.assertEqual(ghost_request["task_id"], "TASK-GHOST")
+            self.assertNotEqual(ghost_request["prompt_path"], main_request["prompt_path"])
+            self.assertNotEqual(ghost_request["result_path"], main_request["result_path"])
+            self.assertEqual(json.loads(Path(ghost_request["prompt_path"]).read_text())["kind"], "closeout")
+            self.assertTrue(Path(ghost_request["output_dir"]).is_dir())
+            self.assertEqual(json.loads(Path(ghost_request["result_path"]).read_text())["commit_message"],
+                             "fix(parser): close out task")
+            self.assertIn("TASK-GHOST", json.loads((repo / ".worker-ghost-state.json").read_text())["issued"])
+            self.assertEqual(subprocess.run(["git", "-C", str(repo), "log", "-1", "--format=%s"],
+                                            check=True, capture_output=True, text=True).stdout.strip(),
+                             "fix(parser): close out task")
+            retry = runtime("task-cli", "--provider", "mystery", "--executable", sys.executable,
+                            "--extra-arg", adapter, "--work-dir", repo,
+                            "--prompt-file", root / "worker-prompt.txt",
+                            "--output-file", root / "main.log", "--result-file", root / "main-result.json",
+                            "--task-id", "TASK-GHOST", "--target", "output.txt", "--base", "HEAD")
+            self.assertEqual(retry.returncode, 126)
+            retried_calls = [json.loads(line) for line in trace.read_text().splitlines()]
+            self.assertEqual(sum(call["op"] == "closeout" for call in retried_calls), 1)
+
     def test_fake_adapter_completes_through_versioned_callbacks(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

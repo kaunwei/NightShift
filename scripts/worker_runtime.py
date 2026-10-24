@@ -152,6 +152,8 @@ def workspace_snapshot(work_dir, base):
     untracked = subprocess.run(["git", "-C", work_dir, "ls-files", "--others", "--exclude-standard", "-z"],
                                capture_output=True, check=False).stdout
     paths = {os.fsdecode(item) for item in changed.split(b"\0") + untracked.split(b"\0") if item}
+    paths = {name for name in paths
+             if not name.startswith((".worker-ghosts/", ".worker-ghost-state"))}
     snapshot = {}
     for name in paths:
         path = Path(work_dir) / name
@@ -359,7 +361,8 @@ def adapter_callback(command, callback, request, extra_args=(), timeout=30):
 
 
 def execute_adapter_protocol(command, request, extra_args=(), trace=None,
-                             callback_timeout=30, execution_timeout=1800):
+                             callback_timeout=30, execution_timeout=1800,
+                             start_callback="start"):
     """Run one external adapter execution through config, asynchronous start and status."""
     base = {"protocol_version": ADAPTER_PROTOCOL_VERSION, **request}
     if trace:
@@ -390,7 +393,8 @@ def execute_adapter_protocol(command, request, extra_args=(), trace=None,
     base["configuration"] = configuration.get("configuration", {})
     base["limits"] = configuration.get("limits", {})
     try:
-        execution = adapter_callback(command, "start", base, extra_args, timeout=callback_timeout)
+        execution = adapter_callback(command, start_callback, base, extra_args,
+                                     timeout=callback_timeout)
     except subprocess.TimeoutExpired:
         return {"status": "cancellation_failed", "stopped": False,
                 "diagnostic": "start callback timed out before returning an execution handle"}
@@ -431,7 +435,8 @@ def execute_adapter_protocol(command, request, extra_args=(), trace=None,
         if current in ADAPTER_TERMINAL_STATUSES:
             if current == "complete" and not status.get("result_location"):
                 raise ValueError("completed adapter status requires result_location")
-            return status
+            return {**status, "execution_id": execution_id,
+                    "elapsed_seconds": time.monotonic() - started}
         if current != "running":
             raise ValueError(f"adapter returned unsupported status: {current!r}")
         interval = configuration.get("limits", {}).get("poll_interval_seconds", 1)
@@ -904,6 +909,96 @@ def finalize_structured_adapter_result(args, result):
     return finalize_task_git(args)
 
 
+def claim_ghost_allowance(state_path, task_id, registration_id):
+    path = Path(state_path)
+    lock = Path(f"{path}.lock")
+    for _ in range(100):
+        try:
+            lock.mkdir()
+            break
+        except FileExistsError:
+            time.sleep(0.05)
+    else:
+        raise TimeoutError(f"ghost state lock remains held: {lock}")
+    try:
+        state = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {
+            "version": 1, "issued": {}}
+        if state.get("version") != 1 or not isinstance(state.get("issued"), dict):
+            raise ValueError(f"invalid ghost state file: {path}")
+        if task_id in state["issued"]:
+            return False
+        state["issued"][task_id] = {
+            "registration_id": registration_id,
+            "issued_at": datetime.now(timezone.utc).isoformat(),
+        }
+        atomic_write(path, json.dumps(state, ensure_ascii=False, indent=2) + "\n")
+        return True
+    finally:
+        lock.rmdir()
+
+
+def run_adapter_ghost(args, main_request, main_status, main_result):
+    task_id = args.task_id
+    registration_id = main_request["registration_id"]
+    state_path = getattr(args, "ghost_state_path", "") or str(
+        Path(args.work_dir) / ".worker-ghost-state.json")
+    if not claim_ghost_allowance(state_path, task_id, registration_id):
+        print(f"[WORKER] Ghost allowance already used for {task_id}.", file=sys.stderr)
+        return 126, {}, None
+    remaining_budget = max(0, args.step_budget - int(main_result.get("actions_used", 0)))
+    remaining_deadline = max(0, args.timeout - float(main_status.get("elapsed_seconds", 0)))
+    if remaining_budget <= 0 or remaining_deadline <= 0:
+        return 126, {}, None
+    output_root = Path(getattr(args, "ghost_artifact_root", "") or
+                       (Path(args.work_dir) / ".worker-ghosts")) / re.sub(
+                           r"[^A-Za-z0-9_.-]", "_", task_id)
+    output_root.mkdir(parents=True, exist_ok=True)
+    ghost_dir = output_root / f"ghost-{uuid.uuid4().hex}"
+    ghost_dir.mkdir(parents=True, exist_ok=False)
+    prompt_path = ghost_dir / "closeout-prompt.json"
+    prompt = {
+        "kind": "closeout", "task_id": task_id,
+        "instructions": "Verify and complete closeout only. Do not edit project files or stage/commit. Return a structured result with outcome and commit_message.",
+        "original_outcome": main_result.get("outcome"),
+        "verification_command": args.verify,
+    }
+    atomic_write(prompt_path, json.dumps(prompt, ensure_ascii=False, indent=2) + "\n")
+    ghost_result = ghost_dir / "result.json"
+    before = workspace_snapshot(args.work_dir, args.base)
+    request = {
+        **main_request,
+        "execution_id": main_status["execution_id"],
+        "prompt_path": str(prompt_path.resolve()),
+        "output_dir": str(ghost_dir.resolve()),
+        "result_path": str(ghost_result.resolve()),
+        "limits": {**main_request["limits"],
+                   "action_limit": remaining_budget,
+                   "execution_timeout_seconds": remaining_deadline,
+                   "closeout_deadline_seconds": remaining_deadline},
+    }
+    status = execute_adapter_protocol(
+        args.executable, request, getattr(args, "extra_args", ()),
+        callback_timeout=getattr(args, "callback_timeout", 30),
+        execution_timeout=remaining_deadline, start_callback="closeout",
+    )
+    after = workspace_snapshot(args.work_dir, args.base)
+    if before != after:
+        print("[WORKER] Ghost closeout changed implementation files; rejecting result.",
+              file=sys.stderr)
+        return 126, {}, ghost_dir
+    if status.get("status") != "complete" or not status.get("result_location"):
+        return 126, {}, ghost_dir
+    source = Path(status["result_location"])
+    if not source.is_file():
+        raise ValueError(f"ghost result file does not exist: {source}")
+    result = json.loads(source.read_text(encoding="utf-8"))
+    if not isinstance(result, dict) or result.get("outcome") != "complete":
+        return 126, {}, ghost_dir
+    if not ghost_result.exists():
+        shutil.copy2(source, ghost_result)
+    return finalize_structured_adapter_result(args, result), result, ghost_dir
+
+
 def execute_task_cli(args):
     with tempfile.TemporaryDirectory(prefix="nightshift-agent-") as directory:
         return _execute_task_cli(args, Path(directory) / "prompt.txt")
@@ -950,6 +1045,13 @@ def execute_adapter_task(args):
         if not isinstance(result, dict):
             raise ValueError("adapter result must be a JSON object")
         code = finalize_structured_adapter_result(args, result)
+        if code == 126 and (result.get("outcome") == "closeout_required"
+                            or (result.get("outcome") == "complete"
+                                and not str(result.get("commit_message", "")).strip())):
+            code, rescued_result, ghost_dir = run_adapter_ghost(args, request, status, result)
+            if code == 0:
+                result = rescued_result
+                shutil.copy2(ghost_dir / "result.json", result_path)
     else:
         code = {"quota_exhausted": 124, "step_budget_exceeded": 125,
                 "closeout_required": 126, "execution_timeout": 124,
@@ -1173,6 +1275,9 @@ def worker_daemon(root):
     safe_worker_id = re.sub(r"[^A-Za-z0-9_.-]", "_", worker_id)
     agent_state_path = resolve(
         "AI_AGENT_STATE_FILE", f".worker-agent-state.{safe_worker_id}.json")
+    ghost_state_path = resolve(
+        "WORKER_GHOST_STATE_FILE", f".worker-ghost-state.{safe_worker_id}.json")
+    ghost_artifact_root = resolve("WORKER_GHOST_ARTIFACT_DIR", ".worker-ghosts")
     score_state_path = resolve("WORKER_SCORE_FILE", ".worker-score.json")
     timeout_value = float(config.get("TASK_TIMEOUT", "1800"))
     timeout = int(timeout_value) if timeout_value.is_integer() else timeout_value
@@ -1354,6 +1459,8 @@ def worker_daemon(root):
                     step_budget=max_steps, worker_port=worker_port, target=target,
                     task_id=task_id, title=task, level=level, verify=verify,
                     base=base, progress_file=str(progress_file),
+                    ghost_state_path=str(ghost_state_path),
+                    ghost_artifact_root=str(ghost_artifact_root),
                 )
                 quota_exhausted = False
                 try:
@@ -1564,7 +1671,7 @@ def git_audit(args):
                               check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout
 
     status = git("status", "--porcelain", "--untracked-files=all", "-z")
-    ignored = re.compile(r"progress\.log|tasks\.txt|tasks\.done|worker\..*\.status|\.preview|\.reports")
+    ignored = re.compile(r"progress\.log|tasks\.txt|tasks\.done|worker\..*\.status|\.preview|\.reports|\.worker-ghosts|\.worker-ghost-state")
     dirty = [entry.decode("utf-8", "replace") for entry in status.split(b"\0")
              if entry and not ignored.search(entry.decode("utf-8", "replace"))]
     if dirty and not getattr(args, "allow_dirty", False):
@@ -1612,7 +1719,8 @@ def git_audit(args):
         targets = [item.strip().rstrip("/").casefold() for item in args.target.split(",") if item.strip()]
         exempt = {"progress.log", "tasks.txt", "tasks.done", "worker.status", ".gitignore", ".worker.notes.md"}
         for name in changed:
-            if name in exempt or name.startswith((".reports/", "docs/reports/")):
+            if (name in exempt or name.startswith((".reports/", "docs/reports/", ".worker-ghosts/"))
+                    or re.fullmatch(r"\.worker-ghost-state(?:\.[A-Za-z0-9_.-]+)?\.json", name)):
                 continue
             lowered = name.casefold()
             if not any(lowered == target or lowered.startswith(target + "/") for target in targets):
@@ -2050,6 +2158,7 @@ def main(argv=None):
     task_cli.add_argument("--verify", default="")
     task_cli.add_argument("--base", default="")
     task_cli.add_argument("--progress-file", default="progress.log")
+    task_cli.add_argument("--ghost-state-file", default="")
     adapter_exec = commands.add_parser("adapter-exec")
     adapter_exec.add_argument("--command", dest="adapter_command", required=True)
     adapter_exec.add_argument("--adapter-arg", action="append", default=[])
@@ -2128,6 +2237,8 @@ def main(argv=None):
     elif args.command == "agy-args":
         sys.stdout.buffer.write(("\0".join(agy_args(args)) + "\0").encode("utf-8"))
     elif args.command == "task-cli":
+        if args.ghost_state_file:
+            args.ghost_state_path = args.ghost_state_file
         return execute_task_cli(args)
     elif args.command == "adapter-exec":
         request_path = Path(args.request)
