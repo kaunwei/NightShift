@@ -612,10 +612,13 @@ def execute_adapter_protocol(command, request, extra_args=(), trace=None,
 
 def should_failover_agent(exit_code, result_text):
     """Only quota and confirmed timeout statuses may select another registration."""
-    try:
-        payload = json.loads(result_text)
-    except (TypeError, json.JSONDecodeError):
-        payload = {}
+    if isinstance(result_text, dict):
+        payload = result_text
+    else:
+        try:
+            payload = json.loads(result_text)
+        except (TypeError, json.JSONDecodeError):
+            payload = {}
     status = payload.get("status", "") if isinstance(payload, dict) else ""
     if status in ("cancellation_failed", "step_budget_exceeded") or exit_code == 125:
         return False
@@ -642,6 +645,10 @@ def execute_registered_agents(args, agents, state_path, rollback):
                  if agent["id"] not in state["exhausted"]
                  and agent["id"] not in task_exclusions]
     if not available:
+        if any(agent["id"] not in state["exhausted"] for agent in agents):
+            args.awaiting_agent = True
+            print("[WORKER] AGENT_UNAVAILABLE: all non-exhausted registrations timed out for this task.")
+            return 0, False
         print("[WORKER] QUOTA_EXHAUSTED: all registered agents are exhausted; task remains queued.")
         return 0, True
     for index, agent in enumerate(available):
@@ -695,7 +702,7 @@ def execute_registered_agents(args, agents, state_path, rollback):
             isinstance(parsed_result, dict)
             and parsed_result.get("outcome") == "quota_exhausted"
         )
-        if not quota_exhausted and not should_failover_agent(code, output_text):
+        if not quota_exhausted and not should_failover_agent(code, parsed_output):
             if state["task_exclusions"].pop(args.task_id, None) is not None:
                 atomic_write(state_path, json.dumps(state, ensure_ascii=False, indent=2) + "\n")
             return code, False
@@ -712,6 +719,12 @@ def execute_registered_agents(args, agents, state_path, rollback):
                 rollback(attempt.attempt_baseline, attempt.attempt_id)
                 print("[WORKER] QUOTA_EXHAUSTED: all registered agents are exhausted; task remains queued.")
                 return 0, True
+            rollback(attempt.attempt_baseline, attempt.attempt_id)
+            task_exclusions.append(agent["id"])
+            state["task_exclusions"][args.task_id] = task_exclusions
+            atomic_write(state_path, json.dumps(state, ensure_ascii=False, indent=2) + "\n")
+            args.awaiting_agent = True
+            print("[WORKER] AGENT_UNAVAILABLE: timed-out registrations are excluded for this task.")
             return code, False
         rollback(attempt.attempt_baseline, attempt.attempt_id)
         next_agent = available[index + 1]
@@ -1470,6 +1483,7 @@ def worker_daemon(root):
                         raise RuntimeError("attempt recovery failed; replacement execution was not started")
                 quota_exhausted = False
                 cli_args.awaiting_planner = False
+                cli_args.awaiting_agent = False
                 cli_args.agent_events_file = str(agent_events_path)
                 cli_args.dispatch_gate_file = str(dispatch_gate_file)
                 try:
@@ -1507,6 +1521,7 @@ def worker_daemon(root):
                     structured_status = "cancel_failed"
 
                 outcome = ("planner_gate" if cli_args.awaiting_planner else
+                           "agent_unavailable" if cli_args.awaiting_agent else
                            "quota_exhausted" if quota_exhausted else
                            "cancel_failed" if structured_status == "cancel_failed" else
                            "timeout" if exit_code == 124 else
@@ -1524,7 +1539,7 @@ def worker_daemon(root):
                            "guidance" if re.search(r"\[(?:NEED_GUIDANCE|NEED_DECOMPOSITION)\]", result_text) else
                            "success")
                 stamp_now = stamp()
-                if outcome not in ("success", "quota_exhausted", "planner_gate"):
+                if outcome not in ("success", "quota_exhausted", "planner_gate", "agent_unavailable"):
                     pending_planner = (task_id, outcome.upper())
                 if outcome == "planner_gate":
                     restore_task_front(tasks_file, raw_task)
@@ -1552,6 +1567,17 @@ def worker_daemon(root):
                         final_state = "QUOTA_EXHAUSTED"
                         break
                     waiting_for_quota = True
+                    stop_requested.wait(poll_interval)
+                    continue
+                elif outcome == "agent_unavailable":
+                    restore_task_front(tasks_file, raw_task)
+                    append_line(progress_file,
+                                f"[AGENT_UNAVAILABLE] {task_id}: all non-exhausted registrations timed out; task returned to {tasks_file}. After fixing the adapter issue, remove this task from task_exclusions in {agent_state_path} to retry.")
+                    update_status("WAITING_FOR_AGENT", task, duration, current, total,
+                                  remaining, percent, bar)
+                    if run_once:
+                        final_state = "WAITING_FOR_AGENT"
+                        break
                     stop_requested.wait(poll_interval)
                     continue
                 elif outcome == "cancel_failed":

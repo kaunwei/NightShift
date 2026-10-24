@@ -2081,7 +2081,7 @@ class WorkerIntegrationTests(unittest.TestCase):
             self.assertEqual(pid_file.read_text(), f"{os.getpid()}\n")
             self.assertFalse((root / "tasks.txt").exists())
 
-    def test_timed_out_task_is_recorded_and_dirty_workspace_is_preserved_then_rolled_back(self):
+    def test_timed_out_task_is_requeued_and_dirty_workspace_is_preserved_then_rolled_back(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "repo"
             root.mkdir()
@@ -2119,14 +2119,17 @@ class WorkerIntegrationTests(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertEqual((root / "output.txt").read_text(), "baseline\n")
-            self.assertIn("[FAILED]", (root / "tasks.done").read_text())
-            self.assertIn("[TIMEOUT]", (root / "tasks.done").read_text())
+            self.assertIn("TASK-T", (root / "tasks.txt").read_text())
+            self.assertEqual((root / "tasks.done").read_text(), "")
+            self.assertEqual(json.loads((root / ".worker-agent-state.default.json").read_text())
+                             ["task_exclusions"], {"TASK-T": ["timeout"]})
+            self.assertIn("remove this task from task_exclusions", (root / "progress.log").read_text())
             backups = list((root / ".scratch/failed_tasks").glob("TASK-T_*/changes.diff"))
             self.assertEqual(len(backups), 1)
             self.assertIn("partial", backups[0].read_text())
             self.assertFalse((root / ".worker.pid").exists())
             score = json.loads((root / ".worker-score-test.json").read_text())
-            self.assertEqual(score["failures"]["TASK-T"], 1)
+            self.assertNotIn("TASK-T", score["failures"])
             self.assertEqual(score["score"], 5)
 
     def test_codex_task_keeps_queue_status_commit_and_guard_contract(self):
@@ -2217,7 +2220,8 @@ class DaemonLifecycleTests(unittest.TestCase):
         self.fake = Path(self.directory.name) / "codex"
         self.flag = Path(self.directory.name) / "quota"
         self.fake.write_text(
-            "#!/usr/bin/env python3\nimport os,sys,json\nfrom pathlib import Path\n"
+            "#!/usr/bin/env python3\nimport os,sys,json,time\nfrom pathlib import Path\n"
+            "if os.environ.get('AGENT_DELAY'): time.sleep(float(os.environ['AGENT_DELAY']))\n"
             "if Path(os.environ['QUOTA_FLAG']).exists():\n print('RESOURCE_EXHAUSTED code 429',flush=True);sys.exit(1)\n"
             "prompt=sys.stdin.read()\n"
             "if 'TASK-BUDGET' in prompt:\n"
@@ -2253,7 +2257,8 @@ class DaemonLifecycleTests(unittest.TestCase):
     def wait_for(self, predicate):
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
-            self.assertIsNone(self.process.poll(), "daemon unexpectedly exited")
+            self.log.seek(0)
+            self.assertIsNone(self.process.poll(), "daemon unexpectedly exited:\n" + self.log.read())
             if predicate():
                 return
             time.sleep(0.02)
@@ -2306,6 +2311,27 @@ class DaemonLifecycleTests(unittest.TestCase):
         (self.root / ".worker-agent-state.default.json").unlink()
         self.wait_for(lambda: "[DONE] TASK-QUOTA" in (self.root / "tasks.done").read_text())
         self.wait_for(lambda: self.state() == "IDLE")
+
+    def test_last_timed_out_registration_requeues_task_without_marking_failure(self):
+        wrapper = Path(self.directory.name) / "slow-wrapper.py"
+        wrapper.write_text(
+            "import json,os,time\ntime.sleep(float(os.environ['AGENT_DELAY']))\n"
+            "json.dump({'outcome':'failure'}, open(os.environ['NIGHTSHIFT_RESULT_FILE'],'w'))\n"
+        )
+        self.env["AI_AGENTS_JSON"] = json.dumps([
+            generic_registration("test", sys.executable, [str(wrapper)], {"AGENT_DELAY": "1"})
+        ])
+        self.enqueue("TASK-TIMEOUT")
+        (self.root / ".worker.env").write_text(
+            "WORKER_ISOLATION=0\nRUN_ONCE=1\nPOLL_INTERVAL=0.05\n"
+            "TASK_TIMEOUT=0.1\nSTEP_BASE=1\nSTEP_PER_FILE=0\n")
+        self.start()
+        self.assertEqual(self.process.wait(timeout=10), 0)
+        self.assertEqual(self.state(), "WAITING_FOR_AGENT")
+        self.assertIn("TASK-TIMEOUT", (self.root / "tasks.txt").read_text())
+        self.assertEqual((self.root / "tasks.done").read_text(), "")
+        state = json.loads((self.root / ".worker-agent-state.default.json").read_text())
+        self.assertEqual(state["task_exclusions"], {"TASK-TIMEOUT": ["test"]})
 
 
 class InstallerIntegrationTests(unittest.TestCase):
