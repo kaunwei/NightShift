@@ -2605,6 +2605,7 @@ class InstallerIntegrationTests(unittest.TestCase):
             agent_registry = target / "agents/agents.json"
             custom_registry = '{"custom":{"default":true,"adapter":"opaque","command":"custom"}}\n'
             agent_registry.write_text(custom_registry)
+            (target / ".worker.env.example").write_text("stale environment example\n")
             deployed_runtime.write_text("stale runtime\n")
             update = subprocess.run(["bash", str(ROOT / "install.sh"), str(target)],
                                     cwd=ROOT, capture_output=True, text=True, timeout=30)
@@ -2617,6 +2618,7 @@ class InstallerIntegrationTests(unittest.TestCase):
             self.assertNotIn("OPERATIONS.md", planner_skill + worker_contract)
             self.assertIn("full discovered graph", planner_skill)
             self.assertEqual(agent_registry.read_text(), custom_registry)
+            self.assertFalse((target / ".worker.env.example").exists())
             self.assertEqual(deployed_runtime.read_bytes(), (ROOT / "scripts/worker_runtime.py").read_bytes())
             installed = subprocess.run(
                 [sys.executable, "-m", "unittest", "discover", "-s", "test", "-v"],

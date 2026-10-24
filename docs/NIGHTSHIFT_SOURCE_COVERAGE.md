@@ -15,7 +15,7 @@ For every later simplification, compare the changed source hashes and each affec
 | [.agents/skills/nightshift/planner/SKILL.md](../.agents/skills/nightshift/planner/SKILL.md) | c474f96c1471344a45fa4e19cf7212d6c70e80802428b5cc5a8450d6ed9e5109 |
 | [.skills/universal-build-verify.md](../.skills/universal-build-verify.md) | e65a72134c609d22936a9943b5edbdd4be350300ec57880da1e11031ae6157ef |
 | [agents/agents.json](../agents/agents.json) | ba92e28b8b08ef2a65e8fadfdc16e88a843ee8338591ca79f2b0f41659d50702 |
-| [install.sh](../install.sh) | 036e5ffc04345a67866be90b2aa158dda852c74df2cc4b65e121ed3aa3ed60d1 |
+| [install.sh](../install.sh) | 53b5b9d14a3dffa163ad2f765b21b77f067f56876614a0a21dfe0bdb612fa5af |
 | [scripts/extract_skeleton.sh](../scripts/extract_skeleton.sh) | 1ed2a93cee0194d1828336a50298ce3d7d8b981875dfaf36bd1adea469e5db01 |
 | [scripts/probe_line.sh](../scripts/probe_line.sh) | 6b56db490c2b82dc864617a88c82c49b75d0f759c3ace06dece014b2c2d87cd3 |
 | [scripts/reorder_queue.sh](../scripts/reorder_queue.sh) | 5cfc56907dafd4b22960199cfff8a413d8542a1251357867d7b5468bee88210a |
@@ -23,7 +23,7 @@ For every later simplification, compare the changed source hashes and each affec
 | [scripts/watch_worker.sh](../scripts/watch_worker.sh) | a073c874ac4c05d9a6e976c682155d19be6ad613e6730575b515f8cce2597c0d |
 | [scripts/worker_runtime.py](../scripts/worker_runtime.py) | 705f17e5c54f7db4547f8f2a35e95662c6248bce3a1e797a1c1efde7fab7c5a8 |
 | [update.sh](../update.sh) | 036e5ffc04345a67866be90b2aa158dda852c74df2cc4b65e121ed3aa3ed60d1 |
-| [test/test_worker_runtime.py](../test/test_worker_runtime.py) | 39b805790927d912e1ea8a41e38bf2ad1bd7c6de057248d28106fef16506f8cf |
+| [test/test_worker_runtime.py](../test/test_worker_runtime.py) | 31df5178352c115f387cc34350af29240aaf7e857619f0169c542ed72cc6905c |
 | [test/fixtures/trial-demo/README.md](../test/fixtures/trial-demo/README.md) | 4384b3061cefc038ccc5b01f566f78afaca4984f7204a43e58f20b44d54db63b |
 | [worker.sh](../worker.sh) | 246ad3e355ce6972242f950a2063696fc526e8f68d484d62a2cd0e36cf22395e |
 

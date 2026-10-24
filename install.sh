@@ -91,6 +91,10 @@ if [ ! -f "$TARGET_DIR/agents/agents.json" ]; then
 else
   echo "  • Preserved existing agents/agents.json (not overwritten)"
 fi
+if [ -f "$TARGET_DIR/.worker.env.example" ]; then
+  rm -f "$TARGET_DIR/.worker.env.example"
+  echo "  ✓ Removed deprecated .worker.env.example"
+fi
 
 # ------------------------------------------------------------------------------
 # 2. Deploy Helper Scripts
