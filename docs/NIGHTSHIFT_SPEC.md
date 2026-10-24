@@ -148,11 +148,11 @@ Runtime owns task lifecycle; adapters own native tool behavior. An unknown adapt
 
 ## Further Notes
 
-### Integrated change specifications
+### Integrated design history
 
-- [AI Agent Adapter Protocol](../spec/ai-agent-adapter-protocol.md): executable callbacks, invariant prompts, failover/recovery, per-registration scores, private ghost and configuration ownership.
-- [On-demand trial delivery](../spec/on-demand-trial.md): removal of worktree isolation and automatic previews; ordinary Planner-inserted tasks deliver checked binaries and resource-conflict/pause guidance.
-- These change specifications supply design rationale and local implementation tickets. This document is the consolidated behavior contract; historical implementation observations must not restore removed configuration or execution modes.
+- The [external AI execution contract](#external-ai-execution-contract) consolidates adapter callbacks, invariant prompts, failover/recovery, per-registration scores and private ghost. The [configuration contract](#configuration-without-a-worker-env-file) defines launcher and registry ownership.
+- [On-demand trial tasks](#on-demand-trial-tasks) consolidate removal of worktree isolation and automatic previews, ordinary Planner-inserted tasks, checked binaries and resource-conflict/pause guidance.
+- Original change specifications and local implementation tickets are preserved in commit `8a73dfc`. Their temporary directory has been removed after consolidation. This document is the behavior contract; historical notes must not restore removed configuration or execution modes.
 
 ### Repository document responsibilities
 
