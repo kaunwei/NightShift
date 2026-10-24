@@ -610,15 +610,6 @@ def execute_adapter_protocol(command, request, extra_args=(), trace=None,
         time.sleep(min(interval, max(0, execution_timeout - (time.monotonic() - started))))
 
 
-def quota_error(text):
-    patterns = (r"insufficient[_ ]quota", r"quota (?:has been )?exceeded",
-                r"rate[_ ]limit(?:[_ ]exceeded)?", r"resource_exhausted",
-                r"too many requests", r"billing hard limit", r"out of credits",
-                r"usage limit", r"exceeded.{0,40}quota",
-                r"(?:http(?: status)?|status(?: code)?|error)\s*[:=]?\s*429\b")
-    return any(re.search(pattern, text, re.I) for pattern in patterns)
-
-
 def should_failover_agent(exit_code, result_text):
     """Only quota and confirmed timeout statuses may select another registration."""
     try:
@@ -693,9 +684,17 @@ def execute_registered_agents(args, agents, state_path, rollback):
             parsed_result = json.loads(result_text)
         except (TypeError, json.JSONDecodeError):
             parsed_result = {}
-        quota_exhausted = (quota_error(output_text + "\n" + result_text)
-                           or (isinstance(parsed_result, dict)
-                               and parsed_result.get("outcome") == "quota_exhausted"))
+        try:
+            parsed_output = json.loads(output_text)
+        except (TypeError, json.JSONDecodeError):
+            parsed_output = {}
+        quota_exhausted = (
+            isinstance(parsed_output, dict)
+            and parsed_output.get("status") == "quota_exhausted"
+        ) or (
+            isinstance(parsed_result, dict)
+            and parsed_result.get("outcome") == "quota_exhausted"
+        )
         if not quota_exhausted and not should_failover_agent(code, output_text):
             if state["task_exclusions"].pop(args.task_id, None) is not None:
                 atomic_write(state_path, json.dumps(state, ensure_ascii=False, indent=2) + "\n")

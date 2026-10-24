@@ -1844,25 +1844,29 @@ class WorkerIntegrationTests(unittest.TestCase):
                 shutil.copy2(ROOT / name, root / name)
             (root / "scripts").mkdir()
             copy_runtime_fixture(root / "scripts/worker_runtime.py")
-            profiles = [codex_registration("primary"), codex_registration("backup")]
+            wrapper = Path(directory) / "wrapper.py"
+            wrapper.write_text(
+                "import json, os\n"
+                "with open(os.environ['AGENT_CALLS'], 'a') as calls: calls.write('called\\n')\n"
+                "print('rate limit mentioned in unrelated diagnostic context')\n"
+                "json.dump({'outcome': 'failure', 'diagnostic': 'ordinary failure; rate limit text is incidental'}, "
+                "open(os.environ['NIGHTSHIFT_RESULT_FILE'], 'w'))\n"
+                "raise SystemExit(1)\n"
+            )
+            profiles = [generic_registration("primary", sys.executable, [str(wrapper)]),
+                        generic_registration("backup", sys.executable, [str(wrapper)])]
             (root / ".worker.env").write_text(
                 "WORKER_ISOLATION=0\nRUN_ONCE=1\nPOLL_INTERVAL=0\n"
                 "AI_AGENTS_JSON='" + json.dumps(profiles) + "'\n"
             )
             (root / "tasks.txt").write_text("TASK-E | LEVEL: 1 | TARGET: output.txt | ACTION: [CODE: EXPAND] Fail | VERIFY: true\n")
-            bin_dir = Path(directory) / "bin"
-            bin_dir.mkdir()
-            fake = bin_dir / "codex"
-            fake.write_text("#!/bin/sh\necho 'network unavailable'; exit 1\n")
-            fake.chmod(0o755)
             subprocess.run(["git", "init", "-q", str(root)], check=True)
             subprocess.run(["git", "-C", str(root), "config", "user.name", "Worker Test"], check=True)
             subprocess.run(["git", "-C", str(root), "config", "user.email", "worker@example.invalid"], check=True)
             subprocess.run(["git", "-C", str(root), "add", "worker.sh", "scripts", ".gitignore", "tasks.txt"], check=True)
             subprocess.run(["git", "-C", str(root), "commit", "-qm", "fixture"], check=True)
             calls = Path(directory) / "calls.log"
-            env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}", "AGENT_CALLS": str(calls)}
-            fake.write_text("#!/bin/sh\necho called >> \"$AGENT_CALLS\"\necho 'network unavailable'; exit 1\n")
+            env = {**os.environ, "AGENT_CALLS": str(calls)}
 
             result = subprocess.run(["bash", str(root / "worker.sh")], cwd=root, env=env,
                                     capture_output=True, text=True, timeout=45)
