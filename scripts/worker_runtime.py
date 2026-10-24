@@ -1626,6 +1626,9 @@ def worker_daemon(root):
                     update_status("QUOTA_EXHAUSTED", "Waiting for agent quota state reset")
                     stop_requested.wait(poll_interval)
                     continue
+                # A task-scoped timeout exclusion is intentionally not persisted as quota
+                # exhaustion. Back off before retrying the requeued task to avoid a hot loop.
+                stop_requested.wait(poll_interval)
                 waiting_for_quota = False
             poll_args = argparse.Namespace(tasks=str(tasks_file), done=str(done_file),
                                            pause=str(pause_file), work_dir=str(work_dir),
