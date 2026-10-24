@@ -7,6 +7,7 @@ Each command receives explicit inputs so callers and tests exercise the same sea
 
 import argparse
 from datetime import datetime, timezone
+import hashlib
 from io import BytesIO
 import json
 import os
@@ -22,6 +23,7 @@ import tarfile
 import tempfile
 import time
 import threading
+import uuid
 
 
 FIELD_NAMES = (
@@ -261,23 +263,29 @@ def parse_agent_registry(raw, defaults):
     for item in profiles:
         if not isinstance(item, dict):
             raise ValueError("each AI_AGENTS_JSON entry must be an object")
-        unknown = set(item) - {"id", "provider", "command", "executable", "model", "effort", "agy_mode", "args", "env"}
+        unknown = set(item) - {"id", "provider", "adapter", "command", "executable", "model", "effort", "agy_mode", "args", "env", "overrides"}
         if unknown:
             raise ValueError(f"agent profile has unknown fields: {', '.join(sorted(unknown))}")
         for key in ("id", "provider", "command", "executable", "model", "effort", "agy_mode"):
             if key in item and not isinstance(item[key], str):
                 raise ValueError(f"agent {key} must be a string")
         agent_id = item.get("id", "").strip()
-        provider = str(item.get("provider", "")).strip().lower()
+        provider_value = item.get("adapter", item.get("provider", ""))
+        provider = str(provider_value).strip()
+        if "adapter" not in item:
+            provider = provider.lower()
         command = str(item.get("command", item.get("executable", ""))).strip()
         if not agent_id or agent_id in seen:
             raise ValueError("AI_AGENTS_JSON agent ids must be non-empty and unique")
-        if provider not in ("codex", "agy", "generic"):
-            raise ValueError(f"unsupported provider for agent {agent_id}: {provider}")
+        if not provider:
+            raise ValueError(f"agent {agent_id} requires an adapter name")
         if not command:
             raise ValueError(f"AI_AGENTS_JSON agent {agent_id} requires a command")
         extra_args = item.get("args", [])
         environment = item.get("env", {})
+        overrides = item.get("overrides", {})
+        if not isinstance(overrides, dict):
+            raise ValueError(f"agent {agent_id} overrides must be an object")
         if not isinstance(extra_args, list) or not all(isinstance(arg, str) for arg in extra_args):
             raise ValueError(f"agent {agent_id} args must be an array of strings")
         if not isinstance(environment, dict) or not all(isinstance(k, str) and isinstance(v, str)
@@ -288,11 +296,84 @@ def parse_agent_registry(raw, defaults):
         agents.append({
             "id": agent_id, "provider": provider, "command": command,
             "args": extra_args, "env": environment,
+            "overrides": overrides,
             "model": str(item.get("model", defaults["model"])),
             "effort": str(item.get("effort", defaults["effort"])),
             "agy_mode": str(item.get("agy_mode", defaults["agy_mode"])),
         })
     return agents
+
+
+ADAPTER_PROTOCOL_VERSION = 1
+ADAPTER_TERMINAL_STATUSES = {"complete", "closeout_required", "quota_exhausted",
+                             "step_budget_exceeded", "failed", "cancelled"}
+
+
+def adapter_callback(command, callback, request, extra_args=(), timeout=30):
+    """Invoke one versioned JSON callback; stdout is protocol data, stderr is diagnostics."""
+    completed = subprocess.run(
+        [command, *extra_args, callback], input=json.dumps(request), text=True,
+        capture_output=True, timeout=timeout, check=False,
+    )
+    if completed.returncode:
+        raise RuntimeError(f"adapter {callback} failed ({completed.returncode}): {completed.stderr.strip()}")
+    try:
+        response = json.loads(completed.stdout)
+    except json.JSONDecodeError as error:
+        raise ValueError(f"adapter {callback} returned invalid JSON: {error}") from error
+    if not isinstance(response, dict):
+        raise ValueError(f"adapter {callback} response must be an object")
+    if "error" in response:
+        detail = response["error"]
+        raise RuntimeError(f"adapter {callback} error: {detail}")
+    return response
+
+
+def execute_adapter_protocol(command, request, extra_args=(), trace=None):
+    """Run one external adapter execution through config, asynchronous start and status."""
+    base = {"protocol_version": ADAPTER_PROTOCOL_VERSION, **request}
+    if trace:
+        base["trace"] = str(trace)
+    configuration = adapter_callback(command, "get_config", {
+        "protocol_version": ADAPTER_PROTOCOL_VERSION,
+        "registration_id": base.get("registration_id", "default"),
+        "overrides": base.get("overrides", {}),
+        **({"trace": str(trace)} if trace else {}),
+    }, extra_args)
+    version = configuration.get("protocol_version")
+    if version != ADAPTER_PROTOCOL_VERSION:
+        raise ValueError(f"adapter protocol version {version!r} is incompatible; expected {ADAPTER_PROTOCOL_VERSION}")
+    if not isinstance(configuration.get("initial_score"), int) or not 1 <= configuration["initial_score"] <= 5:
+        raise ValueError("adapter get_config response requires initial_score from 1 through 5")
+    if not isinstance(configuration.get("limits", {}), dict):
+        raise ValueError("adapter get_config limits must be an object")
+    if not isinstance(configuration.get("configuration", {}), dict):
+        raise ValueError("adapter get_config configuration must be an object")
+    base["configuration"] = configuration.get("configuration", {})
+    base["limits"] = configuration.get("limits", {})
+    execution = adapter_callback(command, "start", base, extra_args)
+    execution_id, status_location = execution.get("execution_id"), execution.get("status_location")
+    if not isinstance(execution_id, str) or not execution_id or not isinstance(status_location, str) or not status_location:
+        raise ValueError("adapter start response requires execution_id and status_location")
+    while True:
+        status = adapter_callback(command, "status", {
+            "protocol_version": ADAPTER_PROTOCOL_VERSION,
+            "execution_id": execution_id, "status_location": status_location,
+            **({"trace": str(trace)} if trace else {}),
+        }, extra_args)
+        current = status.get("status")
+        if current in ADAPTER_TERMINAL_STATUSES:
+            if current == "complete" and not status.get("result_location"):
+                raise ValueError("completed adapter status requires result_location")
+            return status
+        if current != "running":
+            raise ValueError(f"adapter returned unsupported status: {current!r}")
+        interval = configuration.get("limits", {}).get("poll_interval_seconds", 1)
+        try:
+            interval = max(0.01, float(interval))
+        except (TypeError, ValueError) as error:
+            raise ValueError("adapter poll_interval_seconds must be a positive number") from error
+        time.sleep(interval)
 
 
 def quota_error(text):
@@ -329,6 +410,8 @@ def execute_registered_agents(args, agents, state_path, rollback):
         attempt.agy_mode = agent["agy_mode"]
         attempt.extra_args = agent["args"]
         attempt.agent_env = agent["env"]
+        attempt.agent_id = agent["id"]
+        attempt.agent_overrides = agent["overrides"]
         for output_name in ("output_file", "result_file"):
             output = Path(getattr(attempt, output_name, "") or ".")
             if output.is_file():
@@ -715,7 +798,49 @@ def execute_task_cli(args):
         return _execute_task_cli(args, Path(directory) / "prompt.txt")
 
 
+def execute_adapter_task(args):
+    """Adapt a registered task to the external protocol and persist its structured result."""
+    output = Path(args.output_file)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    result_path = Path(args.result_file or output.with_name("adapter-result.json"))
+    result_path.parent.mkdir(parents=True, exist_ok=True)
+    prompt_path = Path(args.prompt_file)
+    request = {
+        "registration_id": getattr(args, "agent_id", args.provider),
+        "overrides": {"model": args.model, "effort": args.effort,
+                      **getattr(args, "agent_overrides", {})},
+        "task_id": args.task_id,
+        "task_version": getattr(args, "task_version", hashlib.sha256(
+            (getattr(args, "title", "") or args.task_id).encode("utf-8")).hexdigest()[:16]),
+        "attempt_id": getattr(args, "attempt_id", str(uuid.uuid4())),
+        "working_directory": str(Path(args.work_dir).resolve()),
+        "prompt_path": str(prompt_path.resolve()),
+        "output_dir": str(output.parent.resolve()),
+        "result_path": str(result_path.resolve()),
+        "environment": {**getattr(args, "agent_env", {}),
+                        "PORT": args.worker_port, "TEST_PORT": args.worker_port},
+        "limits": {"execution_timeout_seconds": args.timeout,
+                   "action_limit": args.step_budget},
+    }
+    status = execute_adapter_protocol(args.executable, request,
+                                      getattr(args, "extra_args", ()))
+    if status.get("result_location"):
+        result_path = Path(status["result_location"])
+        if not result_path.is_file():
+            raise ValueError(f"adapter result file does not exist: {result_path}")
+        destination = Path(args.result_file or output.with_name("adapter-result.json"))
+        if result_path.resolve() != destination.resolve():
+            shutil.copy2(result_path, destination)
+    result_path = Path(args.result_file or output.with_name("adapter-result.json"))
+    result = json.loads(result_path.read_text(encoding="utf-8")) if result_path.exists() else {}
+    output.write_text(json.dumps({"status": status["status"], "result": result}, ensure_ascii=False),
+                      encoding="utf-8")
+    return 0 if status["status"] == "complete" else 124 if status["status"] == "quota_exhausted" else 1
+
+
 def _execute_task_cli(args, adapter_prompt):
+    if args.provider not in ("codex", "agy", "generic"):
+        return execute_adapter_task(args)
     if not args.result_file:
         args.result_file = str(Path(args.output_file).with_name("last-message.txt"))
     prompt = Path(args.prompt_file).read_text(encoding="utf-8")
@@ -1766,8 +1891,9 @@ def main(argv=None):
     agy.add_argument("--additional-dirs", default="")
     agy.add_argument("--sandbox", default="0")
     task_cli = commands.add_parser("task-cli")
-    task_cli.add_argument("--provider", choices=("codex", "agy", "generic"), required=True)
+    task_cli.add_argument("--provider", required=True)
     task_cli.add_argument("--executable", required=True)
+    task_cli.add_argument("--extra-arg", dest="extra_args", action="append", default=[])
     task_cli.add_argument("--work-dir", required=True)
     task_cli.add_argument("--prompt-file", required=True)
     task_cli.add_argument("--output-file", required=True)
@@ -1790,6 +1916,11 @@ def main(argv=None):
     task_cli.add_argument("--verify", default="")
     task_cli.add_argument("--base", default="")
     task_cli.add_argument("--progress-file", default="progress.log")
+    adapter_exec = commands.add_parser("adapter-exec")
+    adapter_exec.add_argument("--command", dest="adapter_command", required=True)
+    adapter_exec.add_argument("--adapter-arg", action="append", default=[])
+    adapter_exec.add_argument("--request", required=True)
+    adapter_exec.add_argument("--trace", default="")
     timeout = commands.add_parser("run-timeout")
     timeout.add_argument("seconds", type=float)
     timeout.add_argument("argv", nargs=argparse.REMAINDER)
@@ -1862,6 +1993,14 @@ def main(argv=None):
         sys.stdout.buffer.write(("\0".join(agy_args(args)) + "\0").encode("utf-8"))
     elif args.command == "task-cli":
         return execute_task_cli(args)
+    elif args.command == "adapter-exec":
+        request_path = Path(args.request)
+        request = json.loads(request_path.read_text(encoding="utf-8")) if request_path.exists() else {
+            "registration_id": "contract-test", "overrides": {},
+            "output_dir": str(request_path.parent / "adapter-output"),
+        }
+        status = execute_adapter_protocol(args.adapter_command, request, args.adapter_arg, args.trace)
+        print(json.dumps(status, ensure_ascii=False))
     elif args.command == "run-timeout":
         command = args.argv[1:] if args.argv[:1] == ["--"] else args.argv
         return run_with_timeout(args.seconds, command)

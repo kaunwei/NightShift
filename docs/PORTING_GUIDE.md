@@ -1,5 +1,33 @@
 # Install NightShift in another repository
 
+## External adapter protocol (version 1)
+
+A registered adapter is an executable command plus optional fixed arguments. The runtime invokes it as `COMMAND [ARGS...] CALLBACK`, writes exactly one JSON request to stdin, and reads exactly one JSON response from stdout. Send diagnostics to stderr; stdout must not contain banners or log lines. Every request and response uses `protocol_version: 1`. Unsupported versions and malformed responses fail before task execution.
+
+The callbacks are:
+
+| Callback | Required request fields | Required response fields |
+|---|---|---|
+| `get_config` | `protocol_version`, `registration_id`, `overrides` | `protocol_version`, `initial_score` (integer 1–5), optional `limits`, `configuration` |
+| `start` | `protocol_version`, `task_id`, `task_version`, `attempt_id`, `working_directory`, `prompt_path`, `output_dir`, `result_path`, `configuration`, `limits`, `environment` | `execution_id`, `status_location` |
+| `status` | `protocol_version`, `execution_id`, `status_location` | `status`: `running`, `complete`, `closeout_required`, `quota_exhausted`, `step_budget_exceeded`, `failed`, or `cancelled`; terminal results may include `result_location` |
+| `closeout` | `protocol_version`, `execution_id`, `prompt_path`, `output_dir`, `result_path`, remaining budget and deadline | `execution_id`, `status_location` |
+| `cancel` | `protocol_version`, `execution_id`, reason and stop deadline | a termination result |
+
+Register the executable without adding its name to NightShift:
+
+```json
+[
+  {"id":"team-model-a", "adapter":"team-adapter", "command":"/opt/team/adapter", "args":[], "env":{}, "model":"model-a", "overrides":{"region":"west"}}
+]
+```
+
+`adapter` is an opaque registration label. `command` and `args` select the executable; `env` adds string environment entries; `model`, `effort`, and arbitrary JSON `overrides` are passed to `get_config` for adapter-owned interpretation. Multiple registrations may name the same adapter executable with different IDs and overrides.
+
+`start` and `closeout` must return promptly with an execution handle; they do not wait for model work to finish. `status` reads local state and must not call a model or query quota. The adapter interprets registration overrides and returns normalized settings under `configuration`. `limits.poll_interval_seconds` controls status polling. A completed execution points to a JSON result file; result fields are task outcome, evidence, change/no-change information, and `commit_message`. Do not write protocol data to stderr or diagnostics to stdout. The runtime keeps callback stdout and stderr separate.
+
+The runtime currently implements configuration discovery, asynchronous `start`, and local `status` for arbitrary adapter names. Cancellation and closeout are wired into the subsequent lifecycle migration tickets. Until those tickets are complete, configure migrated built-in providers on their existing paths.
+
 NightShift can be deployed into an existing repository with `install.sh`. The script requires the target directory to exist and refuses to install into the NightShift source repository itself.
 
 ```sh

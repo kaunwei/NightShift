@@ -59,6 +59,49 @@ class WorkerPromptContractTests(unittest.TestCase):
 
 
 class AgentConfigContractTests(unittest.TestCase):
+    def test_daemon_accepts_multiple_unrecognized_adapter_registrations(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "tasks.txt").write_text("")
+            profiles = [
+                {"id": "one", "adapter": "first-party", "command": "unused-first"},
+                {"id": "two", "adapter": "second-party", "command": "unused-second"},
+            ]
+            env = {**os.environ, "AI_AGENTS_JSON": json.dumps(profiles),
+                   "WORKER_ISOLATION": "0", "RUN_ONCE": "1", "POLL_INTERVAL": "0"}
+            result = runtime("daemon", "--root", root, env=env)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("Queue is empty", result.stdout)
+
+    def test_fake_adapter_completes_through_versioned_callbacks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            adapter = root / "adapter.py"
+            adapter.write_text(
+                "import json, pathlib, sys\n"
+                "request=json.load(sys.stdin); op=sys.argv[1]\n"
+                "with open(request['trace'], 'a') as f: f.write(op + '\\n')\n"
+                "if op == 'get_config': response={'protocol_version':1,'initial_score':4,'limits':{'poll_interval_seconds':0.01},'configuration':request['overrides']}\n"
+                "elif op == 'start':\n"
+                " p=pathlib.Path(request['output_dir']); p.mkdir(parents=True,exist_ok=True)\n"
+                " (p/'result.json').write_text(json.dumps({'outcome':'complete','commit_message':'finish task'}))\n"
+                " response={'execution_id':'exec-1','status_location':str(p/'status.json')}\n"
+                " (p/'status.json').write_text(json.dumps({'execution_id':'exec-1','status':'complete','result_location':str(p/'result.json')}))\n"
+                "elif op == 'status': response=json.loads(pathlib.Path(request['status_location']).read_text())\n"
+                "else: response={'error':{'code':'unsupported','message':op}}\n"
+                "print(json.dumps(response))\n"
+            )
+            result = runtime("adapter-exec", "--command", sys.executable,
+                             "--adapter-arg", adapter, "--request", root / "request.json",
+                             "--trace", root / "trace.log")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((root / "trace.log").read_text().splitlines(),
+                             ["get_config", "start", "status"])
+            response = json.loads(result.stdout)
+            self.assertEqual(response["status"], "complete")
+            self.assertEqual(json.loads(Path(response["result_location"]).read_text())["commit_message"],
+                             "finish task")
+
     def test_invalid_profile_is_rejected_before_claiming_a_task(self):
         for override, expected in (({"arguments": []}, "unknown fields"),
                                    ({"model": None}, "must be a string"),
@@ -380,6 +423,33 @@ class StatusContractTests(unittest.TestCase):
 
 
 class CliContractTests(unittest.TestCase):
+    def test_task_cli_executes_an_unrecognized_adapter_with_protocol(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            adapter = root / "adapter.py"
+            adapter.write_text(
+                "import json, pathlib, sys\nrequest=json.load(sys.stdin); op=sys.argv[1]\n"
+                "if op == 'get_config': response={'protocol_version':1,'initial_score':5,'configuration':{'normalized':True},'limits':{'poll_interval_seconds':0.01}}\n"
+                "elif op == 'start':\n"
+                " p=pathlib.Path(request['output_dir']); p.mkdir(parents=True,exist_ok=True)\n"
+                " (p/'result.json').write_text(json.dumps({'outcome':'complete','commit_message':'adapter result'}))\n"
+                " (p/'status.json').write_text(json.dumps({'status':'complete','result_location':str(p/'result.json')}))\n"
+                " response={'execution_id':'run-1','status_location':str(p/'status.json')}\n"
+                "else: response=json.loads(pathlib.Path(request['status_location']).read_text())\n"
+                "print(json.dumps(response))\n"
+            )
+            prompt, output, result_file = root / "prompt", root / "output.log", root / "result.json"
+            prompt.write_text("same shared task prompt")
+            result = runtime(
+                "task-cli", "--provider", "unlisted-adapter", "--executable", sys.executable,
+                "--extra-arg", adapter, "--work-dir", root, "--prompt-file", prompt,
+                "--output-file", output, "--result-file", result_file,
+                "--task-id", "TASK-UNKNOWN", "--worker-port", "4100",
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result_file.read_text())["commit_message"], "adapter result")
+            self.assertIn('"status": "complete"', output.read_text())
+
     def test_codex_args_keep_low_cost_model_and_safe_auto_policy(self):
         with tempfile.TemporaryDirectory() as directory:
             result = runtime(
