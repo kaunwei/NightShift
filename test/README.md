@@ -12,3 +12,5 @@ CLI invocation, Luna/none settings, wrapper commits, mechanical and Git audit
 gates, report artifacts, rollback, polling states and budgets, timeout
 exit-code/process-termination behavior, shared-score transitions, and restricted
 Codex/AgY ghost closeout auditing.
+
+`test/fixtures/trial-demo/` is installed into a temporary project by the trial demo integration test. It covers a standalone binary, a script with a bundled resource, a project-shared file, `.trials/` ignore behavior, and a custom `PAUSE_FILE`, and that trial delivery does not pause the Worker; no live model is used.

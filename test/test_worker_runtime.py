@@ -1950,6 +1950,7 @@ class WorkerIntegrationTests(unittest.TestCase):
             self.assertIn("[DONE] TRIAL-1", (root / "tasks.done").read_text())
             self.assertIn("[DONE] TASK-NEXT", (root / "tasks.done").read_text())
             self.assertEqual((root / "tasks.txt").read_text(), "")
+            self.assertFalse((root / "PAUSE").exists(), "trial delivery must not pause the Worker")
             self.assertEqual((root / ".git" / "HEAD").exists(), True)
 
     def test_status_dashboard_uses_project_paths_from_an_external_cwd(self):
@@ -2412,6 +2413,49 @@ class DaemonLifecycleTests(unittest.TestCase):
         self.assertEqual(state["task_exclusions"], {"TASK-TIMEOUT": ["test"]})
 
 
+class TrialDemoIntegrationTests(unittest.TestCase):
+    @unittest.skipUnless((ROOT / "install.sh").is_file(), "source checkout only")
+    def test_installed_trial_demo_covers_binary_bundle_shared_file_and_custom_pause(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "project"
+            fixture = ROOT / "test/fixtures/trial-demo"
+            shutil.copytree(fixture, target)
+            subprocess.run(["git", "-C", str(target), "init", "-q"], check=True)
+            install = subprocess.run(["bash", str(ROOT / "install.sh"), str(target)],
+                                     capture_output=True, text=True, timeout=30)
+            self.assertEqual(install.returncode, 0, install.stdout + install.stderr)
+
+            single = subprocess.run([str(target / "bin/standalone")], cwd=target,
+                                    capture_output=True, text=True, check=True)
+            self.assertEqual(single.stdout.strip(), "standalone trial v1")
+            trial = target / ".trials/TRIAL-BUNDLED"
+            shutil.copytree(target / "bundled", trial)
+            bundled = subprocess.run([str(trial / "bin/show-message")], cwd=target,
+                                     capture_output=True, text=True, check=True)
+            self.assertEqual(bundled.stdout.strip(), "bundled message v1")
+            shared = subprocess.run([str(target / "scripts/read-shared.sh")], cwd=target,
+                                    capture_output=True, text=True, check=True)
+            self.assertEqual(shared.stdout.strip(), "shared project data")
+            ignored = subprocess.run(["git", "-C", str(target), "check-ignore", "-q",
+                                      str(trial / "bin/show-message")], check=False)
+            self.assertEqual(ignored.returncode, 0)
+
+            tasks = target / "tasks.txt"
+            tasks.write_text("TASK-WAIT | ACTION: remain pending\n")
+            pause = target / "ops/worker.hold"
+            pause.parent.mkdir(parents=True, exist_ok=True)
+            pause.touch()
+            status = subprocess.run(["bash", str(target / "scripts/status.sh")], cwd=target,
+                                    capture_output=True, text=True, check=True)
+            self.assertIn("Pause Flag     : [PAUSED]", status.stdout)
+            poll = subprocess.run([sys.executable, str(target / "scripts/worker_runtime.py"),
+                                   "poll-next", "--tasks", str(tasks), "--done", str(target / "tasks.done"),
+                                   "--pause", str(pause), "--work-dir", str(target)],
+                                  capture_output=True, text=True, check=True)
+            self.assertEqual(poll.stdout.split("\0", 1)[0], "paused")
+            self.assertIn("TASK-WAIT", tasks.read_text())
+
+
 class InstallerIntegrationTests(unittest.TestCase):
     @unittest.skipUnless((ROOT / "install.sh").exists(), "source checkout only")
     def test_installer_deploys_python_runtime_and_regression_pattern(self):
@@ -2446,7 +2490,6 @@ class InstallerIntegrationTests(unittest.TestCase):
             self.assertIn(".worker-score*.json.lock/", (target / ".gitignore").read_text())
             self.assertIn(".worker-agent-scores/", (target / ".gitignore").read_text())
             self.assertIn(".worker-agent-events.jsonl", (target / ".gitignore").read_text())
-            self.assertIn(".trials/", (target / ".gitignore").read_text())
             self.assertIn(".trials/", (target / ".gitignore").read_text())
             (target / ".worker.env").write_text("AI_CLI=agy\nCUSTOM_SETTING=preserve\n")
             deployed_runtime.write_text("stale runtime\n")
