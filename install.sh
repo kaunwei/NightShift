@@ -87,12 +87,23 @@ else
   echo "  ✓ Installed worker.sh"
 fi
 
-mkdir -p "$TARGET_DIR/agents"
-if [ ! -f "$TARGET_DIR/agents/agents.json" ]; then
-  cp "$SCRIPT_DIR/agents/agents.json" "$TARGET_DIR/agents/agents.json"
-  echo "  ✓ Initialized agents/agents.json"
+mkdir -p "$TARGET_DIR/scripts/adapters"
+if [ ! -f "$TARGET_DIR/scripts/adapters/agents.json" ]; then
+  if [ -f "$TARGET_DIR/agents/agents.json" ]; then
+    mv "$TARGET_DIR/agents/agents.json" "$TARGET_DIR/scripts/adapters/agents.json"
+    rmdir "$TARGET_DIR/agents" 2>/dev/null || true
+    echo "  ✓ Migrated agents/agents.json to scripts/adapters/agents.json"
+  else
+    cp "$SCRIPT_DIR/scripts/adapters/agents.json" "$TARGET_DIR/scripts/adapters/agents.json"
+    echo "  ✓ Initialized scripts/adapters/agents.json"
+  fi
 else
-  echo "  • Preserved existing agents/agents.json (not overwritten)"
+  echo "  • Preserved existing scripts/adapters/agents.json (not overwritten)"
+  if [ -f "$TARGET_DIR/agents/agents.json" ]; then
+    rm -f "$TARGET_DIR/agents/agents.json"
+    rmdir "$TARGET_DIR/agents" 2>/dev/null || true
+    echo "  ✓ Removed obsolete agents/agents.json"
+  fi
 fi
 if [ -f "$TARGET_DIR/.worker.env.example" ]; then
   rm -f "$TARGET_DIR/.worker.env.example"

@@ -50,7 +50,7 @@ def write_legacy_registry(root, raw):
         config = profile.get("config", profile.get("overrides", {}))
         entry.update({"default": index == 0, "config": config})
         registry[name] = entry
-    agent_dir = Path(root) / "agents"
+    agent_dir = Path(root) / "scripts/adapters"
     agent_dir.mkdir(parents=True, exist_ok=True)
     (agent_dir / "agents.json").write_text(json.dumps(registry))
 
@@ -82,7 +82,7 @@ def _run_worker_fixture_compat(command, *args, **kwargs):
                 write_legacy_registry(root, settings.pop("AI_AGENTS_JSON"))
                 if _real_subprocess_run(["git", "-C", str(root), "rev-parse", "--is-inside-work-tree"],
                                         capture_output=True, text=True).returncode == 0:
-                    _real_subprocess_run(["git", "-C", str(root), "add", "agents/agents.json"], check=True)
+                    _real_subprocess_run(["git", "-C", str(root), "add", "scripts/adapters/agents.json"], check=True)
                     if _real_subprocess_run(["git", "-C", str(root), "diff", "--cached", "--quiet"]).returncode:
                         _real_subprocess_run(["git", "-C", str(root), "-c", "user.name=Fixture",
                                               "-c", "user.email=fixture@example.invalid",
@@ -210,8 +210,8 @@ class AgentConfigContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "tasks.txt").write_text("")
-            config_dir = root / "agents"
-            config_dir.mkdir()
+            config_dir = root / "scripts/adapters"
+            config_dir.mkdir(parents=True)
             (config_dir / "agents.json").write_text(json.dumps({
                 "backup": {"default": False, "adapter": "opaque", "command": "backup"},
                 "main": {"default": True, "adapter": "opaque", "command": "main"},
@@ -2224,15 +2224,15 @@ class WorkerIntegrationTests(unittest.TestCase):
                 shutil.copy2(ROOT / name, root / name)
             (root / "scripts").mkdir()
             copy_runtime_fixture(root / "scripts/worker_runtime.py")
-            (root / "agents").mkdir()
-            (root / "agents/agents.json").write_text(json.dumps({
+            (root / "scripts/adapters").mkdir(parents=True, exist_ok=True)
+            (root / "scripts/adapters/agents.json").write_text(json.dumps({
                 "primary": {"default": True, "adapter": "opaque", "command": "unused"}
             }))
             (root / "tasks.txt").write_text("# no tasks\n")
             subprocess.run(["git", "init", "-q", str(root)], check=True)
             subprocess.run(["git", "-C", str(root), "config", "user.name", "Worker Test"], check=True)
             subprocess.run(["git", "-C", str(root), "config", "user.email", "worker@example.invalid"], check=True)
-            subprocess.run(["git", "-C", str(root), "add", "worker.sh", "scripts", "agents", ".gitignore", "tasks.txt"], check=True)
+            subprocess.run(["git", "-C", str(root), "add", "worker.sh", "scripts", ".gitignore", "tasks.txt"], check=True)
             subprocess.run(["git", "-C", str(root), "commit", "-qm", "fixture"], check=True)
 
             result = subprocess.run(["bash", str(root / "worker.sh")], cwd=root,
@@ -2241,6 +2241,7 @@ class WorkerIntegrationTests(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("RUN_ONCE", result.stdout)
+            self.assertIn("Registered adapters: 1", result.stdout)
             self.assertEqual(json.loads((root / "worker.status").read_text())["state"], "STOPPED")
             self.assertFalse((root / ".worker.pid").exists())
 
@@ -2504,7 +2505,7 @@ class DaemonLifecycleTests(unittest.TestCase):
         write_legacy_registry(self.root, json.dumps([
             generic_registration("test", sys.executable, [str(wrapper)], {"AGENT_DELAY": "1"})
         ]))
-        subprocess.run(["git", "-C", str(self.root), "add", "agents/agents.json"], check=True)
+        subprocess.run(["git", "-C", str(self.root), "add", "scripts/adapters/agents.json"], check=True)
         subprocess.run(["git", "-C", str(self.root), "commit", "-qm", "test: configure timeout agent"], check=True)
         self.env["TASK_TIMEOUT"] = "0.1"
         self.env["POLL_INTERVAL"] = "0.05"
@@ -2596,16 +2597,22 @@ class InstallerIntegrationTests(unittest.TestCase):
             self.assertTrue((target / "test/nightshift_worker/test_worker_runtime.py").is_file())
             self.assertTrue((target / "test/nightshift_worker/README.md").is_file())
             self.assertFalse((target / ".worker.env").exists())
-            self.assertTrue((target / "agents/agents.json").is_file())
+            self.assertTrue((target / "scripts/adapters/agents.json").is_file())
+            self.assertEqual((target / "scripts/adapters/agents.json").read_bytes(),
+                             (ROOT / "scripts/adapters/agents.json").read_bytes())
+            self.assertFalse((target / "agents/agents.json").exists())
             self.assertIn(".worker-agent-state*.json", (target / ".gitignore").read_text())
             self.assertIn(".worker-score*.json", (target / ".gitignore").read_text())
             self.assertIn(".worker-score*.json.lock/", (target / ".gitignore").read_text())
             self.assertIn(".worker-agent-scores/", (target / ".gitignore").read_text())
             self.assertIn(".worker-agent-events.jsonl", (target / ".gitignore").read_text())
             self.assertIn(".trials/", (target / ".gitignore").read_text())
-            agent_registry = target / "agents/agents.json"
+            agent_registry = target / "scripts/adapters/agents.json"
             custom_registry = '{"custom":{"default":true,"adapter":"opaque","command":"custom"}}\n'
-            agent_registry.write_text(custom_registry)
+            legacy_registry = target / "agents/agents.json"
+            legacy_registry.parent.mkdir()
+            legacy_registry.write_text(custom_registry)
+            agent_registry.unlink()
             (target / ".worker.env.example").write_text("stale environment example\n")
             (target / "update.sh").write_text("stale updater\n")
             deployed_runtime.write_text("stale runtime\n")
@@ -2614,15 +2621,24 @@ class InstallerIntegrationTests(unittest.TestCase):
             self.assertEqual(update.returncode, 0, update.stdout + update.stderr)
             self.assertIn("Deployed scripts/worker_runtime.py", update.stdout)
             self.assertEqual(deployed_runtime.read_bytes(), (ROOT / "scripts/worker_runtime.py").read_bytes())
+            self.assertIn("Migrated agents/agents.json to scripts/adapters/agents.json", update.stdout)
             self.assertFalse(operations.exists(), "updates must remove retired skill sidecars")
             planner_skill = (target / ".agents/skills/nightshift/planner/SKILL.md").read_text()
             worker_contract = (target / ".skills/universal-build-verify.md").read_text()
             self.assertNotIn("OPERATIONS.md", planner_skill + worker_contract)
             self.assertIn("full discovered graph", planner_skill)
             self.assertEqual(agent_registry.read_text(), custom_registry)
+            self.assertFalse(legacy_registry.exists())
             self.assertFalse((target / ".worker.env.example").exists())
             self.assertEqual((target / "update.sh").read_bytes(), (ROOT / "update.sh").read_bytes())
             self.assertEqual(deployed_runtime.read_bytes(), (ROOT / "scripts/worker_runtime.py").read_bytes())
+            # Once migrated, updates preserve the current config exactly.
+            preserved_registry = '{"custom":{"default":true,"adapter":"opaque","command":"changed"}}\n'
+            agent_registry.write_text(preserved_registry)
+            second_update = subprocess.run(["bash", str(ROOT / "install.sh"), str(target)],
+                                           cwd=ROOT, capture_output=True, text=True, timeout=30)
+            self.assertEqual(second_update.returncode, 0, second_update.stdout + second_update.stderr)
+            self.assertEqual(agent_registry.read_text(), preserved_registry)
             installed = subprocess.run(
                 [sys.executable, "-m", "unittest", "discover", "-s", "test", "-v"],
                 cwd=target, capture_output=True, text=True, timeout=45,

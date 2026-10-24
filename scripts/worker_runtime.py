@@ -2,7 +2,7 @@
 """Portable, testable operations behind the worker.sh compatibility entry point.
 
 Worker settings come from the launcher environment; agent registrations are read
-from the single agents/agents.json registry.
+from the single scripts/adapters/agents.json registry.
 Each command receives explicit inputs so callers and tests exercise the same seam.
 """
 
@@ -1294,7 +1294,7 @@ def worker_daemon(root):
                 else root / f".worker.{worker_id}.log")
     pid_file = (resolve("PID_FILE", ".worker.pid") if worker_id == "default"
                 else root / f".worker.{worker_id}.pid")
-    agent_config_file = resolve("AGENT_CONFIG_FILE", "agents/agents.json")
+    agent_config_file = resolve("AGENT_CONFIG_FILE", "scripts/adapters/agents.json")
     agents = load_agent_registry(agent_config_file)
     if not agents and tasks_file.is_file() and any(
             line.strip() and not line.lstrip().startswith("#")

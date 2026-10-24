@@ -6,7 +6,7 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Worker runtime settings live in this launcher. Agent-specific settings live
-# in agents/agents.json and are passed through the common adapter protocol.
+# in scripts/adapters/agents.json and are passed through the common adapter protocol.
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 WORKER_ID="${WORKER_ID:-default}"
 OS_TYPE="${OS_TYPE:-auto}"
@@ -29,7 +29,7 @@ STEP_PER_FILE="${STEP_PER_FILE:-5}"
 POLL_INTERVAL="${POLL_INTERVAL:-5}"
 RUN_ONCE="${RUN_ONCE:-0}"
 WORKER_PORT="${WORKER_PORT:-3000}"
-AGENT_CONFIG_FILE="${AGENT_CONFIG_FILE:-$SCRIPT_DIR/agents/agents.json}"
+AGENT_CONFIG_FILE="${AGENT_CONFIG_FILE:-$SCRIPT_DIR/scripts/adapters/agents.json}"
 
 if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
   echo "[FATAL ERROR] Python runtime not found: $PYTHON_BIN" >&2
