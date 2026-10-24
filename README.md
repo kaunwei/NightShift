@@ -35,7 +35,7 @@ The installer preserves an existing `.worker.env`, queue, history, and notes. To
 cp .worker.env.example .worker.env
 ```
 
-The example defaults to `AI_CLI=codex`, `AI_MODEL=gpt-6-luna`, and `AI_EFFORT=none`. Configure a different supported CLI/model in `.worker.env` as needed. Optional `AI_AGENTS_JSON` enables ordered provider failover after a failed CLI call reports a recognized quota or rate-limit error. The runtime does not query quotas in advance; when every registered agent is exhausted, it requeues the current ticket and stops.
+Register executable adapters in `AI_AGENTS_JSON`; the runtime does not select or infer a provider from an adapter name. The example uses the shipped Codex and AgY protocol adapters, with each provider executable and model configured in that adapter's `overrides`. Failover follows the registration order after quota exhaustion or a confirmed timeout. A capability change creates a Planner gate, so the replacement waits until the Planner acknowledges or revises the affected work. If every registration is quota-exhausted, the task remains queued until quota state is reset.
 
 ## Run and inspect
 

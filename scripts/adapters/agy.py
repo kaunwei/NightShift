@@ -29,7 +29,11 @@ def config(request):
                               "effort": overrides.get("effort", "medium"),
                               "mode": overrides.get("mode", "accept-edits"),
                               "sandbox": overrides.get("sandbox", "0"),
-                              "executable": overrides.get("executable", "agy")}}
+                              "executable": overrides.get("executable", "agy"),
+                              "additional_dirs": overrides.get("additional_dirs", ""),
+                              "extra_args": overrides.get("extra_args", []),
+                              "execution_timeout_seconds": overrides.get("execution_timeout_seconds", 1800),
+                              "action_limit": overrides.get("action_limit", 12)}}
 
 
 def start(request):
@@ -50,7 +54,15 @@ def start(request):
         argv += ["--model", cfg["model"]]
     if cfg["effort"]:
         argv += ["--effort", cfg["effort"]]
-    argv += ["--print-timeout", f"{request.get('limits', {}).get('execution_timeout_seconds', 1800)}s"]
+    argv += ["--print-timeout", f"{request.get('limits', {}).get('execution_timeout_seconds', cfg.get('execution_timeout_seconds', 1800))}s"]
+    for directory in str(cfg.get("additional_dirs", "")).split(","):
+        directory = directory.strip()
+        if directory and Path(directory).is_dir():
+            argv += ["--add-dir", directory]
+    extra_args = cfg.get("extra_args", [])
+    if not isinstance(extra_args, list) or not all(isinstance(arg, str) for arg in extra_args):
+        raise ValueError("AgY extra_args must be a string array")
+    argv.extend(extra_args)
     try:
         help_text = subprocess.run([cfg["executable"], "--help"], cwd=request["working_directory"],
                                    capture_output=True, text=True, timeout=10).stdout
@@ -60,7 +72,7 @@ def start(request):
             argv += ["--max-steps", str(request.get("limits", {}).get("action_limit", 12))]
     except (OSError, subprocess.TimeoutExpired):
         pass
-    limit = int(request.get("limits", {}).get("action_limit", 12))
+    limit = int(request.get("limits", {}).get("action_limit", cfg.get("action_limit", 12)))
     runner = r'''import json, subprocess, sys
 argv, cwd, env, log, message, result, status, limit = sys.argv[1:]
 argv, env = json.loads(argv), json.loads(env)
@@ -75,7 +87,8 @@ for line in open(log, encoding="utf-8", errors="replace"):
         actions += any(token in line for token in ("[EXEC]", "Tool Call", "edit_file", "write_file", "run_command", "read_file"))
 diagnostic = open(log, encoding="utf-8", errors="replace").read()
 quota = any(term in diagnostic.lower() for term in ("insufficient_quota", "rate limit", "resource_exhausted", "429", "out of credits"))
-outcome = "quota_exhausted" if quota else "step_budget_exceeded" if actions > int(limit) else "complete" if code == 0 else "failure"
+timed_out = "print timeout after" in diagnostic.lower()
+outcome = "quota_exhausted" if quota else "execution_timeout" if timed_out else "step_budget_exceeded" if actions > int(limit) else "complete" if code == 0 else "failure"
 payload = {}
 try: payload = json.load(open(message, encoding="utf-8"))
 except (OSError, ValueError):
@@ -91,6 +104,9 @@ json.dump({"status": outcome, "result_location": result, "exit_code": code}, ope
 '''
     child_env = {**request.get("environment", {}),
                  "NIGHTSHIFT_TASK_ID": request.get("task_id", ""),
+                 "NIGHTSHIFT_EXECUTION_KIND": request.get("kind", "main"),
+                 "MAX_STEPS": str(request.get("limits", {}).get("action_limit", 12)),
+                 "AGY_MAX_STEPS": str(request.get("limits", {}).get("action_limit", 12)),
                  "PORT": request.get("environment", {}).get("PORT", "3001"),
                  "TEST_PORT": request.get("environment", {}).get("TEST_PORT", "3001")}
     proc = subprocess.Popen([sys.executable, "-c", runner, json.dumps(argv),

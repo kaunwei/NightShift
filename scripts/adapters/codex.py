@@ -22,14 +22,20 @@ def read_request():
 
 def config(request):
     overrides = request.get("overrides", {})
+    approval_mode = overrides.get("approval_mode", "auto")
+    if approval_mode not in ("auto", "approve-for-me", "prompt", "default", "", "bypass"):
+        raise ValueError(f"unsupported Codex approval mode: {approval_mode}")
     return {"protocol_version": 1, "initial_score": int(overrides.get("initial_score", 5)),
             "limits": {"poll_interval_seconds": 0.25,
                        "callback_timeout_seconds": 30},
             "configuration": {"model": overrides.get("model", ""),
                               "effort": overrides.get("effort", "medium"),
-                              "approval_mode": overrides.get("approval_mode", "auto"),
+                              "approval_mode": approval_mode,
                               "sandbox": overrides.get("sandbox", "workspace-write"),
-                              "executable": overrides.get("executable", "codex")}}
+                              "executable": overrides.get("executable", "codex"),
+                              "ephemeral": str(overrides.get("ephemeral", "1")),
+                              "additional_dirs": overrides.get("additional_dirs", ""),
+                              "extra_args": overrides.get("extra_args", [])}}
 
 
 def start(request):
@@ -42,30 +48,52 @@ def start(request):
     message_path = output / "codex-message.json"
     prompt = Path(request["prompt_path"]).read_text(encoding="utf-8")
     argv = [cfg["executable"], "exec", "--color", "never", "--json",
-            "--output-last-message", str(message_path), "--ephemeral"]
+            "--output-last-message", str(message_path)]
+    if str(cfg.get("ephemeral", "1")).lower() in ("1", "true"):
+        argv.append("--ephemeral")
     if cfg["model"]:
         argv += ["--model", cfg["model"]]
     if cfg["effort"]:
         argv += ["--config", f"model_reasoning_effort={cfg['effort']}"]
     if cfg["approval_mode"] in ("auto", "approve-for-me"):
         argv.append("--approve-for-me")
+    elif cfg["approval_mode"] == "bypass":
+        argv.append("--dangerously-bypass-approvals-and-sandbox")
     else:
         argv += ["--sandbox", cfg["sandbox"]]
+    for directory in str(cfg.get("additional_dirs", "")).split(","):
+        directory = directory.strip()
+        if directory and Path(directory).is_dir():
+            argv += ["--add-dir", directory]
+    extra_args = cfg.get("extra_args", [])
+    if not isinstance(extra_args, list) or not all(isinstance(arg, str) for arg in extra_args):
+        raise ValueError("Codex extra_args must be a string array")
+    argv.extend(extra_args)
     limit = int(request.get("limits", {}).get("action_limit", 12))
-    runner = r'''import json, subprocess, sys
+    runner = r'''import json, os, signal, subprocess, sys
 argv, cwd, env, log, message, result, status, limit = sys.argv[1:]
 argv, env = json.loads(argv), json.loads(env)
 with open(log, "w", encoding="utf-8") as stream:
-    code = subprocess.run(argv, cwd=cwd, env={**__import__('os').environ, **env}, input=open(sys.stdin.fileno()).read(), text=True, stdout=stream, stderr=subprocess.STDOUT, check=False).returncode
-actions = 0
-for line in open(log, encoding="utf-8", errors="replace"):
-    try:
-        event = json.loads(line); item = event.get("item", {})
-        actions += event.get("type") == "item.completed" and item.get("type") == "command_execution"
-    except (ValueError, AttributeError): pass
+    process = subprocess.Popen(argv, cwd=cwd, env={**os.environ, **env},
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, bufsize=1)
+    process.stdin.write(open(sys.stdin.fileno()).read()); process.stdin.close()
+    actions, over_budget = 0, False
+    for line in process.stdout:
+        stream.write(line); stream.flush()
+        try:
+            event = json.loads(line); item = event.get("item", {})
+            actions += event.get("type") == "item.completed" and item.get("type") == "command_execution"
+        except (ValueError, AttributeError): pass
+        if actions > int(limit) and process.poll() is None:
+            over_budget = True; process.terminate()
+    try: code = process.wait(timeout=1)
+    except subprocess.TimeoutExpired:
+        process.kill(); code = process.wait(); over_budget = True
+if actions > int(limit): over_budget = True
 diagnostic = open(log, encoding="utf-8", errors="replace").read()
 quota = any(term in diagnostic.lower() for term in ("insufficient_quota", "rate limit", "resource_exhausted", "429", "out of credits"))
-outcome = "quota_exhausted" if quota else "step_budget_exceeded" if actions > int(limit) else "complete" if code == 0 else "failure"
+outcome = "quota_exhausted" if quota else "step_budget_exceeded" if over_budget else "complete" if code == 0 else "failure"
 payload = {}
 try: payload = json.load(open(message, encoding="utf-8"))
 except (OSError, ValueError): pass
@@ -79,6 +107,7 @@ json.dump({"status": outcome, "result_location": result, "exit_code": code}, ope
 '''
     child_env = {**request.get("environment", {}),
                  "NIGHTSHIFT_TASK_ID": request.get("task_id", ""),
+                 "NIGHTSHIFT_EXECUTION_KIND": request.get("kind", "main"),
                  "PORT": request.get("environment", {}).get("PORT", "3001"),
                  "TEST_PORT": request.get("environment", {}).get("TEST_PORT", "3001")}
     proc = subprocess.Popen([sys.executable, "-c", runner, json.dumps(argv),

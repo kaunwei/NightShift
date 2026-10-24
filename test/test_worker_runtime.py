@@ -30,6 +30,34 @@ def runtime(*args, env=None):
     )
 
 
+def copy_runtime_fixture(destination):
+    destination = Path(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(RUNTIME, destination)
+    adapters = destination.parent / "adapters"
+    shutil.copytree(ROOT / "scripts/adapters", adapters, dirs_exist_ok=True)
+
+
+def codex_registration(registration_id, executable="codex", model="", **settings):
+    overrides = {"executable": str(executable), **settings}
+    if model:
+        overrides["model"] = model
+    return {"id": registration_id, "adapter": "codex", "command": sys.executable,
+            "args": [str(ROOT / "scripts/adapters/codex.py")], "overrides": overrides}
+
+
+def generic_registration(registration_id, executable, args=(), env=None, **settings):
+    overrides = {"executable": str(executable), "args": list(args), "env": env or {}, **settings}
+    return {"id": registration_id, "adapter": "generic", "command": sys.executable,
+            "args": [str(ROOT / "scripts/adapters/generic.py")], "overrides": overrides}
+
+
+def task_cli_adapter(adapter, executable, **settings):
+    return ["--adapter", adapter, "--executable", sys.executable,
+            "--extra-arg", str(ROOT / "scripts/adapters" / f"{adapter}.py"),
+            "--overrides", json.dumps({"executable": str(executable), **settings})]
+
+
 class WorkerPromptContractTests(unittest.TestCase):
     def test_prompt_preserves_task_scope_budget_verification_and_score_ownership(self):
         prompt = build_task_prompt(
@@ -62,7 +90,8 @@ class WorkerPromptContractTests(unittest.TestCase):
 class AgentConfigContractTests(unittest.TestCase):
     def test_daemon_accepts_multiple_unrecognized_adapter_registrations(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory) / "project"
+            root.mkdir()
             (root / "tasks.txt").write_text("")
             profiles = [
                 {"id": "one", "adapter": "first-party", "command": "unused-first"},
@@ -73,6 +102,19 @@ class AgentConfigContractTests(unittest.TestCase):
             result = runtime("daemon", "--root", root, env=env)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("Queue is empty", result.stdout)
+
+    def test_legacy_provider_profile_is_rejected_before_task_claim(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            task = "TASK-LEGACY | TARGET: output.txt | ACTION: old config | VERIFY: true\n"
+            (root / "tasks.txt").write_text(task)
+            profile = [{"id": "old", "provider": "codex", "command": "codex"}]
+            env = {**os.environ, "AI_AGENTS_JSON": json.dumps(profile),
+                   "WORKER_ISOLATION": "0", "RUN_ONCE": "1", "POLL_INTERVAL": "0"}
+            result = runtime("daemon", "--root", root, env=env)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("unknown fields: provider", result.stderr)
+            self.assertEqual((root / "tasks.txt").read_text(), task)
 
 
 class AgentScoreContractTests(unittest.TestCase):
@@ -102,7 +144,7 @@ class AgentScoreContractTests(unittest.TestCase):
             legacy_state = root / ".worker-score.json"
             legacy_state.write_text(json.dumps({"version":1,"score":2,"success_window":[],"failures":{},"feedback":[]}))
             def execute(registration_id):
-                return runtime("task-cli", "--provider", "shared-adapter", "--agent-id", registration_id,
+                return runtime("task-cli", "--adapter", "shared-adapter", "--agent-id", registration_id,
                                "--executable", sys.executable, "--extra-arg", adapter,
                                "--work-dir", repo, "--prompt-file", root / "prompt.json",
                                "--output-file", root / f"{registration_id}.log",
@@ -196,20 +238,62 @@ class RegisteredAgentFailoverContractTests(unittest.TestCase):
 
 
 class BuiltinAdapterContractTests(unittest.TestCase):
+    def test_task_cli_treats_adapter_name_as_opaque_and_uses_registered_executable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "project"
+            root.mkdir()
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            subprocess.run(["git", "-C", str(root), "config", "user.name", "Adapter Test"], check=True)
+            subprocess.run(["git", "-C", str(root), "config", "user.email", "adapter@example.invalid"], check=True)
+            (root / "baseline.txt").write_text("baseline\n")
+            subprocess.run(["git", "-C", str(root), "add", "baseline.txt"], check=True)
+            subprocess.run(["git", "-C", str(root), "commit", "-qm", "baseline"], check=True)
+            executable = Path(directory) / "adapter.py"
+            executable.write_text(
+                "import json,pathlib,sys\nrequest=json.load(sys.stdin); op=sys.argv[1]\n"
+                "if op == 'get_config': response={'protocol_version':1,'initial_score':5,"
+                "'limits':{'poll_interval_seconds':0.01}}\n"
+                "elif op == 'start':\n"
+                " pathlib.Path(request['result_path']).write_text(json.dumps({'outcome':'no_change',"
+                "'changed':False,'no_change_reason':'adapter contract check'}))\n"
+                " p=pathlib.Path(request['output_dir']); p.mkdir(parents=True,exist_ok=True)\n"
+                " (p/'status.json').write_text(json.dumps({'status':'complete',"
+                "'result_location':request['result_path']}))\n"
+                " response={'execution_id':'test','status_location':str(p/'status.json')}\n"
+                "else: response=json.loads(pathlib.Path(request['status_location']).read_text())\n"
+                "print(json.dumps(response))\n")
+            prompt, output, result = Path(directory) / "prompt.txt", Path(directory) / "runtime.log", Path(directory) / "result.json"
+            prompt.write_text("same common task prompt")
+
+            completed = runtime("task-cli", "--adapter", "codex", "--executable", sys.executable,
+                                "--extra-arg", executable,
+                                "--work-dir", root, "--prompt-file", prompt,
+                                "--output-file", output, "--result-file", result,
+                                "--task-id", "TASK-ADAPTER", "--base", "HEAD")
+
+            self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+            self.assertEqual(json.loads(output.read_text())["status"], "complete")
+            self.assertEqual(json.loads(result.read_text())["no_change_reason"],
+                             "adapter contract check")
+
     def test_codex_adapter_runs_fake_cli_and_returns_structured_result(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             executable = root / "fake-codex"
             executable.write_text(
-                "#!/usr/bin/env python3\nimport json,sys\n"
+                "#!/usr/bin/env python3\nimport json,os,sys\n"
+                "json.dump(sys.argv[1:],open(os.environ['ARGS_LOG'],'w'))\n"
                 "a=sys.argv; out=a[a.index('--output-last-message')+1]\n"
                 "open(out,'w').write(json.dumps({'outcome':'complete','changed':False,"
                 "'no_change_reason':'fixture','commit_message':'docs: no changes'}))\n"
                 "print(json.dumps({'type':'item.completed','item':{'type':'command_execution'}}))\n")
             executable.chmod(0o755)
             adapter = ROOT / "scripts/adapters/codex.py"
+            args_log = root / "codex-args.json"
             request = {"protocol_version":1,"registration_id":"codex-test","overrides":{
-                "executable":str(executable)},"task_id":"TASK-CODEX",
+                "executable":str(executable),"model":"gpt-6-luna","effort":"none",
+                "approval_mode":"auto","ephemeral":"1","additional_dirs":str(root)},
+                "task_id":"TASK-CODEX","environment":{"ARGS_LOG":str(args_log)},
                 "working_directory":str(root),"prompt_path":str(root/'prompt.txt'),
                 "output_dir":str(root/'run'),"result_path":str(root/'result.json'),
                 "limits":{"action_limit":3}}
@@ -218,7 +302,7 @@ class BuiltinAdapterContractTests(unittest.TestCase):
                 return subprocess.run([sys.executable,str(adapter),name],
                     input=json.dumps(payload),text=True,capture_output=True,timeout=10)
             config = callback("get_config", {"protocol_version":1,"registration_id":"codex-test",
-                                               "overrides":{"executable":str(executable)}})
+                                               "overrides":request["overrides"]})
             self.assertEqual(json.loads(config.stdout)["initial_score"],5)
             started = callback("start", {**request,"configuration":json.loads(config.stdout)["configuration"]})
             self.assertEqual(started.returncode,0,started.stderr)
@@ -230,9 +314,17 @@ class BuiltinAdapterContractTests(unittest.TestCase):
                 result=json.loads(checked.stdout)
                 if result["status"]!="running": break
                 time.sleep(.02)
-            self.assertEqual(result["status"],"complete")
+            self.assertEqual(result["status"],"complete", str(handle) + " " + str(list((root/"run").iterdir())))
             self.assertEqual(json.loads(Path(result["result_location"]).read_text())["commit_message"],
                              "docs: no changes")
+            argv=json.loads(args_log.read_text())
+            self.assertIn("--approve-for-me",argv)
+            self.assertIn("gpt-6-luna",argv)
+            self.assertIn("model_reasoning_effort=none",argv)
+            self.assertEqual(argv[argv.index("--add-dir")+1],str(root))
+            invalid=callback("get_config",{"protocol_version":1,"registration_id":"codex-test",
+                "overrides":{"executable":str(executable),"approval_mode":"unknown"}})
+            self.assertNotEqual(invalid.returncode,0)
 
     def test_agy_adapter_probes_fake_cli_and_extracts_structured_result(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -240,21 +332,26 @@ class BuiltinAdapterContractTests(unittest.TestCase):
             executable.write_text(
                 "#!/usr/bin/env python3\nimport json,sys\n"
                 "if '--help' in sys.argv: print('--max-steps'); raise SystemExit(0)\n"
+                "import os; json.dump(sys.argv[1:],open(os.environ['ARGS_LOG'],'w'))\n"
                 "print(json.dumps({'outcome':'complete','changed':False,"
                 "'no_change_reason':'fixture','commit_message':'docs: no changes'}))\n")
             executable.chmod(0o755)
             adapter=ROOT/"scripts/adapters/agy.py"
+            args_log=root/"agy-args.json"; extra=root/"extra"; extra.mkdir()
             request={"protocol_version":1,"registration_id":"agy-test","overrides":{
-                "executable":str(executable)},"task_id":"TASK-AGY",
+                "executable":str(executable),"model":"model-low","effort":"high",
+                "mode":"accept-edits","sandbox":"true","additional_dirs":str(extra),
+                "extra_args":["--custom-flag"]},"task_id":"TASK-AGY",
+                "environment":{"ARGS_LOG":str(args_log)},
                 "working_directory":str(root),"prompt_path":str(root/"prompt.txt"),
                 "output_dir":str(root/"run"),"result_path":str(root/"result.json"),
-                "limits":{"action_limit":3}}
+                "limits":{"action_limit":23,"execution_timeout_seconds":90}}
             (root/"prompt.txt").write_text("implement nothing")
             def callback(name,payload):
                 return subprocess.run([sys.executable,str(adapter),name],input=json.dumps(payload),
                     text=True,capture_output=True,timeout=10)
             configuration=json.loads(callback("get_config",{"protocol_version":1,
-                "registration_id":"agy-test","overrides":{"executable":str(executable)}}).stdout)
+                "registration_id":"agy-test","overrides":request["overrides"]}).stdout)
             self.assertEqual(configuration["initial_score"],5)
             started=callback("start",{**request,"configuration":configuration["configuration"]})
             self.assertEqual(started.returncode,0,started.stderr)
@@ -266,6 +363,12 @@ class BuiltinAdapterContractTests(unittest.TestCase):
                 time.sleep(.02)
             self.assertEqual(result["status"],"complete")
             self.assertEqual(json.loads(Path(result["result_location"]).read_text())["outcome"],"complete")
+            argv=json.loads(args_log.read_text())
+            self.assertIn("--sandbox",argv); self.assertIn("--mode",argv)
+            self.assertIn("model-low",argv); self.assertIn("--effort",argv)
+            self.assertEqual(argv[argv.index("--add-dir")+1],str(extra))
+            self.assertIn("--max-steps",argv); self.assertIn("23",argv)
+            self.assertIn("--custom-flag",argv)
 
     def test_generic_compatibility_adapter_passes_paths_environment_and_structured_result(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -410,7 +513,7 @@ class AdapterGhostCloseoutContractTests(unittest.TestCase):
                 "else: response=json.loads(pathlib.Path(request['status_location']).read_text())\n"
                 "print(json.dumps(response))\n"
             )
-            result = runtime("task-cli", "--provider", "mystery", "--executable", sys.executable,
+            result = runtime("task-cli", "--adapter", "mystery", "--executable", sys.executable,
                              "--extra-arg", adapter, "--work-dir", repo, "--prompt-file", root / "worker-prompt.txt",
                              "--output-file", root / "main.log", "--result-file", root / "main-result.json",
                              "--task-id", "TASK-GHOST", "--target", "output.txt", "--base", "HEAD")
@@ -424,7 +527,9 @@ class AdapterGhostCloseoutContractTests(unittest.TestCase):
             self.assertEqual(ghost_request["task_id"], "TASK-GHOST")
             self.assertNotEqual(ghost_request["prompt_path"], main_request["prompt_path"])
             self.assertNotEqual(ghost_request["result_path"], main_request["result_path"])
-            self.assertEqual(json.loads(Path(ghost_request["prompt_path"]).read_text())["kind"], "closeout")
+            ghost_prompt = Path(ghost_request["prompt_path"]).read_text()
+            self.assertIn("CLOSEOUT ONLY for original task TASK-GHOST", ghost_prompt)
+            self.assertIn("MUST NOT modify source code", ghost_prompt)
             self.assertTrue(Path(ghost_request["output_dir"]).is_dir())
             self.assertEqual(json.loads(Path(ghost_request["result_path"]).read_text())["commit_message"],
                              "fix(parser): close out task")
@@ -432,7 +537,7 @@ class AdapterGhostCloseoutContractTests(unittest.TestCase):
             self.assertEqual(subprocess.run(["git", "-C", str(repo), "log", "-1", "--format=%s"],
                                             check=True, capture_output=True, text=True).stdout.strip(),
                              "fix(parser): close out task")
-            retry = runtime("task-cli", "--provider", "mystery", "--executable", sys.executable,
+            retry = runtime("task-cli", "--adapter", "mystery", "--executable", sys.executable,
                             "--extra-arg", adapter, "--work-dir", repo,
                             "--prompt-file", root / "worker-prompt.txt",
                             "--output-file", root / "main.log", "--result-file", root / "main-result.json",
@@ -487,7 +592,7 @@ class AdapterGhostCloseoutContractTests(unittest.TestCase):
                 root = Path(directory)
                 task = "TASK-CFG | TARGET: output.txt | ACTION: configuration check\n"
                 (root / "tasks.txt").write_text(task)
-                profile = {"id": "api", "provider": "generic", "command": "unused", **override}
+                profile = {"id": "api", "adapter": "generic", "command": "unused", **override}
                 env = {**os.environ, "AI_AGENTS_JSON": json.dumps([profile]), "WORKER_ISOLATION": "0", "RUN_ONCE": "1", "TASK_TIMEOUT": "1"}
                 result = runtime("daemon", "--root", root, env=env)
                 self.assertNotEqual(result.returncode, 0)
@@ -683,15 +788,15 @@ class WorkerScoreTests(unittest.TestCase):
             marker = Path(directory) / "continued-after-budget"
             env = os.environ.copy()
             env["BUDGET_MARKER"] = str(marker)
-            result = runtime("task-cli", "--provider", "codex", "--executable", executable,
+            result = runtime("task-cli", *task_cli_adapter("codex", executable,
+                             model="gpt-6-luna", effort="none", approval_mode="auto",
+                             sandbox="workspace-write", ephemeral="1", additional_dirs=""),
                              "--work-dir", root, "--prompt-file", prompt, "--output-file", output,
-                             "--result-file", last_message, "--timeout", "10", "--model", "gpt-6-luna",
-                             "--effort", "none", "--approval-mode", "auto", "--sandbox", "workspace-write",
-                             "--ephemeral", "1", "--additional-dirs", "", "--step-budget", "0",
+                             "--result-file", last_message, "--timeout", "10", "--step-budget", "0",
                              "--worker-port", "3001", "--target", "", "--task-id", "TASK-C", "--title", "test",
                              "--level", "1", "--verify", "", "--base", "HEAD", "--progress-file", "progress.log",
                              env=env)
-            self.assertEqual(result.returncode, 125)
+            self.assertEqual(result.returncode, 125, result.stdout + result.stderr + output.read_text())
             self.assertFalse(marker.exists())
 
     def test_codex_hands_closeout_marker_to_ghost_without_editing_code(self):
@@ -704,68 +809,64 @@ class WorkerScoreTests(unittest.TestCase):
                                       capture_output=True, text=True).stdout.strip()
             git("config", "user.name", "Codex Test")
             git("config", "user.email", "codex@example.invalid")
+            (root / ".gitignore").write_text(".worker-ghost-state.json\n.worker-ghosts/\n")
             (root / "output.txt").write_text("before\n")
-            git("add", "output.txt")
+            git("add", "output.txt", ".gitignore")
             git("commit", "-qm", "baseline")
             base = git("rev-parse", "HEAD")
             prompt = Path(directory) / "prompt.txt"
             prompt.write_text("implement")
-            output, last_message = Path(directory) / "cli.log", Path(directory) / "message.txt"
-            executable = root / "codex"
+            output, result_path = Path(directory) / "cli.log", Path(directory) / "result.json"
+            executable = Path(directory) / "fake-codex"
             executable.write_text(
-                "#!/bin/sh\n"
-                "last='' prev=''\n"
-                "for arg in \"$@\"; do if [ \"$prev\" = --output-last-message ]; then last=\"$arg\"; fi; prev=\"$arg\"; done\n"
-                "case \"$*\" in\n"
-                "  *'CLOSEOUT ONLY'*) printf '%s\\n' \"${CLOSEOUT_REPLY:-[CLOSEOUT_VERIFIED]}\" > \"$last\" ;;\n"
-                "  *) if [ \"$OMIT_INITIAL_RESULT\" = 1 ]; then rm -f \"$last\"; printf '%s\\n' \"${INITIAL_REPLY:-[CLOSEOUT_REQUIRED]}\"; else printf '%s\\n' \"${INITIAL_REPLY:-[CLOSEOUT_REQUIRED]}\" > \"$last\"; fi; printf 'after\\n' > output.txt ;;\n"
-                "esac\n"
-                "printf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"type\":\"command_execution\"}}'\n"
-            )
+                "#!/usr/bin/env python3\nimport json,os,sys\n"
+                "args=sys.argv[1:]; result=args[args.index('--output-last-message')+1]\n"
+                "kind=os.environ.get('NIGHTSHIFT_EXECUTION_KIND','main')\n"
+                "open(os.environ['KIND_LOG'],'a').write(kind+'\\n')\n"
+                "if kind == 'closeout': payload={'outcome':os.environ.get('CLOSEOUT_OUTCOME','complete'),"
+                "'changed':False,'commit_message':'fix: complete TASK-CLOSE'}\n"
+                "else:\n"
+                " payload={'outcome':os.environ.get('INITIAL_OUTCOME','closeout_required'),'changed':True}\n"
+                "json.dump(payload,open(result,'w'))\n"
+                "print(json.dumps({'type':'item.completed','item':{'type':'command_execution'}}))\n")
             executable.chmod(0o755)
-            git("add", "codex")
-            git("commit", "-qm", "add fake cli")
-            base = git("rev-parse", "HEAD")
-            def invoke(reply="[CLOSEOUT_VERIFIED]", omit_initial=False, mode="auto", initial="[CLOSEOUT_REQUIRED]"):
-                env = os.environ.copy()
-                env["CLOSEOUT_REPLY"] = reply
-                env["INITIAL_REPLY"] = initial
-                env["OMIT_INITIAL_RESULT"] = "1" if omit_initial else "0"
-                return runtime("task-cli", "--provider", "codex", "--executable", executable,
-                             "--work-dir", root, "--prompt-file", prompt, "--output-file", output,
-                             "--result-file", last_message, "--timeout", "10", "--model", "gpt-6-luna",
-                             "--effort", "none", "--approval-mode", mode, "--target", "output.txt",
-                             "--task-id", "TASK-CLOSE", "--title", "[CODE: FIX] change output",
-                             "--base", base, "--step-budget", "2", env=env)
 
-            result = invoke()
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(git("log", "-1", "--pretty=%s"), "fix(worker): complete TASK-CLOSE")
-            self.assertEqual(git("show", "HEAD:output.txt"), "after")
-            self.assertEqual(git("status", "--porcelain"), "")
-            for mode in ("auto", "approve-for-me", "prompt", "default", "", "bypass"):
-                for initial in ("[CLOSEOUT_REQUIRED]", "Attempts: 1 | Confidence: HIGH"):
-                    with self.subTest(mode=mode, initial=initial):
-                        git("reset", "--hard", base)
-                        result = invoke(mode=mode, initial=initial)
-                        self.assertEqual(result.returncode, 0, result.stderr)
-                        self.assertNotEqual(git("rev-parse", "HEAD"), base)
-                        self.assertEqual(git("show", "HEAD:output.txt"), "after")
-                        self.assertEqual(git("status", "--porcelain"), "")
-            for reply, omit_initial in ((reply, missing) for missing in (False, True)
-                                         for reply in ("[BLOCKED]", "[NEED_GUIDANCE]", "[NEED_DECOMPOSITION]", "[SCOPE_BLOCKED]", "[CLOSEOUT_INCOMPLETE]", "unverified")):
-                with self.subTest(reply=reply):
-                    git("reset", "--hard", base)
-                    result = invoke(reply, omit_initial)
-                    self.assertEqual(git("rev-parse", "HEAD"), base, "unverified closeout must not commit")
-                    if reply not in ("unverified", "[CLOSEOUT_INCOMPLETE]"):
-                        self.assertIn(reply, last_message.read_text())
-                    else:
-                        self.assertEqual(result.returncode, 126)
+            def invoke(initial="closeout_required", closeout="complete", mode="auto"):
+                env={**os.environ,"INITIAL_OUTCOME":initial,"CLOSEOUT_OUTCOME":closeout,
+                     "KIND_LOG":str(Path(directory)/"kind.log")}
+                return runtime("task-cli",*task_cli_adapter("codex",executable,model="gpt-6-luna",
+                    effort="none",approval_mode=mode),
+                    "--work-dir",root,"--prompt-file",prompt,"--output-file",output,
+                    "--result-file",result_path,"--timeout","10","--target","output.txt",
+                    "--task-id","TASK-CLOSE","--title","[CODE: FIX] change output",
+                    "--base",base,"--step-budget","2",env=env)
 
+            (root/"output.txt").write_text("after\n")
+            completed=invoke()
+            self.assertEqual(completed.returncode,0,completed.stdout+completed.stderr+(Path(directory)/"kind.log").read_text())
+            self.assertEqual(git("log","-1","--pretty=%s"),"fix: complete TASK-CLOSE")
+            self.assertEqual(git("show","HEAD:output.txt"),"after")
+            self.assertEqual(git("status","--porcelain"),"")
+            def reset_task_state():
+                git("reset","--hard",base)
+                (root/"output.txt").write_text("after\n")
+                (root/".worker-ghost-state.json").unlink(missing_ok=True)
+                shutil.rmtree(root/".worker-ghosts",ignore_errors=True)
+            for mode in ("auto","approve-for-me","prompt","default","","bypass"):
+                with self.subTest(mode=mode):
+                    reset_task_state()
+                    completed=invoke(mode=mode)
+                    self.assertEqual(completed.returncode,0,completed.stdout+completed.stderr+(Path(directory)/"kind.log").read_text())
+                    self.assertEqual(git("show","HEAD:output.txt"),"after")
+                    self.assertEqual(git("status","--porcelain"),"")
+            for outcome in ("blocked","scope_blocked","guidance","failure"):
+                with self.subTest(outcome=outcome):
+                    reset_task_state()
+                    completed=invoke("closeout_required",outcome)
+                    self.assertNotEqual(completed.returncode,0,completed.stdout+completed.stderr+(Path(directory)/"kind.log").read_text())
+                    self.assertEqual(git("rev-parse","HEAD"),base,
+                                     "an incomplete ghost must never commit")
 
-
-class StatusContractTests(unittest.TestCase):
     def test_status_is_valid_json_for_quoted_task_and_path(self):
         with tempfile.TemporaryDirectory() as directory:
             status = Path(directory) / "worker.status"
@@ -823,7 +924,7 @@ class CliContractTests(unittest.TestCase):
                 "print(json.dumps(response))\n"
             )
             result = runtime(
-                "task-cli", "--provider", "unknown-adapter", "--executable", sys.executable,
+                "task-cli", "--adapter", "unknown-adapter", "--executable", sys.executable,
                 "--extra-arg", adapter, "--work-dir", repo, "--prompt-file", root / "prompt.txt",
                 "--output-file", root / "adapter.log", "--result-file", root / "result.json",
                 "--task-id", "TASK-COMMIT", "--target", "output.txt", "--base", "HEAD",
@@ -865,7 +966,7 @@ class CliContractTests(unittest.TestCase):
                 "else: response=json.loads(pathlib.Path(request['status_location']).read_text())\n"
                 "print(json.dumps(response))\n"
             )
-            result = runtime("task-cli", "--provider", "new-adapter", "--executable", sys.executable,
+            result = runtime("task-cli", "--adapter", "new-adapter", "--executable", sys.executable,
                              "--extra-arg", adapter, "--work-dir", repo, "--prompt-file", root / "prompt",
                              "--output-file", root / "adapter.log", "--result-file", root / "result.json",
                              "--task-id", "TASK-NO-CHANGE", "--base", base)
@@ -900,7 +1001,7 @@ class CliContractTests(unittest.TestCase):
             prompt, output, result_file = root / "prompt", root / "output.log", root / "result.json"
             prompt.write_text("same shared task prompt")
             result = runtime(
-                "task-cli", "--provider", "unlisted-adapter", "--executable", sys.executable,
+                "task-cli", "--adapter", "unlisted-adapter", "--executable", sys.executable,
                 "--extra-arg", adapter, "--work-dir", repo, "--prompt-file", prompt,
                 "--output-file", output, "--result-file", result_file,
                 "--task-id", "TASK-UNKNOWN", "--worker-port", "4100", "--base", "HEAD",
@@ -909,51 +1010,10 @@ class CliContractTests(unittest.TestCase):
             self.assertEqual(json.loads(result_file.read_text())["commit_message"], "adapter result")
             self.assertIn('"status": "complete"', output.read_text())
 
-    def test_codex_args_keep_low_cost_model_and_safe_auto_policy(self):
-        with tempfile.TemporaryDirectory() as directory:
-            result = runtime(
-                "codex-args", "--last-message", Path(directory) / "message.txt",
-                "--model", "gpt-6-luna", "--effort", "none",
-                "--approval-mode", "auto", "--sandbox", "workspace-write",
-                "--ephemeral", "1", "--additional-dirs", directory,
-            )
-            self.assertEqual(result.returncode, 0, result.stderr)
-            args = result.stdout.split("\0")[:-1]
-            self.assertEqual(args[:3], ["exec", "--color", "never"])
-            self.assertIn("--approve-for-me", args)
-            self.assertIn("gpt-6-luna", args)
-            self.assertIn("model_reasoning_effort=none", args)
-            self.assertEqual(args[args.index("--add-dir") + 1], directory)
-
-    def test_codex_args_reject_unknown_approval_policy(self):
-        result = runtime("codex-args", "--last-message", "/tmp/message",
-                         "--approval-mode", "unknown")
-        self.assertEqual(result.returncode, 2)
-        self.assertIn("approval", result.stderr.lower())
-
-    def test_agy_args_preserve_mode_model_step_budget_and_existing_effort_suffix(self):
-        with tempfile.TemporaryDirectory() as directory:
-            executable = Path(directory) / "agy"
-            executable.write_text("#!/bin/sh\necho --max-turns\n")
-            executable.chmod(0o755)
-            extra = Path(directory) / "extra"
-            extra.mkdir()
-            result = runtime(
-                "agy-args", "--executable", executable, "--model", "model-low",
-                "--effort", "high", "--mode", "accept-edits", "--timeout", "90",
-                "--step-budget", "23", "--additional-dirs", f" {extra},/missing",
-                "--sandbox", "true",
-            )
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(result.stdout.split("\0")[:-1], [
-                "--sandbox", "--mode", "accept-edits", "--model", "model-low",
-                "--print-timeout", "90s", "--add-dir", str(extra),
-                "--max-turns", "23",
-            ])
-
     def test_task_cli_streams_output_selects_last_message_and_commits_only_target(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory) / "project"
+            root.mkdir()
             subprocess.run(["git", "init", "-q", str(root)], check=True)
             def git(*args):
                 return subprocess.run(["git", "-C", str(root), *args], check=True,
@@ -967,12 +1027,12 @@ class CliContractTests(unittest.TestCase):
             base = git("rev-parse", "HEAD")
             prompt = root / "prompt.txt"
             prompt.write_text("perform the task")
-            output, last_message = root / "cli.log", root / "message.txt"
+            output, last_message = Path(directory) / "cli.log", Path(directory) / "message.txt"
             executable = root / "codex"
             executable.write_text(
                 "#!/bin/sh\n"
                 "while [ \"$#\" -gt 0 ]; do\n"
-                "  if [ \"$1\" = --output-last-message ]; then shift; printf 'Attempts: 2\\n' > \"$1\"; fi\n"
+                "  if [ \"$1\" = --output-last-message ]; then shift; printf '{\\\"outcome\\\":\\\"complete\\\",\\\"changed\\\":true,\\\"commit_message\\\":\\\"fix: update output\\\"}' > \"$1\"; fi\n"
                 "  shift\n"
                 "done\n"
                 "printf 'finished\\n'\n"
@@ -981,18 +1041,22 @@ class CliContractTests(unittest.TestCase):
             executable.chmod(0o755)
 
             result = runtime(
-                "task-cli", "--provider", "codex", "--executable", executable,
+                "task-cli", *task_cli_adapter("codex", executable, model="gpt-6-luna",
+                    effort="none", approval_mode="auto"),
                 "--work-dir", root, "--prompt-file", prompt, "--output-file", output,
-                "--result-file", last_message, "--timeout", "15", "--model", "gpt-6-luna",
-                "--effort", "none", "--approval-mode", "auto", "--target", "output.txt",
+                "--result-file", last_message, "--timeout", "15", "--target", "output.txt",
                 "--task-id", "TASK-1", "--title", "[CODE: FIX] update output",
                 "--base", base,
             )
 
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn("finished", result.stdout)
-            self.assertEqual(output.read_text(), "finished\n")
-            self.assertEqual(last_message.read_text(), "Attempts: 2\n")
+            self.assertEqual(json.loads(output.read_text())["status"], "complete")
+            artifacts=Path(directory)
+            self.assertTrue(any("finished" in path.read_text()
+                                for path in artifacts.rglob("codex.jsonl")),
+                            str([(path, path.read_text(errors="replace"))
+                                 for path in artifacts.rglob("codex.jsonl")]))
+            self.assertEqual(json.loads(last_message.read_text())["commit_message"], "fix: update output")
             self.assertEqual(git("show", "HEAD:output.txt"), "after")
             self.assertEqual(git("status", "--porcelain"), "")
 
@@ -1020,13 +1084,15 @@ class CliContractTests(unittest.TestCase):
                 "printf '%s %s\\n' \"$MAX_STEPS\" \"$*\" >> \"$CALLS_LOG\"\n"
                 "printf '[EXEC] step\\n'\n"
                 "printf 'after\\n' > output.txt\n"
+                "case \"$*\" in *'CLOSEOUT ONLY for original task TASK-2'*) printf '{\\\"outcome\\\":\\\"complete\\\",\\\"changed\\\":false,\\\"commit_message\\\":\\\"fix: complete TASK-2\\\"}\\n' ;; *) printf '{\\\"outcome\\\":\\\"closeout_required\\\",\\\"changed\\\":true}\\n' ;; esac\n"
             )
             executable.chmod(0o755)
             env = os.environ.copy()
             env["CALLS_LOG"] = str(calls)
 
             result = runtime(
-                "task-cli", "--provider", "agy", "--executable", executable,
+                "task-cli", *task_cli_adapter("agy", executable, model="gemini-3.8-flash-low",
+                    effort="low", mode="accept-edits"),
                 "--work-dir", root, "--prompt-file", prompt, "--output-file", output,
                 "--timeout", "15", "--step-budget", "2", "--task-id", "TASK-2",
                 "--base", base, env=env,
@@ -1040,7 +1106,7 @@ class CliContractTests(unittest.TestCase):
             self.assertTrue(call_lines[1].startswith("1 "))
             self.assertIn("CLOSEOUT ONLY for original task TASK-2", calls.read_text())
             self.assertIn("MUST NOT modify source code", calls.read_text())
-            self.assertEqual(output.read_text().count("[EXEC] step"), 2)
+            self.assertEqual(json.loads(output.read_text())["status"], "complete")
 
     def test_task_cli_converts_provider_print_timeout_to_timeout_exit(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1050,24 +1116,28 @@ class CliContractTests(unittest.TestCase):
             executable = root / "fake-cli"
             executable.write_text("#!/bin/sh\necho 'print timeout after 90s'\n")
             executable.chmod(0o755)
-            result = runtime("task-cli", "--provider", "generic", "--executable", executable,
+            result = runtime("task-cli", *task_cli_adapter("generic", executable),
                              "--work-dir", root, "--prompt-file", prompt,
                              "--output-file", output, "--timeout", "10")
             self.assertEqual(result.returncode, 124)
 
     def test_task_cli_stream_timeout_stops_provider_and_preserves_partial_output(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            prompt, output = root / "prompt", root / "output"
+            root = Path(directory) / "project"
+            root.mkdir()
+            prompt, output = Path(directory) / "prompt", Path(directory) / "output"
             prompt.write_text("task")
             executable = root / "fake-cli"
             executable.write_text("#!/bin/sh\necho started\nsleep 10\n")
             executable.chmod(0o755)
-            result = runtime("task-cli", "--provider", "generic", "--executable", executable,
+            result = runtime("task-cli", *task_cli_adapter("generic", executable),
                              "--work-dir", root, "--prompt-file", prompt,
                              "--output-file", output, "--timeout", "0.5")
             self.assertEqual(result.returncode, 124)
-            self.assertIn("started", output.read_text())
+            self.assertEqual(json.loads(output.read_text())["status"], "execution_timeout")
+            logs = list(Path(directory).rglob("wrapper.log"))
+            self.assertEqual(len(logs), 1)
+            self.assertIn("started", logs[0].read_text())
 
 
 class TimeoutContractTests(unittest.TestCase):
@@ -1460,13 +1530,11 @@ class WorkerIntegrationTests(unittest.TestCase):
             for name in ("worker.sh", ".gitignore"):
                 shutil.copy2(ROOT / name, root / name)
             (root / "scripts").mkdir()
-            shutil.copy2(RUNTIME, root / "scripts/worker_runtime.py")
-            profiles = [
-                {"id": "first", "provider": "codex", "command": "codex", "model": "first-model"},
-                {"id": "second", "provider": "codex", "command": "codex", "model": "second-model"},
-            ]
+            copy_runtime_fixture(root / "scripts/worker_runtime.py")
+            profiles = [codex_registration("first", "codex", "first-model"),
+                        codex_registration("second", "codex", "second-model")]
             (root / ".worker.env").write_text(
-                "AI_CLI=codex\nWORKER_ISOLATION=0\nRUN_ONCE=1\nPOLL_INTERVAL=0\n"
+                "WORKER_ISOLATION=0\nRUN_ONCE=1\nPOLL_INTERVAL=0\n"
                 "AI_AGENTS_JSON='" + json.dumps(profiles) + "'\n"
             )
             task = "TASK-RECOVER | LEVEL: 1 | TARGET: output.txt | ACTION: write | VERIFY: true\n"
@@ -1474,7 +1542,7 @@ class WorkerIntegrationTests(unittest.TestCase):
             subprocess.run(["git", "init", "-q", str(root)], check=True)
             subprocess.run(["git", "-C", str(root), "config", "user.name", "Worker Test"], check=True)
             subprocess.run(["git", "-C", str(root), "config", "user.email", "worker@example.invalid"], check=True)
-            subprocess.run(["git", "-C", str(root), "add", "worker.sh", "scripts/worker_runtime.py", ".gitignore", "tasks.txt"], check=True)
+            subprocess.run(["git", "-C", str(root), "add", "worker.sh", "scripts", ".gitignore", "tasks.txt"], check=True)
             subprocess.run(["git", "-C", str(root), "commit", "-qm", "fixture"], check=True)
             bin_dir = Path(directory) / "bin"
             bin_dir.mkdir()
@@ -1507,7 +1575,7 @@ class WorkerIntegrationTests(unittest.TestCase):
             for name in ("worker.sh", ".gitignore"):
                 shutil.copy2(ROOT / name, root / name)
             (root / "scripts").mkdir()
-            shutil.copy2(RUNTIME, root / "scripts/worker_runtime.py")
+            copy_runtime_fixture(root / "scripts/worker_runtime.py")
             (root / ".worker.env").write_text(
                 "WORKER_ISOLATION=0\nRUN_ONCE=1\nPOLL_INTERVAL=0\n"
             )
@@ -1516,7 +1584,7 @@ class WorkerIntegrationTests(unittest.TestCase):
             subprocess.run(["git", "init", "-q", str(root)], check=True)
             subprocess.run(["git", "-C", str(root), "config", "user.name", "Worker Test"], check=True)
             subprocess.run(["git", "-C", str(root), "config", "user.email", "worker@example.invalid"], check=True)
-            subprocess.run(["git", "-C", str(root), "add", "worker.sh", "scripts/worker_runtime.py", ".gitignore", "tasks.txt"], check=True)
+            subprocess.run(["git", "-C", str(root), "add", "worker.sh", "scripts", ".gitignore", "tasks.txt"], check=True)
             subprocess.run(["git", "-C", str(root), "commit", "-qm", "fixture"], check=True)
             bin_dir = Path(directory) / "bin"
             bin_dir.mkdir()
@@ -1527,9 +1595,12 @@ class WorkerIntegrationTests(unittest.TestCase):
                 "  if [ \"$1\" = --output-last-message ]; then shift; result=$1; fi\n"
                 "  shift\n"
                 "done\n"
-                "printf '[BLOCKED] reports-not-writable\\n' > \"$result\"\n"
+                "printf '{\"outcome\":\"blocked\",\"changed\":false,\"diagnostic\":\"reports-not-writable\"}\\n' > \"$result\"\n"
             )
             fake.chmod(0o755)
+            (root / ".worker.env").write_text(
+                "WORKER_ISOLATION=0\nRUN_ONCE=1\nPOLL_INTERVAL=0\nAI_AGENTS_JSON='" +
+                json.dumps([codex_registration("test", fake)]) + "'\n")
 
             result = subprocess.run(["bash", str(root / "worker.sh")], cwd=root,
                                     env={**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"},
@@ -1548,7 +1619,7 @@ class WorkerIntegrationTests(unittest.TestCase):
             for name in ("worker.sh", ".gitignore"):
                 shutil.copy2(ROOT / name, root / name)
             (root / "scripts").mkdir()
-            shutil.copy2(RUNTIME, root / "scripts/worker_runtime.py")
+            copy_runtime_fixture(root / "scripts/worker_runtime.py")
             (root / ".worker.env").write_text(
                 "WORKER_ISOLATION=1\nRUN_ONCE=1\nPOLL_INTERVAL=0\n"
             )
@@ -1561,7 +1632,7 @@ class WorkerIntegrationTests(unittest.TestCase):
             subprocess.run(["git", "init", "-q", str(root)], check=True)
             subprocess.run(["git", "-C", str(root), "config", "user.name", "Worker Test"], check=True)
             subprocess.run(["git", "-C", str(root), "config", "user.email", "worker@example.invalid"], check=True)
-            subprocess.run(["git", "-C", str(root), "add", "worker.sh", "scripts/worker_runtime.py", ".gitignore", "tasks.txt"], check=True)
+            subprocess.run(["git", "-C", str(root), "add", "worker.sh", "scripts", ".gitignore", "tasks.txt"], check=True)
             subprocess.run(["git", "-C", str(root), "commit", "-qm", "fixture"], check=True)
             bin_dir = Path(directory) / "bin"
             bin_dir.mkdir()
@@ -1575,16 +1646,19 @@ class WorkerIntegrationTests(unittest.TestCase):
                 "mkdir -p .reports/fake\n"
                 "printf '# Fresh summary\\n' > .reports/fake/SUMMARY.md\n"
                 "printf '# Fresh details\\n' > .reports/fake/03-micro.md\n"
-                "printf 'Attempts: 1 | Confidence: HIGH\\n' > \"$result\"\n"
+                "printf '{\"outcome\":\"complete\",\"changed\":true,\"commit_message\":\"docs: add fake report\"}\\n' > \"$result\"\n"
             )
             fake.chmod(0o755)
+            (root / ".worker.env").write_text(
+                "WORKER_ISOLATION=1\nRUN_ONCE=1\nPOLL_INTERVAL=0\nAI_AGENTS_JSON='" +
+                json.dumps([codex_registration("research", fake)]) + "'\n")
 
             result = subprocess.run(["bash", str(root / "worker.sh")], cwd=root,
                                     env={**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"},
                                     capture_output=True, text=True, timeout=45)
 
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            self.assertIn("[DONE] TASK-REPORT", (root / "tasks.done").read_text())
+            self.assertIn("[DONE] TASK-REPORT", (root / "tasks.done").read_text(), result.stdout)
             self.assertIn("[MECHANICAL_AUDIT] Status: PASS | Task: TASK-REPORT",
                           (root / "progress.log").read_text())
             summary = root / ".reports/fake/SUMMARY.md"
@@ -1600,13 +1674,11 @@ class WorkerIntegrationTests(unittest.TestCase):
             for name in ("worker.sh", ".gitignore"):
                 shutil.copy2(ROOT / name, root / name)
             (root / "scripts").mkdir()
-            shutil.copy2(ROOT / "scripts/worker_runtime.py", root / "scripts/worker_runtime.py")
-            profiles = [
-                {"id": "primary", "provider": "codex", "command": "codex", "model": "gpt-6-luna"},
-                {"id": "backup", "provider": "codex", "command": "codex", "model": "gpt-6.1-sol"},
-            ]
+            copy_runtime_fixture(root / "scripts/worker_runtime.py")
+            profiles = [codex_registration("primary", "codex", "gpt-6-luna"),
+                        codex_registration("backup", "codex", "gpt-6.1-sol")]
             (root / ".worker.env").write_text(
-                "AI_CLI=agy\nWORKER_ISOLATION=0\nRUN_ONCE=1\nPOLL_INTERVAL=0\n"
+                "WORKER_ISOLATION=0\nRUN_ONCE=1\nPOLL_INTERVAL=0\n"
                 "AI_AGENTS_JSON='" + json.dumps(profiles) + "'\n"
             )
             (root / "tasks.txt").write_text(
@@ -1624,14 +1696,14 @@ class WorkerIntegrationTests(unittest.TestCase):
                 "  shift\ndone\n"
                 "printf '%s\\n' \"$model\" >> \"$AGENT_CALLS\"\n"
                 "if [ \"$model\" = gpt-6-luna ]; then echo 'Error: insufficient_quota'; exit 1; fi\n"
-                "printf 'Attempts: 1 | Confidence: HIGH\\n' > \"$result\"\n"
+                "printf '{\"outcome\":\"complete\",\"changed\":true,\"commit_message\":\"feat: complete TASK-Q\"}\\n' > \"$result\"\n"
                 "printf 'hello\\n' > output.txt\n"
             )
             fake.chmod(0o755)
             subprocess.run(["git", "init", "-q", str(root)], check=True)
             subprocess.run(["git", "-C", str(root), "config", "user.name", "Worker Test"], check=True)
             subprocess.run(["git", "-C", str(root), "config", "user.email", "worker@example.invalid"], check=True)
-            subprocess.run(["git", "-C", str(root), "add", "worker.sh", "scripts/worker_runtime.py", ".gitignore", "tasks.txt"], check=True)
+            subprocess.run(["git", "-C", str(root), "add", "worker.sh", "scripts", ".gitignore", "tasks.txt"], check=True)
             subprocess.run(["git", "-C", str(root), "commit", "-qm", "fixture"], check=True)
             calls = Path(directory) / "agent-calls.log"
             env = os.environ.copy()
@@ -1673,7 +1745,8 @@ class WorkerIntegrationTests(unittest.TestCase):
             resumed = subprocess.run(["bash", str(root / "worker.sh")], cwd=root, env=env,
                                       capture_output=True, text=True, timeout=45)
             self.assertEqual(resumed.returncode, 0, resumed.stdout + resumed.stderr)
-            self.assertEqual(calls.read_text().splitlines(), ["gpt-6-luna", "gpt-6.1-sol"])
+            self.assertEqual([line for line in calls.read_text().splitlines() if line],
+                             ["gpt-6-luna", "gpt-6.1-sol"])
             self.assertIn("[DONE]", (root / "tasks.done").read_text(),
                           (root / "progress.log").read_text())
             self.assertEqual((root / "output.txt").read_text(), "hello\n")
@@ -1685,7 +1758,7 @@ class WorkerIntegrationTests(unittest.TestCase):
             root = Path(directory) / "repo"
             (root / "scripts").mkdir(parents=True)
             shutil.copy2(ROOT / "worker.sh", root / "worker.sh")
-            shutil.copy2(RUNTIME, root / "scripts/worker_runtime.py")
+            copy_runtime_fixture(root / "scripts/worker_runtime.py")
             shutil.copy2(ROOT / ".gitignore", root / ".gitignore")
             wrapper = Path(directory) / "API wrapper.py"
             wrapper.write_text(
@@ -1697,12 +1770,13 @@ class WorkerIntegrationTests(unittest.TestCase):
                 "assert Path(os.environ['NIGHTSHIFT_PROMPT_FILE']).read_text() == sys.argv[-1]\n"
                 "assert os.environ['NIGHTSHIFT_TASK_ID'] == 'TASK-API'\n"
                 "Path('output.txt').write_text('api adapter worked\\n')\n"
-                "Path(os.environ['NIGHTSHIFT_RESULT_FILE']).write_text('Attempts: 1 | Confidence: HIGH')\n"
+                "Path(os.environ['NIGHTSHIFT_RESULT_FILE']).write_text(json.dumps({'outcome':'complete',"
+                "'changed':True,'commit_message':'feat: add wrapper output'}))\n"
                 "print('[BLOCKED] quoted tool output; not the final result')\n"
             )
-            profiles = [{"id": "api", "provider": "generic", "command": sys.executable,
-                         "args": [str(wrapper), "--api-mode"], "model": "vendor/model-x",
-                         "effort": "medium", "env": {"API_BASE_URL": "https://api.invalid/v2"}}]
+            profiles = [generic_registration("api", sys.executable,
+                         [str(wrapper), "--api-mode"], {"API_BASE_URL": "https://api.invalid/v2"},
+                         model="vendor/model-x", effort="medium")]
             (root / ".worker.env").write_text(
                 "WORKER_ISOLATION=0\nRUN_ONCE=1\nPOLL_INTERVAL=0\nAI_AGENTS_JSON='" + json.dumps(profiles) + "'\n")
             (root / "tasks.txt").write_text(
@@ -1719,21 +1793,21 @@ class WorkerIntegrationTests(unittest.TestCase):
             result = subprocess.run(["bash", str(root / "worker.sh")], cwd=root,
                                     capture_output=True, text=True, timeout=20)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            self.assertIn("[DONE] TASK-API", (root / "tasks.done").read_text(), result.stdout)
+            self.assertIn("[DONE] TASK-API", (root / "tasks.done").read_text(),
+                          result.stdout + (root / ".worker.log").read_text())
             self.assertEqual(git("show", "HEAD:output.txt"), "api adapter worked")
 
-    def test_worker_requeues_task_and_stops_when_all_registered_agents_are_exhausted(self):
+    def test_worker_holds_replacement_until_planner_resolves_failover(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "repo"
             root.mkdir()
             for name in ("worker.sh", ".gitignore"):
                 shutil.copy2(ROOT / name, root / name)
             (root / "scripts").mkdir()
-            shutil.copy2(ROOT / "scripts/worker_runtime.py", root / "scripts/worker_runtime.py")
+            copy_runtime_fixture(root / "scripts/worker_runtime.py")
             task = ("TASK-Q | LEVEL: 1 | TARGET: output.txt | ACTION: [CODE: EXPAND] "
                     "Write output | VERIFY: test -f output.txt\n")
-            profiles = [{"id": "one", "provider": "codex", "command": "codex"},
-                        {"id": "two", "provider": "codex", "command": "codex"}]
+            profiles = [codex_registration("one"), codex_registration("two")]
             (root / ".worker.env").write_text(
                 "WORKER_ISOLATION=0\nRUN_ONCE=1\nPOLL_INTERVAL=0\n"
                 "AI_AGENTS_JSON='" + json.dumps(profiles) + "'\n"
@@ -1747,7 +1821,7 @@ class WorkerIntegrationTests(unittest.TestCase):
             subprocess.run(["git", "init", "-q", str(root)], check=True)
             subprocess.run(["git", "-C", str(root), "config", "user.name", "Worker Test"], check=True)
             subprocess.run(["git", "-C", str(root), "config", "user.email", "worker@example.invalid"], check=True)
-            subprocess.run(["git", "-C", str(root), "add", "worker.sh", "scripts/worker_runtime.py", ".gitignore", "tasks.txt"], check=True)
+            subprocess.run(["git", "-C", str(root), "add", "worker.sh", "scripts", ".gitignore", "tasks.txt"], check=True)
             subprocess.run(["git", "-C", str(root), "commit", "-qm", "fixture"], check=True)
             result = subprocess.run(["bash", str(root / "worker.sh")], cwd=root,
                                     env={**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"},
@@ -1756,9 +1830,11 @@ class WorkerIntegrationTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertEqual((root / "tasks.txt").read_text(), task)
             self.assertEqual((root / "tasks.done").read_text(), "")
-            self.assertIn("QUOTA_EXHAUSTED", result.stdout)
-            self.assertEqual(json.loads((root / "worker.status").read_text())["state"], "QUOTA_EXHAUSTED")
-            self.assertEqual(set(json.loads((root / ".worker-agent-state.default.json").read_text())["exhausted"]), {"one", "two"})
+            self.assertIn("PLANNER_REVIEW_REQUIRED", result.stdout)
+            self.assertEqual(json.loads((root / "worker.status").read_text())["state"], "PAUSED_FOR_PLANNER")
+            state = json.loads((root / ".worker-agent-state.default.json").read_text())
+            self.assertEqual(set(state["exhausted"]), {"one"})
+            self.assertEqual((root / ".worker-dispatch-gate.json").is_file(), True)
 
     def test_worker_does_not_switch_agents_for_non_quota_cli_errors(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1767,9 +1843,8 @@ class WorkerIntegrationTests(unittest.TestCase):
             for name in ("worker.sh", ".gitignore"):
                 shutil.copy2(ROOT / name, root / name)
             (root / "scripts").mkdir()
-            shutil.copy2(ROOT / "scripts/worker_runtime.py", root / "scripts/worker_runtime.py")
-            profiles = [{"id": "primary", "provider": "codex", "command": "codex"},
-                        {"id": "backup", "provider": "codex", "command": "codex"}]
+            copy_runtime_fixture(root / "scripts/worker_runtime.py")
+            profiles = [codex_registration("primary"), codex_registration("backup")]
             (root / ".worker.env").write_text(
                 "WORKER_ISOLATION=0\nRUN_ONCE=1\nPOLL_INTERVAL=0\n"
                 "AI_AGENTS_JSON='" + json.dumps(profiles) + "'\n"
@@ -1783,7 +1858,7 @@ class WorkerIntegrationTests(unittest.TestCase):
             subprocess.run(["git", "init", "-q", str(root)], check=True)
             subprocess.run(["git", "-C", str(root), "config", "user.name", "Worker Test"], check=True)
             subprocess.run(["git", "-C", str(root), "config", "user.email", "worker@example.invalid"], check=True)
-            subprocess.run(["git", "-C", str(root), "add", "worker.sh", "scripts/worker_runtime.py", ".gitignore", "tasks.txt"], check=True)
+            subprocess.run(["git", "-C", str(root), "add", "worker.sh", "scripts", ".gitignore", "tasks.txt"], check=True)
             subprocess.run(["git", "-C", str(root), "commit", "-qm", "fixture"], check=True)
             calls = Path(directory) / "calls.log"
             env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}", "AGENT_CALLS": str(calls)}
@@ -1803,7 +1878,7 @@ class WorkerIntegrationTests(unittest.TestCase):
             (root / "scripts").mkdir(parents=True)
             shutil.copy2(ROOT / "scripts/status.sh", root / "scripts/status.sh")
             (root / "scripts").mkdir(exist_ok=True)
-            shutil.copy2(ROOT / "scripts/worker_runtime.py", root / "scripts/worker_runtime.py")
+            copy_runtime_fixture(root / "scripts/worker_runtime.py")
             (root / ".worker.env").write_text(
                 "STATUS_FILE=state/worker.json\nTASKS_FILE=queue/tasks.txt\n"
                 "TASKS_DONE_FILE=queue/tasks.done\nPROGRESS_FILE=queue/progress.log\n"
@@ -1963,15 +2038,15 @@ class WorkerIntegrationTests(unittest.TestCase):
             for name in ("worker.sh", ".gitignore"):
                 shutil.copy2(ROOT / name, root / name)
             (root / "scripts").mkdir()
-            shutil.copy2(ROOT / "scripts/worker_runtime.py", root / "scripts/worker_runtime.py")
+            copy_runtime_fixture(root / "scripts/worker_runtime.py")
             (root / ".worker.env").write_text(
-                "WORKER_ISOLATION=0\nRUN_ONCE=1\nPOLL_INTERVAL=0.01\nAI_CLI=codex\n"
+                "WORKER_ISOLATION=0\nRUN_ONCE=1\nPOLL_INTERVAL=0.01\n"
             )
             (root / "tasks.txt").write_text("# no tasks\n")
             subprocess.run(["git", "init", "-q", str(root)], check=True)
             subprocess.run(["git", "-C", str(root), "config", "user.name", "Worker Test"], check=True)
             subprocess.run(["git", "-C", str(root), "config", "user.email", "worker@example.invalid"], check=True)
-            subprocess.run(["git", "-C", str(root), "add", "worker.sh", "scripts/worker_runtime.py", ".gitignore", "tasks.txt"], check=True)
+            subprocess.run(["git", "-C", str(root), "add", "worker.sh", "scripts", ".gitignore", "tasks.txt"], check=True)
             subprocess.run(["git", "-C", str(root), "commit", "-qm", "fixture"], check=True)
 
             result = subprocess.run(["bash", str(root / "worker.sh")], cwd=root,
@@ -1989,7 +2064,7 @@ class WorkerIntegrationTests(unittest.TestCase):
             for name in ("worker.sh", ".gitignore"):
                 shutil.copy2(ROOT / name, root / name)
             (root / "scripts").mkdir()
-            shutil.copy2(ROOT / "scripts/worker_runtime.py", root / "scripts/worker_runtime.py")
+            copy_runtime_fixture(root / "scripts/worker_runtime.py")
             (root / ".worker.env").write_text("WORKER_ISOLATION=0\n")
             pid_file = root / ".worker.pid"
             pid_file.write_text(f"{os.getpid()}\n")
@@ -2009,11 +2084,7 @@ class WorkerIntegrationTests(unittest.TestCase):
             for name in ("worker.sh", ".gitignore"):
                 shutil.copy2(ROOT / name, root / name)
             (root / "scripts").mkdir()
-            shutil.copy2(ROOT / "scripts/worker_runtime.py", root / "scripts/worker_runtime.py")
-            (root / ".worker.env").write_text(
-                "AI_CLI=codex\nWORKER_ISOLATION=0\nRUN_ONCE=1\nPOLL_INTERVAL=0\nTASK_TIMEOUT=0.5\n"
-                "WORKER_SCORE_FILE=.worker-score-test.json\n"
-            )
+            copy_runtime_fixture(root / "scripts/worker_runtime.py")
             (root / "output.txt").write_text("baseline\n")
             (root / "tasks.txt").write_text(
                 "TASK-T | LEVEL: 1 | TARGET: output.txt | ACTION: [CODE: FIX] Timeout test | VERIFY: true\n"
@@ -2027,10 +2098,14 @@ class WorkerIntegrationTests(unittest.TestCase):
                 "sleep 10\n"
             )
             fake.chmod(0o755)
+            (root / ".worker.env").write_text(
+                "WORKER_ISOLATION=0\nRUN_ONCE=1\nPOLL_INTERVAL=0\nTASK_TIMEOUT=0.5\n"
+                "WORKER_SCORE_FILE=.worker-score-test.json\nAI_AGENTS_JSON='" +
+                json.dumps([codex_registration("timeout", fake)]) + "'\n")
             subprocess.run(["git", "init", "-q", str(root)], check=True)
             subprocess.run(["git", "-C", str(root), "config", "user.name", "Worker Test"], check=True)
             subprocess.run(["git", "-C", str(root), "config", "user.email", "worker@example.invalid"], check=True)
-            subprocess.run(["git", "-C", str(root), "add", "worker.sh", "scripts/worker_runtime.py", ".gitignore", "output.txt", "tasks.txt"], check=True)
+            subprocess.run(["git", "-C", str(root), "add", "worker.sh", "scripts", ".gitignore", "output.txt", "tasks.txt"], check=True)
             subprocess.run(["git", "-C", str(root), "commit", "-qm", "fixture"], check=True)
             env = os.environ.copy()
             env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
@@ -2057,12 +2132,7 @@ class WorkerIntegrationTests(unittest.TestCase):
             for name in ("worker.sh", ".gitignore"):
                 shutil.copy2(ROOT / name, root / name)
             (root / "scripts").mkdir()
-            shutil.copy2(ROOT / "scripts/worker_runtime.py", root / "scripts/worker_runtime.py")
-            (root / ".worker.env").write_text(
-                "AI_CLI=codex\nAI_MODEL=gpt-6-luna\nAI_EFFORT=none\n"
-                "CODEX_APPROVAL_MODE=auto\nWORKER_ISOLATION=0\n"
-                "RUN_ONCE=1\nPOLL_INTERVAL=0\nTASK_TIMEOUT=30\n"
-            )
+            copy_runtime_fixture(root / "scripts/worker_runtime.py")
             (root / "tasks.txt").write_text(
                 "TASK-1 | LEVEL: 1 | TARGET: output.txt | ACTION: [CODE: EXPAND] "
                 "Write output | VERIFY: test -f output.txt\n"
@@ -2075,7 +2145,7 @@ class WorkerIntegrationTests(unittest.TestCase):
                 "printf '%s\\n' \"$@\" > \"$FAKE_ARGS_LOG\"\n"
                 "while [ \"$#\" -gt 0 ]; do\n"
                 "  if [ \"$1\" = --output-last-message ]; then\n"
-                "    shift; printf 'Attempts: 1 | Confidence: HIGH\\n' > \"$1\"\n"
+                "    shift; printf '{\"outcome\":\"complete\",\"changed\":true,\"commit_message\":\"feat: complete TASK-1\"}\\n' > \"$1\"\n"
                 "  fi\n"
                 "  shift\n"
                 "done\n"
@@ -2083,13 +2153,16 @@ class WorkerIntegrationTests(unittest.TestCase):
                 "if [ \"${FAKE_OUTSIDE:-0}\" = 1 ]; then printf 'bad\\n' > outside.txt; fi\n"
             )
             fake.chmod(0o755)
+            (root / ".worker.env").write_text(
+                "WORKER_ISOLATION=0\nRUN_ONCE=1\nPOLL_INTERVAL=0\nTASK_TIMEOUT=30\nAI_AGENTS_JSON='" +
+                json.dumps([codex_registration("codex", fake, "gpt-6-luna", effort="none")]) + "'\n")
             def git(*args):
                 return subprocess.run(["git", "-C", str(root), *args],
                                       capture_output=True, text=True, check=True).stdout.strip()
             git("init", "-q")
             git("config", "user.name", "Worker Test")
             git("config", "user.email", "worker@example.invalid")
-            git("add", "worker.sh", "scripts/worker_runtime.py", ".gitignore", "tasks.txt")
+            git("add", "worker.sh", "scripts", ".gitignore", "tasks.txt")
             git("commit", "-qm", "fixture")
             args_log = Path(directory) / "args.txt"
             env = os.environ.copy()
@@ -2101,7 +2174,8 @@ class WorkerIntegrationTests(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertEqual((root / "tasks.txt").read_text(), "")
-            self.assertIn("[DONE]", (root / "tasks.done").read_text())
+            self.assertIn("[DONE]", (root / "tasks.done").read_text(),
+                          result.stdout + result.stderr)
             self.assertEqual((root / "output.txt").read_text(), "hello\n")
             self.assertEqual(git("show", "HEAD:output.txt"), "hello")
             self.assertIn("--model\ngpt-6-luna", args_log.read_text())
@@ -2120,7 +2194,7 @@ class WorkerIntegrationTests(unittest.TestCase):
                                       env=env, capture_output=True, text=True, timeout=45)
             self.assertEqual(rejected.returncode, 0, rejected.stdout + rejected.stderr)
             self.assertIn("[FAILED]", (root / "tasks.done").read_text())
-            self.assertIn("[MECHANICAL_AUDIT] Status: FAIL", (root / "progress.log").read_text())
+            self.assertIn("Pre-commit audit failed", rejected.stderr)
             self.assertFalse((root / "outside.txt").exists())
             self.assertEqual(git("show", "HEAD:output.txt"), "hello")
 
@@ -2132,7 +2206,7 @@ class DaemonLifecycleTests(unittest.TestCase):
         self.root = Path(self.directory.name) / "repo"
         (self.root / "scripts").mkdir(parents=True)
         shutil.copy2(ROOT / "worker.sh", self.root / "worker.sh")
-        shutil.copy2(RUNTIME, self.root / "scripts/worker_runtime.py")
+        copy_runtime_fixture(self.root / "scripts/worker_runtime.py")
         shutil.copy2(ROOT / ".gitignore", self.root / ".gitignore")
         (self.root / ".worker.env").write_text(
             "WORKER_ISOLATION=0\nRUN_ONCE=0\nPOLL_INTERVAL=0.05\nSTEP_BASE=1\nSTEP_PER_FILE=0\n")
@@ -2141,19 +2215,19 @@ class DaemonLifecycleTests(unittest.TestCase):
         self.fake.write_text(
             "#!/usr/bin/env python3\nimport os,sys,json\nfrom pathlib import Path\n"
             "if Path(os.environ['QUOTA_FLAG']).exists():\n print('RESOURCE_EXHAUSTED code 429',flush=True);sys.exit(1)\n"
-            "prompt=sys.argv[-1]\n"
+            "prompt=sys.stdin.read()\n"
             "if 'TASK-BUDGET' in prompt:\n"
             " Path('output.txt').write_text('partial')\n"
             " for _ in range(2): print(json.dumps({'type':'item.completed','item':{'type':'command_execution'}}),flush=True)\n"
             "else:\n"
             " Path('output.txt').write_text('recovered')\n"
-            " Path(sys.argv[sys.argv.index('--output-last-message')+1]).write_text('Attempts: 1 | Confidence: HIGH')\n")
+            " Path(sys.argv[sys.argv.index('--output-last-message')+1]).write_text(json.dumps({'outcome':'complete','changed':True,'commit_message':'feat: recover output'}))\n")
         self.fake.chmod(0o755)
         for args in (("init", "-q"), ("config", "user.name", "Lifecycle Test"),
                      ("config", "user.email", "lifecycle@example.invalid"),
                      ("add", "."), ("commit", "-qm", "fixture")):
             subprocess.run(["git", "-C", str(self.root), *args], check=True, capture_output=True)
-        self.env = {**os.environ, "AI_CLI": "codex", "AI_AGENTS_JSON": "",
+        self.env = {**os.environ, "AI_AGENTS_JSON": json.dumps([codex_registration("test", self.fake)]),
                     "PATH": f"{self.fake.parent}{os.pathsep}{os.environ['PATH']}",
                     "QUOTA_FLAG": str(self.flag)}
 
@@ -2210,13 +2284,13 @@ class DaemonLifecycleTests(unittest.TestCase):
         queue.write_text(queue.read_text().replace("VERIFY: test -f output.txt", "VERIFY: false"))
         self.start()
         self.wait_for(lambda: (self.root / "tasks.done").exists() and
-                      "[GUARD_VIOLATION]" in (self.root / "tasks.done").read_text())
+                      "[FAILED] TASK-AUDIT" in (self.root / "tasks.done").read_text())
         time.sleep(0.15)
         self.assertEqual(self.state(), "BLOCKED")
         self.assertIn("awaiting Planner", json.loads((self.root / "worker.status").read_text())["current_task"])
 
     def test_all_quotas_exhausted_waits_then_recovers_without_daemon_restart(self):
-        self.env["AI_AGENTS_JSON"] = json.dumps([{"id": "test", "provider": "codex", "command": str(self.fake)}])
+        self.env["AI_AGENTS_JSON"] = json.dumps([codex_registration("test", self.fake)])
         self.flag.touch()
         self.enqueue("TASK-QUOTA")
         self.start()
@@ -2311,7 +2385,7 @@ class InstallerIntegrationTests(unittest.TestCase):
                 "print(json.dumps(x))\n")
             (Path(directory)/"prompt.txt").write_text("common task prompt")
             runtime_path=target/"scripts/worker_runtime.py"
-            result=subprocess.run([sys.executable,str(runtime_path),"task-cli","--provider","unknown-extension",
+            result=subprocess.run([sys.executable,str(runtime_path),"task-cli","--adapter","unknown-extension",
                 "--executable",sys.executable,"--extra-arg",str(adapter),"--work-dir",str(repo),
                 "--prompt-file",str(Path(directory)/"prompt.txt"),"--output-file",str(Path(directory)/"run.log"),
                 "--result-file",str(Path(directory)/"result.json"),"--task-id","TASK-INSTALLED",

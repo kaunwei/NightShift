@@ -339,10 +339,6 @@ def record_score_result(path, task_id, result, evidence=""):
         lock.rmdir()
 
 
-def blocking_outcome(text):
-    return bool(re.search(r"\[(?:SCOPE_BLOCKED|NEED_GUIDANCE|NEED_DECOMPOSITION|BLOCKED)\]", text))
-
-
 def build_ghost_closeout_prompt(task_id, verify, progress_file, host_git=False):
     git_policy = ("The host runtime owns all Git writes. Do not stage or commit. After verification succeeds, report [CLOSEOUT_VERIFIED]."
                   if host_git else "If verification passes, commit only the existing changes; never alter file contents.")
@@ -374,48 +370,6 @@ def workspace_snapshot(work_dir, base):
         else:
             snapshot[name] = None
     return snapshot
-
-
-def agent_command(args, options, prompt):
-    return [args.executable, *options, *getattr(args, "extra_args", []), prompt]
-
-
-def run_codex_closeout(args, environment, output, actions_used):
-    remaining = args.step_budget - actions_used
-    if remaining <= 0:
-        return 125
-    before = workspace_snapshot(args.work_dir, args.base)
-    original_message = Path(args.result_file) if args.result_file else Path(args.output_file)
-    closeout_message = str(original_message.with_name("closeout-message.txt"))
-    Path(closeout_message).unlink(missing_ok=True)
-    prompt = build_ghost_closeout_prompt(args.task_id, args.verify, args.progress_file, host_git=True)
-    codex = argparse.Namespace(
-        last_message=closeout_message, model=args.model, effort=args.effort,
-        approval_mode=args.approval_mode, sandbox=args.sandbox,
-        ephemeral=args.ephemeral, additional_dirs=args.additional_dirs,
-    )
-    environment["MAX_STEPS"] = str(remaining)
-    command = agent_command(args, codex_args(codex), prompt)
-    code = stream_with_timeout(args.timeout, command, args.work_dir,
-                               environment, output, append=True, action_budget=remaining)
-    after = workspace_snapshot(args.work_dir, args.base)
-    if before != after:
-        print("[WORKER] Ghost closeout changed implementation files; rejecting closeout.", file=sys.stderr)
-        return 126
-    output_text = output.read_text(encoding="utf-8", errors="replace") if output.exists() else ""
-    if count_codex_actions(output_text) > args.step_budget:
-        return 125
-    if code == 0:
-        message = Path(closeout_message)
-        text = message.read_text(encoding="utf-8", errors="replace") if message.is_file() else ""
-        atomic_write(original_message, text)
-        if "[CLOSEOUT_INCOMPLETE]" in text:
-            return 126
-        if blocking_outcome(text):
-            return 0
-        if "[CLOSEOUT_VERIFIED]" not in text:
-            return 126
-    return code
 
 
 def pop_task(queue_path):
@@ -465,7 +419,7 @@ def restore_task_front(queue_path, task):
         lock.rmdir()
 
 
-def parse_agent_registry(raw, defaults):
+def parse_agent_registry(raw, defaults=None):
     if not raw.strip():
         return []
     profiles = json.loads(raw)
@@ -475,21 +429,18 @@ def parse_agent_registry(raw, defaults):
     for item in profiles:
         if not isinstance(item, dict):
             raise ValueError("each AI_AGENTS_JSON entry must be an object")
-        unknown = set(item) - {"id", "provider", "adapter", "command", "executable", "model", "effort", "agy_mode", "args", "env", "overrides"}
+        unknown = set(item) - {"id", "adapter", "command", "model", "effort", "args", "env", "overrides"}
         if unknown:
             raise ValueError(f"agent profile has unknown fields: {', '.join(sorted(unknown))}")
-        for key in ("id", "provider", "command", "executable", "model", "effort", "agy_mode"):
+        for key in ("id", "adapter", "command", "model", "effort"):
             if key in item and not isinstance(item[key], str):
                 raise ValueError(f"agent {key} must be a string")
         agent_id = item.get("id", "").strip()
-        provider_value = item.get("adapter", item.get("provider", ""))
-        provider = str(provider_value).strip()
-        if "adapter" not in item:
-            provider = provider.lower()
-        command = str(item.get("command", item.get("executable", ""))).strip()
+        adapter = item.get("adapter", "").strip()
+        command = item.get("command", "").strip()
         if not agent_id or agent_id in seen:
             raise ValueError("AI_AGENTS_JSON agent ids must be non-empty and unique")
-        if not provider:
+        if not adapter:
             raise ValueError(f"agent {agent_id} requires an adapter name")
         if not command:
             raise ValueError(f"AI_AGENTS_JSON agent {agent_id} requires a command")
@@ -498,6 +449,7 @@ def parse_agent_registry(raw, defaults):
         overrides = item.get("overrides", {})
         if not isinstance(overrides, dict):
             raise ValueError(f"agent {agent_id} overrides must be an object")
+        overrides = {**overrides, **{key: item[key] for key in ("model", "effort") if key in item}}
         if not isinstance(extra_args, list) or not all(isinstance(arg, str) for arg in extra_args):
             raise ValueError(f"agent {agent_id} args must be an array of strings")
         if not isinstance(environment, dict) or not all(isinstance(k, str) and isinstance(v, str)
@@ -506,19 +458,19 @@ def parse_agent_registry(raw, defaults):
             raise ValueError(f"agent {agent_id} env must map valid names to strings")
         seen.add(agent_id)
         agents.append({
-            "id": agent_id, "provider": provider, "command": command,
+            "id": agent_id, "adapter": adapter, "command": command,
             "args": extra_args, "env": environment,
             "overrides": overrides,
-            "model": str(item.get("model", defaults["model"])),
-            "effort": str(item.get("effort", defaults["effort"])),
-            "agy_mode": str(item.get("agy_mode", defaults["agy_mode"])),
+            "model": str(overrides.get("model", "")),
         })
     return agents
 
 
 ADAPTER_PROTOCOL_VERSION = 1
 ADAPTER_TERMINAL_STATUSES = {"complete", "closeout_required", "quota_exhausted",
-                             "step_budget_exceeded", "failed", "cancelled"}
+                             "step_budget_exceeded", "execution_timeout",
+                             "callback_timeout", "cancellation_failed",
+                             "failed", "cancelled"}
 
 
 def adapter_callback(command, callback, request, extra_args=(), timeout=30):
@@ -601,7 +553,7 @@ def execute_adapter_protocol(command, request, extra_args=(), trace=None,
     if not isinstance(callback_timeout, (int, float)) or callback_timeout <= 0:
         raise ValueError("adapter callback_timeout_seconds must be positive")
     base["configuration"] = configuration.get("configuration", {})
-    base["limits"] = configuration.get("limits", {})
+    base["limits"] = {**configuration.get("limits", {}), **base.get("limits", {})}
     try:
         execution = adapter_callback(command, start_callback, base, extra_args,
                                      timeout=callback_timeout)
@@ -668,7 +620,7 @@ def quota_error(text):
 
 
 def should_failover_agent(exit_code, result_text):
-    """Only provider quota and confirmed timeout statuses may select another registration."""
+    """Only quota and confirmed timeout statuses may select another registration."""
     try:
         payload = json.loads(result_text)
     except (TypeError, json.JSONDecodeError):
@@ -707,8 +659,10 @@ def execute_registered_agents(args, agents, state_path, rollback):
         snapshot_root = Path(getattr(args, "attempt_snapshot_root", "") or
                              (Path(args.work_dir) / ".scratch/attempts" / args.task_id))
         attempt.attempt_baseline = str(snapshot_root / attempt.attempt_id / "baseline")
+        attempt.adapter_artifact_dir = str(Path(attempt.attempt_baseline).parent / "adapter")
         args.attempt_id = attempt.attempt_id
         args.attempt_baseline = attempt.attempt_baseline
+        args.adapter_artifact_dir = attempt.adapter_artifact_dir
         try:
             capture_attempt_baseline(attempt.work_dir, args.task_id, attempt.attempt_id,
                                      attempt.attempt_baseline)
@@ -716,11 +670,9 @@ def execute_registered_agents(args, agents, state_path, rollback):
             args.recovery_failed = True
             raise
         args.recovery_failed = False
-        attempt.provider = agent["provider"]
+        attempt.adapter = agent["adapter"]
         attempt.executable = agent["command"]
         attempt.model = agent["model"]
-        attempt.effort = agent["effort"]
-        attempt.agy_mode = agent["agy_mode"]
         attempt.extra_args = agent["args"]
         attempt.agent_env = agent["env"]
         attempt.agent_id = agent["id"]
@@ -731,29 +683,38 @@ def execute_registered_agents(args, agents, state_path, rollback):
             output = Path(getattr(attempt, output_name, "") or ".")
             if output.is_file():
                 output.unlink()
-        print(f"[WORKER] Launching registered agent {agent['id']} ({agent['provider']}, model={agent['model'] or 'default'})...")
-        code = execute_task_cli(attempt)
+        print(f"[WORKER] Launching registered agent {agent['id']} ({agent['adapter']}, model={agent['model'] or 'default'})...")
+        code = execute_adapter_task(attempt)
         output_path = Path(attempt.output_file)
         result_path = Path(attempt.result_file) if attempt.result_file else output_path
         output_text = output_path.read_text(encoding="utf-8", errors="replace") if output_path.exists() else ""
         result_text = result_path.read_text(encoding="utf-8", errors="replace") if result_path.exists() else ""
-        quota_exhausted = quota_error(output_text + "\n" + result_text)
+        try:
+            parsed_result = json.loads(result_text)
+        except (TypeError, json.JSONDecodeError):
+            parsed_result = {}
+        quota_exhausted = (quota_error(output_text + "\n" + result_text)
+                           or (isinstance(parsed_result, dict)
+                               and parsed_result.get("outcome") == "quota_exhausted"))
         if not quota_exhausted and not should_failover_agent(code, output_text):
             if state["task_exclusions"].pop(args.task_id, None) is not None:
                 atomic_write(state_path, json.dumps(state, ensure_ascii=False, indent=2) + "\n")
             return code, False
         if quota_exhausted:
             state["exhausted"][agent["id"]] = {
-                "provider": agent["provider"], "command": agent["command"],
+                "adapter": agent["adapter"], "command": agent["command"],
                 "reason": "quota", "detected_at": datetime.now(timezone.utc).isoformat(),
             }
             atomic_write(state_path, json.dumps(state, ensure_ascii=False, indent=2) + "\n")
         reason = "quota exhausted" if quota_exhausted else "timed out"
         print(f"[WORKER] Agent {agent['id']} {reason}; switching to the next registered agent.", file=sys.stderr)
-        rollback(attempt.attempt_baseline, attempt.attempt_id)
         if index + 1 == len(available):
-            print("[WORKER] QUOTA_EXHAUSTED: all registered agents are exhausted; task remains queued.")
-            return 0, True
+            if quota_exhausted:
+                rollback(attempt.attempt_baseline, attempt.attempt_id)
+                print("[WORKER] QUOTA_EXHAUSTED: all registered agents are exhausted; task remains queued.")
+                return 0, True
+            return code, False
+        rollback(attempt.attempt_baseline, attempt.attempt_id)
         next_agent = available[index + 1]
         if not quota_exhausted:
             task_exclusions.append(agent["id"])
@@ -888,90 +849,6 @@ def display_status(path):
         print("Isolation Mode : DISABLED (In-place execution)")
 
 
-def codex_args(args):
-    """Build the Codex adapter invocation without shell splitting or eval."""
-    command = ["exec", "--color", "never", "--json", "--output-last-message", args.last_message]
-    if args.ephemeral.lower() in ("1", "true"):
-        command.append("--ephemeral")
-    if args.model:
-        command.extend(("--model", args.model))
-    if args.effort:
-        command.extend(("--config", f"model_reasoning_effort={args.effort}"))
-    if args.approval_mode in ("auto", "approve-for-me"):
-        command.append("--approve-for-me")
-    elif args.approval_mode in ("prompt", "default", ""):
-        command.extend(("--sandbox", args.sandbox))
-    elif args.approval_mode == "bypass":
-        command.append("--dangerously-bypass-approvals-and-sandbox")
-    else:
-        raise ValueError(f"unsupported Codex approval mode: {args.approval_mode}")
-    for directory in args.additional_dirs.split(","):
-        directory = directory.strip()
-        if directory and Path(directory).is_dir():
-            command.extend(("--add-dir", directory))
-    return command
-
-
-def agy_args(args):
-    """Build agy's argv from worker settings without shell word splitting."""
-    command = []
-    if args.sandbox.lower() in ("1", "true"):
-        command.append("--sandbox")
-    if args.mode:
-        command.extend(("--mode", args.mode))
-    if args.model:
-        command.extend(("--model", args.model))
-    command.extend(("--print-timeout", f"{args.timeout}s"))
-    for directory in args.additional_dirs.split(","):
-        directory = directory.strip()
-        if directory and Path(directory).is_dir():
-            command.extend(("--add-dir", directory))
-    if args.effort and not re.search(r"-(?:low|medium|high|xhigh|max)$", args.model):
-        command.extend(("--effort", args.effort))
-    try:
-        help_text = subprocess.run([args.executable, "--help"], check=False,
-                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                   text=True).stdout
-        if "--max-turns" in help_text:
-            command.extend(("--max-turns", str(args.step_budget)))
-        elif "--max-steps" in help_text:
-            command.extend(("--max-steps", str(args.step_budget)))
-    except OSError:
-        # Preserve launch-time diagnostics; the actual invocation reports missing CLI.
-        pass
-    return command
-
-
-def count_agy_steps(output):
-    pattern = re.compile(r"^\[EXEC\]|Tool Call|edit_file|write_file|run_command|read_file")
-    return sum(bool(pattern.search(line)) for line in output.splitlines())
-
-
-def count_codex_actions(output):
-    """Count observable Codex command executions from its JSONL event stream."""
-    count = 0
-    for line in output.splitlines():
-        try:
-            event = json.loads(line)
-        except (json.JSONDecodeError, TypeError):
-            continue
-        item = event.get("item", {}) if isinstance(event, dict) else {}
-        if (isinstance(item, dict) and item.get("type") == "command_execution"
-                and event.get("type") == "item.completed"):
-            count += 1
-    return count
-
-
-def is_codex_action_event(line):
-    try:
-        event = json.loads(line)
-    except (json.JSONDecodeError, TypeError):
-        return False
-    item = event.get("item", {}) if isinstance(event, dict) else {}
-    return (isinstance(item, dict) and item.get("type") == "command_execution"
-            and event.get("type") == "item.completed")
-
-
 def run_with_timeout(seconds, command):
     """Run a command with inherited output and terminate its process group on timeout."""
     if not command:
@@ -1005,111 +882,6 @@ def run_with_timeout(seconds, command):
             process.wait()
         return 124
     return 128 + abs(return_code) if return_code < 0 else return_code
-
-
-def stream_with_timeout(seconds, command, cwd, environment, output_path, append=False,
-                        action_budget=None):
-    """Stream combined CLI output to the worker console and its audit log."""
-    options = {"cwd": cwd, "env": environment, "stdout": subprocess.PIPE,
-              "stderr": subprocess.STDOUT, "bufsize": 0}
-    if os.name == "nt":
-        options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
-    else:
-        options["start_new_session"] = True
-    process = subprocess.Popen(command, **options)
-    chunks = queue.Queue()
-
-    def read_output():
-        try:
-            while True:
-                chunk = process.stdout.read(4096)
-                if not chunk:
-                    break
-                chunks.put(chunk)
-        finally:
-            chunks.put(None)
-
-    reader = threading.Thread(target=read_output, daemon=True)
-    reader.start()
-    deadline = time.monotonic() + seconds
-    timed_out = False
-    budget_exceeded = False
-    action_count = 0
-    event_buffer = ""
-    finished_reading = False
-    with open(output_path, "ab" if append else "wb") as output:
-        while not finished_reading:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0 and (process.poll() is None or reader.is_alive()):
-                timed_out = True
-                try:
-                    if os.name == "nt":
-                        process.send_signal(signal.CTRL_BREAK_EVENT)
-                    else:
-                        os.killpg(process.pid, signal.SIGTERM)
-                except (OSError, ValueError):
-                    process.terminate()
-                try:
-                    process.wait(timeout=2)
-                except subprocess.TimeoutExpired:
-                    if os.name == "nt":
-                        process.kill()
-                    else:
-                        try:
-                            os.killpg(process.pid, signal.SIGKILL)
-                        except OSError:
-                            process.kill()
-                    process.wait()
-                remaining = 0.1
-            try:
-                chunk = chunks.get(timeout=min(0.1, max(0.01, remaining)))
-            except queue.Empty:
-                if process.poll() is not None and not reader.is_alive():
-                    finished_reading = True
-                continue
-            if chunk is None:
-                finished_reading = True
-                continue
-            output.write(chunk)
-            output.flush()
-            if action_budget is not None and not budget_exceeded:
-                event_buffer += chunk.decode("utf-8", "replace")
-                lines = event_buffer.split("\n")
-                event_buffer = lines.pop()
-                action_count += sum(is_codex_action_event(line) for line in lines)
-                if action_count > action_budget:
-                    budget_exceeded = True
-                    try:
-                        if os.name == "nt":
-                            process.send_signal(signal.CTRL_BREAK_EVENT)
-                        else:
-                            os.killpg(process.pid, signal.SIGTERM)
-                    except (OSError, ValueError):
-                        process.terminate()
-                    try:
-                        process.wait(timeout=2)
-                    except subprocess.TimeoutExpired:
-                        if os.name == "nt":
-                            process.kill()
-                        else:
-                            try:
-                                os.killpg(process.pid, signal.SIGKILL)
-                            except OSError:
-                                process.kill()
-                        process.wait()
-            try:
-                sys.stdout.buffer.write(chunk)
-                sys.stdout.buffer.flush()
-            except (AttributeError, OSError):
-                sys.stdout.write(chunk.decode("utf-8", "replace"))
-                sys.stdout.flush()
-    reader.join(timeout=1)
-    if timed_out:
-        return 124
-    if budget_exceeded:
-        return 125
-    code = process.wait()
-    return 128 + abs(code) if code < 0 else code
 
 
 def finalize_task_git(args):
@@ -1161,7 +933,7 @@ def finalize_structured_adapter_result(args, result):
     message = result.get("commit_message")
     if not isinstance(message, str) or not message.strip():
         return 126
-    if args.verify:
+    if args.verify and not re.match(r"^(REPORT_ONLY|none)$", args.verify, re.I):
         verify_code, verify_output = run_verify(args.verify, args.work_dir,
                                                 args.worker_port, args.timeout)
         if verify_output:
@@ -1229,14 +1001,9 @@ def run_adapter_ghost(args, main_request, main_status, main_result):
     output_root.mkdir(parents=True, exist_ok=True)
     ghost_dir = output_root / f"ghost-{uuid.uuid4().hex}"
     ghost_dir.mkdir(parents=True, exist_ok=False)
-    prompt_path = ghost_dir / "closeout-prompt.json"
-    prompt = {
-        "kind": "closeout", "task_id": task_id,
-        "instructions": "Verify and complete closeout only. Do not edit project files or stage/commit. Return a structured result with outcome and commit_message.",
-        "original_outcome": main_result.get("outcome"),
-        "verification_command": args.verify,
-    }
-    atomic_write(prompt_path, json.dumps(prompt, ensure_ascii=False, indent=2) + "\n")
+    prompt_path = ghost_dir / "closeout-prompt.txt"
+    atomic_write(prompt_path, build_ghost_closeout_prompt(
+        task_id, args.verify, args.progress_file, host_git=True))
     ghost_result = ghost_dir / "result.json"
     before = workspace_snapshot(args.work_dir, args.base)
     request = {
@@ -1252,13 +1019,19 @@ def run_adapter_ghost(args, main_request, main_status, main_result):
                    "closeout_deadline_seconds": remaining_deadline},
     }
     status = execute_adapter_protocol(
-        args.executable, request, getattr(args, "extra_args", ()),
+        getattr(args, "adapter_command", args.executable), request,
+        getattr(args, "adapter_args", getattr(args, "extra_args", ())),
         callback_timeout=getattr(args, "callback_timeout", 30),
         execution_timeout=remaining_deadline, start_callback="closeout",
     )
     after = workspace_snapshot(args.work_dir, args.base)
     if before != after:
-        print("[WORKER] Ghost closeout changed implementation files; rejecting result.",
+        changed = sorted(name for name in before.keys() | after.keys()
+                         if before.get(name) != after.get(name))
+        details = "; ".join(f"{name}: {before.get(name)!r} -> {after.get(name)!r}"
+                             for name in changed)
+        print("[WORKER] Ghost closeout changed implementation files; rejecting result: "
+              + details,
               file=sys.stderr)
         return 126, {}, ghost_dir
     if status.get("status") != "complete" or not status.get("result_location"):
@@ -1274,37 +1047,52 @@ def run_adapter_ghost(args, main_request, main_status, main_result):
     return finalize_structured_adapter_result(args, result), result, ghost_dir
 
 
-def execute_task_cli(args):
-    with tempfile.TemporaryDirectory(prefix="nightshift-agent-") as directory:
-        return _execute_task_cli(args, Path(directory) / "prompt.txt")
-
-
 def execute_adapter_task(args):
     """Adapt a registered task to the external protocol and persist its structured result."""
     output = Path(args.output_file)
     output.parent.mkdir(parents=True, exist_ok=True)
     result_path = Path(args.result_file or output.with_name("adapter-result.json"))
     result_path.parent.mkdir(parents=True, exist_ok=True)
+    attempt_id = getattr(args, "attempt_id", "") or str(uuid.uuid4())
+    result_path.unlink(missing_ok=True)
+    artifact_root = getattr(args, "adapter_artifact_dir", "")
+    if not artifact_root:
+        artifact_root = output.parent
+        work_dir = Path(args.work_dir).resolve()
+        if Path(artifact_root).resolve().is_relative_to(work_dir):
+            artifact_root = work_dir.parent / ".nightshift-adapter-artifacts" / args.task_id
+    adapter_output_dir = Path(artifact_root) / attempt_id
+    adapter_output_dir.mkdir(parents=True, exist_ok=True)
     prompt_path = Path(args.prompt_file)
+    adapter_command = args.executable
+    adapter_args = getattr(args, "extra_args", ())
+    overrides = getattr(args, "agent_overrides", None)
+    if overrides is None:
+        try:
+            overrides = json.loads(getattr(args, "overrides_json", "{}"))
+        except json.JSONDecodeError as error:
+            raise ValueError(f"adapter overrides must be valid JSON: {error}") from error
+        if not isinstance(overrides, dict):
+            raise ValueError("adapter overrides must be a JSON object")
+    args.adapter_command = adapter_command
+    args.adapter_args = adapter_args
     request = {
-        "registration_id": getattr(args, "agent_id", "") or args.provider,
-        "overrides": {"model": args.model, "effort": args.effort,
-                      **getattr(args, "agent_overrides", {})},
+        "registration_id": getattr(args, "agent_id", "") or args.adapter,
+        "overrides": overrides,
         "task_id": args.task_id,
         "task_version": getattr(args, "task_version", hashlib.sha256(
             (getattr(args, "title", "") or args.task_id).encode("utf-8")).hexdigest()[:16]),
-        "attempt_id": getattr(args, "attempt_id", str(uuid.uuid4())),
+        "attempt_id": attempt_id,
         "working_directory": str(Path(args.work_dir).resolve()),
         "prompt_path": str(prompt_path.resolve()),
-        "output_dir": str(output.parent.resolve()),
+        "output_dir": str(adapter_output_dir.resolve()),
         "result_path": str(result_path.resolve()),
         "environment": {**getattr(args, "agent_env", {}),
                         "PORT": args.worker_port, "TEST_PORT": args.worker_port},
         "limits": {"execution_timeout_seconds": args.timeout,
                    "action_limit": args.step_budget},
     }
-    status = execute_adapter_protocol(args.executable, request,
-                                      getattr(args, "extra_args", ()),
+    status = execute_adapter_protocol(adapter_command, request, adapter_args,
                                       callback_timeout=getattr(args, "callback_timeout", 30),
                                       execution_timeout=getattr(args, "execution_timeout", args.timeout))
     score_root = getattr(args, "agent_score_state_file", "")
@@ -1320,10 +1108,11 @@ def execute_adapter_task(args):
             shutil.copy2(result_path, destination)
     result_path = Path(args.result_file or output.with_name("adapter-result.json"))
     result = json.loads(result_path.read_text(encoding="utf-8")) if result_path.exists() else {}
-    if status.get("status") == "complete":
+    if status.get("status") in ("complete", "closeout_required"):
         if not isinstance(result, dict):
             raise ValueError("adapter result must be a JSON object")
-        code = finalize_structured_adapter_result(args, result)
+        code = (finalize_structured_adapter_result(args, result)
+                if status.get("status") == "complete" else 126)
         if code == 126 and (result.get("outcome") == "closeout_required"
                             or (result.get("outcome") == "complete"
                                 and not str(result.get("commit_message", "")).strip())):
@@ -1341,120 +1130,6 @@ def execute_adapter_task(args):
                                   "result": result}, ensure_ascii=False),
                       encoding="utf-8")
     return code
-
-
-def _execute_task_cli(args, adapter_prompt):
-    if args.provider not in ("codex", "agy", "generic"):
-        return execute_adapter_task(args)
-    if not args.result_file:
-        args.result_file = str(Path(args.output_file).with_name("last-message.txt"))
-    prompt = Path(args.prompt_file).read_text(encoding="utf-8")
-    adapter_prompt.write_text(prompt, encoding="utf-8")
-    Path(args.result_file).unlink(missing_ok=True)
-    environment = os.environ.copy()
-    environment.update(getattr(args, "agent_env", {}))
-    environment.update(NIGHTSHIFT_MODEL=args.model, NIGHTSHIFT_EFFORT=args.effort,
-                       NIGHTSHIFT_PROMPT_FILE=str(adapter_prompt.resolve()),
-                       NIGHTSHIFT_RESULT_FILE=str(Path(args.result_file).resolve()),
-                       NIGHTSHIFT_TASK_ID=args.task_id)
-    environment.update(PORT=args.worker_port, TEST_PORT=args.worker_port)
-    environment["MAX_STEPS"] = str(args.step_budget)
-    environment.pop("AI_AGENTS_JSON", None)
-    environment.pop("AI_AGENT_STATE_FILE", None)
-    if args.provider == "agy":
-        environment["AGY_MAX_STEPS"] = str(args.step_budget)
-    output = Path(args.output_file)
-    result_code = 0
-    last_message = Path(args.result_file) if args.result_file else None
-    if args.provider == "codex":
-        codex = argparse.Namespace(
-            last_message=str(last_message), model=args.model, effort=args.effort,
-            approval_mode=args.approval_mode, sandbox=args.sandbox,
-            ephemeral=args.ephemeral, additional_dirs=args.additional_dirs,
-        )
-        command = agent_command(args, codex_args(codex), prompt)
-        result_code = stream_with_timeout(args.timeout, command, args.work_dir,
-                                          environment, output, action_budget=args.step_budget)
-        codex_output = output.read_text(encoding="utf-8", errors="replace")
-        actions_used = count_codex_actions(codex_output)
-        if actions_used > args.step_budget:
-            print(f"[WORKER] Codex action budget exceeded ({actions_used}/{args.step_budget}).")
-            return 125
-        result_path = last_message if last_message and last_message.is_file() and last_message.stat().st_size else output
-        if (result_code == 0
-                and not blocking_outcome(result_path.read_text(encoding="utf-8", errors="replace"))):
-            closeout_requested = "[CLOSEOUT_REQUIRED]" in result_path.read_text(encoding="utf-8", errors="replace")
-            if closeout_requested:
-                result_code = run_codex_closeout(args, environment, output, actions_used)
-                result_path = Path(args.result_file)
-            if result_code == 0 and not blocking_outcome(result_path.read_text(encoding="utf-8", errors="replace")):
-                result_code = finalize_task_git(args)
-    elif args.provider == "agy":
-        agy = argparse.Namespace(
-            sandbox=args.use_sandbox, mode=args.agy_mode, model=args.model,
-            timeout=str(args.timeout), additional_dirs=args.additional_dirs,
-            effort=args.effort, executable=args.executable,
-            step_budget=args.step_budget,
-        )
-        command = [args.executable, "-p", prompt, "--dangerously-skip-permissions", *agy_args(agy), *getattr(args, "extra_args", [])]
-        result_code = stream_with_timeout(args.timeout, command, args.work_dir,
-                                          environment, output)
-        text = output.read_text(encoding="utf-8", errors="replace")
-        steps_used = count_agy_steps(text)
-        if result_code == 0 and steps_used >= args.step_budget:
-            print(f"[WORKER] AgY action budget exhausted ({steps_used}/{args.step_budget}).")
-            return 125
-        if result_code == 0 and steps_used < args.step_budget:
-            head = subprocess.run(["git", "-C", args.work_dir, "rev-parse", "HEAD"],
-                                  capture_output=True, text=True, check=False).stdout.strip()
-            dirty = subprocess.run(["git", "-C", args.work_dir, "status", "--porcelain"],
-                                   capture_output=True, text=True, check=False).stdout
-            dirty = "\n".join(line for line in dirty.splitlines()
-                              if not re.search(r"progress\.log|tasks\.txt|tasks\.done|worker\..*\.status|\.preview|\.worker\..*|\.reports/|\.reports", line))
-            if head != args.base or not dirty:
-                return result_code
-            remaining = args.step_budget - steps_used
-            print(f"[WORKER] Starting one restricted ghost closeout ({steps_used}/{args.step_budget} actions used).")
-            # The ghost may verify and commit existing work, but the diff against
-            # the original base must remain byte-for-byte unchanged.
-            before_snapshot = workspace_snapshot(args.work_dir, args.base)
-            prompt = build_ghost_closeout_prompt(args.task_id, args.verify, args.progress_file)
-            environment["MAX_STEPS"] = str(remaining)
-            environment["AGY_MAX_STEPS"] = str(remaining)
-            continuation = argparse.Namespace(**vars(agy))
-            continuation.step_budget = remaining
-            command = [args.executable, "-p", prompt, "--dangerously-skip-permissions", *agy_args(continuation), *getattr(args, "extra_args", [])]
-            result_code = stream_with_timeout(args.timeout, command, args.work_dir,
-                                              environment, output, append=True)
-            text = output.read_text(encoding="utf-8", errors="replace")
-            after_snapshot = workspace_snapshot(args.work_dir, args.base)
-            if before_snapshot != after_snapshot:
-                print("[WORKER] Ghost closeout changed implementation files; rejecting closeout.", file=sys.stderr)
-                return 126
-            added_steps = count_agy_steps(text) - steps_used
-            if added_steps > remaining:
-                return 125
-            if "[CLOSEOUT_INCOMPLETE]" in text:
-                return 126
-    else:
-        result_code = stream_with_timeout(args.timeout, agent_command(args, [], prompt),
-                                          args.work_dir, environment, output)
-        if result_code == 0:
-            if "print timeout after" in output.read_text(encoding="utf-8", errors="replace").lower():
-                return 124
-            message = Path(args.result_file)
-            if not message.is_file() or not message.stat().st_size:
-                print("[WORKER] Generic adapter must write NIGHTSHIFT_RESULT_FILE.", file=sys.stderr)
-                return 2
-            text = message.read_text(encoding="utf-8", errors="replace")
-            if "[CLOSEOUT_REQUIRED]" in text or "[CLOSEOUT_INCOMPLETE]" in text:
-                return 126
-            if not blocking_outcome(text):
-                result_code = finalize_task_git(args)
-    if result_code == 0 and "print timeout after" in output.read_text(
-            encoding="utf-8", errors="replace").lower():
-        result_code = 124
-    return result_code
 
 
 def build_task_prompt(task, task_id, level, target, verify, forbidden, constraints,
@@ -1547,13 +1222,11 @@ def worker_daemon(root):
                 else root / f".worker.{worker_id}.log")
     pid_file = (resolve("PID_FILE", ".worker.pid") if worker_id == "default"
                 else root / f".worker.{worker_id}.pid")
-    ai_cli = config.get("AI_CLI", "codex")
-    ai_model = config.get("AI_MODEL", "")
-    ai_effort = config.get("AI_EFFORT", "")
-    agy_mode = config.get("AGY_MODE", "accept-edits")
-    agents = parse_agent_registry(config.get("AI_AGENTS_JSON", ""), {
-        "model": ai_model, "effort": ai_effort, "agy_mode": agy_mode,
-    })
+    agents = parse_agent_registry(config.get("AI_AGENTS_JSON", ""))
+    if not agents and tasks_file.is_file() and any(
+            line.strip() and not line.lstrip().startswith("#")
+            for line in tasks_file.read_text(encoding="utf-8").splitlines()):
+        raise ValueError("AI_AGENTS_JSON must register at least one executable adapter")
     safe_worker_id = re.sub(r"[^A-Za-z0-9_.-]", "_", worker_id)
     agent_state_path = resolve(
         "AI_AGENT_STATE_FILE", f".worker-agent-state.{safe_worker_id}.json")
@@ -1607,7 +1280,7 @@ def worker_daemon(root):
             state=state, current_task=task, elapsed=int(elapsed),
             current_index=int(current), total_tasks=int(total), remaining=int(remaining),
             percentage=percentage, bar=bar or progress_bar(int(current), int(total)),
-            pid=pid, model=ai_model, cli=ai_cli, timeout=timeout,
+            pid=pid, model="", cli="registered-adapters", timeout=timeout,
             worker_score=read_score_state(score_state_path)["score"],
         )
         write_status(status_args)
@@ -1634,12 +1307,10 @@ def worker_daemon(root):
             subprocess.run(["git", "-C", str(root), "tag", "-f", "nightshift-session-base", "HEAD"],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-        mode = (f"sandbox={config.get('CODEX_SANDBOX', 'workspace-write')},approval={config.get('CODEX_APPROVAL_MODE', 'auto')},ephemeral={config.get('CODEX_EPHEMERAL', '1')}"
-                if ai_cli == "codex" else agy_mode)
         print("=" * 78)
         print(" 24-Hour Unattended AI Worker Daemon Started")
         print(f" Worker ID: {worker_id} | OS: {platform_name} (CPUs: {os.cpu_count() or 4})")
-        print(f" PID: {pid} | CLI: {ai_cli} | Model: {ai_model or 'configured default'} | Mode: {mode}")
+        print(f" PID: {pid} | Registered adapters: {len(agents)}")
         print(f" WorkDir: {work_dir} | Isolation: {isolation_flag}")
         print(f" Tasks: {tasks_file} | Status: {status_file}")
         print(f" Progress: {progress_file} | Log: {log_file}")
@@ -1737,18 +1408,12 @@ def worker_daemon(root):
                 output_path = Path(temporary) / "cli-output.log"
                 result_path = Path(temporary) / "last-message.txt"
                 prompt_path.write_text(prompt, encoding="utf-8")
-                provider = ai_cli if ai_cli in ("codex", "agy") else "generic"
-                print(f"[WORKER] Launching {ai_cli} (Model: {ai_model or 'configured default'}, StepBudget: {max_steps}, WorkDir: {work_dir})...")
+                print(f"[WORKER] Launching registered adapters (StepBudget: {max_steps}, WorkDir: {work_dir})...")
                 cli_args = argparse.Namespace(
-                    provider=provider, executable=ai_cli, work_dir=str(work_dir),
+                    adapter="", executable="", work_dir=str(work_dir),
                     prompt_file=str(prompt_path), output_file=str(output_path),
                     result_file=str(result_path),
-                    timeout=timeout, model=ai_model, effort=ai_effort,
-                    approval_mode=config.get("CODEX_APPROVAL_MODE", "auto"),
-                    sandbox=config.get("CODEX_SANDBOX", "workspace-write"),
-                    ephemeral=config.get("CODEX_EPHEMERAL", "1"),
-                    additional_dirs=config.get("ADDITIONAL_DIRS", ""),
-                    use_sandbox=config.get("USE_SANDBOX", "0"), agy_mode=agy_mode,
+                    timeout=timeout, model="", effort="",
                     step_budget=max_steps, worker_port=worker_port, target=target,
                     task_id=task_id, title=task, level=level, verify=verify,
                     base=base, progress_file=str(progress_file),
@@ -1776,10 +1441,14 @@ def worker_daemon(root):
                 def recover_current_attempt(snapshot=None, attempt_id=None):
                     nonlocal final_state
                     try:
+                        adapter_dir = Path(getattr(cli_args, "adapter_artifact_dir", ""))
+                        adapter_artifacts = (sorted(path for path in adapter_dir.rglob("*") if path.is_file())
+                                             if adapter_dir.is_dir() else [])
                         return rollback_failed_task(
                             root, work_dir, task_id,
                             (tasks_file, done_file, progress_file, agent_state_path,
-                             ghost_state_path, ghost_artifact_root, score_state_path),
+                             ghost_state_path, ghost_artifact_root, score_state_path,
+                             *adapter_artifacts),
                             snapshot if snapshot is not None else cli_args.attempt_baseline,
                             attempt_id or cli_args.attempt_id,
                         )
@@ -1805,20 +1474,9 @@ def worker_daemon(root):
                 cli_args.agent_events_file = str(agent_events_path)
                 cli_args.dispatch_gate_file = str(dispatch_gate_file)
                 try:
-                    if agents:
-                        exit_code, quota_exhausted = execute_registered_agents(
-                            cli_args, agents, agent_state_path,
-                            recover_before_switch,
-                        )
-                    else:
-                        cli_args.recovery_failed = True
-                        cli_args.attempt_id = str(uuid.uuid4())
-                        cli_args.attempt_baseline = str(Path(cli_args.attempt_snapshot_root) /
-                                                        cli_args.attempt_id / "baseline")
-                        capture_attempt_baseline(work_dir, task_id, cli_args.attempt_id,
-                                                 cli_args.attempt_baseline)
-                        cli_args.recovery_failed = False
-                        exit_code = execute_task_cli(cli_args)
+                    exit_code, quota_exhausted = execute_registered_agents(
+                        cli_args, agents, agent_state_path, recover_before_switch,
+                    )
                 except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as error:
                     print(f"[WORKER] CLI execution failed: {error}", file=sys.stderr)
                     exit_code = 2
@@ -1856,6 +1514,10 @@ def worker_daemon(root):
                            "step_budget" if exit_code == 125 else
                            "closeout_required" if exit_code == 126 and structured_outcome == "closeout_required" else
                            "closeout_failed" if exit_code == 126 else
+                           "scope" if structured_status == "scope" else
+                           "blocked" if structured_status == "blocked" else
+                           "guidance" if structured_status == "guidance" else
+                           "cancel_failed" if structured_status == "cancel_failed" else
                            "error" if exit_code else
                            structured_status if structured_status else
                            "scope" if "[SCOPE_BLOCKED]" in result_text else
@@ -1914,7 +1576,7 @@ def worker_daemon(root):
                     update_status("BLOCKED", f"{task} (TIMEOUT)", duration, current, total,
                                   max(0, remaining - 1), percent, bar)
                 elif outcome in ("step_budget", "closeout_failed"):
-                    reason = ("Codex/AgY action budget exhausted" if outcome == "step_budget"
+                    reason = ("Adapter action budget exhausted" if outcome == "step_budget"
                               else "Restricted ghost closeout failed or attempted implementation")
                     print(f"[{stamp_now}] [HARD FAILURE] {task_id}: {reason}")
                     record_task_score("hard_failure", reason)
@@ -2679,40 +2341,16 @@ def main(argv=None):
     status.add_argument("timeout", type=int)
     display = commands.add_parser("status-display")
     display.add_argument("path")
-    codex = commands.add_parser("codex-args")
-    codex.add_argument("--last-message", required=True)
-    codex.add_argument("--model", default="")
-    codex.add_argument("--effort", default="")
-    codex.add_argument("--approval-mode", default="auto")
-    codex.add_argument("--sandbox", default="workspace-write")
-    codex.add_argument("--ephemeral", default="1")
-    codex.add_argument("--additional-dirs", default="")
-    agy = commands.add_parser("agy-args")
-    agy.add_argument("--executable", default="agy")
-    agy.add_argument("--model", default="")
-    agy.add_argument("--effort", default="")
-    agy.add_argument("--mode", default="")
-    agy.add_argument("--timeout", default="1800")
-    agy.add_argument("--step-budget", type=int, default=17)
-    agy.add_argument("--additional-dirs", default="")
-    agy.add_argument("--sandbox", default="0")
     task_cli = commands.add_parser("task-cli")
-    task_cli.add_argument("--provider", required=True)
+    task_cli.add_argument("--adapter", required=True)
     task_cli.add_argument("--executable", required=True)
     task_cli.add_argument("--extra-arg", dest="extra_args", action="append", default=[])
+    task_cli.add_argument("--overrides", dest="overrides_json", default="{}")
     task_cli.add_argument("--work-dir", required=True)
     task_cli.add_argument("--prompt-file", required=True)
     task_cli.add_argument("--output-file", required=True)
     task_cli.add_argument("--result-file", default="")
     task_cli.add_argument("--timeout", type=float, default=1800)
-    task_cli.add_argument("--model", default="")
-    task_cli.add_argument("--effort", default="")
-    task_cli.add_argument("--approval-mode", default="auto")
-    task_cli.add_argument("--sandbox", default="workspace-write")
-    task_cli.add_argument("--ephemeral", default="1")
-    task_cli.add_argument("--additional-dirs", default="")
-    task_cli.add_argument("--use-sandbox", default="0")
-    task_cli.add_argument("--agy-mode", default="")
     task_cli.add_argument("--step-budget", type=int, default=17)
     task_cli.add_argument("--worker-port", default="3001")
     task_cli.add_argument("--target", default="")
@@ -2825,16 +2463,12 @@ def main(argv=None):
         print(task_field(args.raw, args.key))
     elif args.command == "status-display":
         display_status(args.path)
-    elif args.command == "codex-args":
-        sys.stdout.buffer.write(("\0".join(codex_args(args)) + "\0").encode("utf-8"))
-    elif args.command == "agy-args":
-        sys.stdout.buffer.write(("\0".join(agy_args(args)) + "\0").encode("utf-8"))
     elif args.command == "task-cli":
         if args.ghost_state_file:
             args.ghost_state_path = args.ghost_state_file
         if args.score_state_file:
             args.agent_score_state_file = args.score_state_file
-        return execute_task_cli(args)
+        return execute_adapter_task(args)
     elif args.command == "attempt-snapshot":
         print(capture_attempt_baseline(args.work_dir, args.task_id, args.attempt_id,
                                        args.snapshot))

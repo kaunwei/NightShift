@@ -68,7 +68,9 @@ except (OSError,ValueError,TypeError) as error:
     payload={"outcome":"failure","diagnostic":f"wrapper must write a structured JSON result to NIGHTSHIFT_RESULT_FILE: {error}"}
     json.dump(payload,open(result,"w",encoding="utf-8")); outcome="failure"
 if code and outcome in ("complete","no_change"): outcome="failure"
-json.dump({"status":outcome,"result_location":result,"exit_code":code},open(status,"w",encoding="utf-8"))
+diagnostic=open(log,encoding="utf-8",errors="replace").read()
+state="execution_timeout" if "print timeout after" in diagnostic.lower() else outcome
+json.dump({"status":state,"result_location":result,"exit_code":code},open(status,"w",encoding="utf-8"))
 '''
     argv = [cfg["executable"], *cfg["args"]]
     proc = subprocess.Popen([sys.executable, "-c", runner, json.dumps(argv),

@@ -86,8 +86,7 @@ All 45 top-level runtime functions are mapped below to numbered clauses in the s
 | queue-pop | Remove and print first non-comment task |
 | task-field | Extract one recognized field, preserving ordinary pipes |
 | status-write / status-display | Persist JSON / show state and PID liveness |
-| codex-args / agy-args | NUL-delimited provider argv; no shell splitting |
-| task-cli | Execute configured provider, stream output, enforce timeout/budget, commit or closeout as applicable |
+| adapter-exec / task-cli | Execute the configured protocol executable; enforce deadlines, cancellation, structured results, verification, script-owned commits, and one private closeout |
 | run-timeout | Execute argv, preserve normal exit, return 124 on timeout |
 | git-audit | Guard code and explanation for diff/scope/test/deletion failures |
 | ensure-worktree | Set up/reuse isolated worktree, report its path |
