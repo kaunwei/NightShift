@@ -1641,6 +1641,38 @@ class WorkerIntegrationTests(unittest.TestCase):
                                     capture_output=True, text=True, timeout=45)
 
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(calls.read_text().splitlines(), ["gpt-6-luna"])
+            self.assertEqual((root / "tasks.txt").read_text().count("TASK-Q"), 1)
+            self.assertEqual((root / "tasks.done").read_text(), "")
+            events = root / ".worker-agent-events.jsonl"
+            self.assertTrue(events.is_file())
+            event = json.loads(events.read_text().splitlines()[-1])
+            self.assertEqual(event["cause"], "main_task_failover")
+            self.assertEqual((event["previous_registration_id"],
+                              event["current_registration_id"]), ("primary", "backup"))
+            gate = root / ".worker-dispatch-gate.json"
+            self.assertTrue(gate.exists())
+
+            watch = runtime("agent-events-watch", "--events", events,
+                            "--cursor", root / ".worker-agent-events.cursor.json",
+                            "--acknowledgements", root / ".worker-agent-events.acks.jsonl",
+                            "--gate", gate, "--handoff", root / "progress.log")
+            self.assertEqual(watch.returncode, 0, watch.stderr)
+            self.assertIn("[PLANNER_REVIEW_REQUIRED]", (root / "progress.log").read_text())
+            ack = runtime("agent-event-ack", "--events", events,
+                          "--acknowledgements", root / ".worker-agent-events.acks.jsonl",
+                          "--event-id", event["event_id"], "--resolution", "revised")
+            self.assertEqual(ack.returncode, 0, ack.stderr)
+            release = runtime("agent-events-watch", "--events", events,
+                              "--cursor", root / ".worker-agent-events.cursor.json",
+                              "--acknowledgements", root / ".worker-agent-events.acks.jsonl",
+                              "--gate", gate, "--handoff", root / "progress.log")
+            self.assertEqual(release.returncode, 0, release.stderr)
+            self.assertFalse(gate.exists())
+
+            resumed = subprocess.run(["bash", str(root / "worker.sh")], cwd=root, env=env,
+                                      capture_output=True, text=True, timeout=45)
+            self.assertEqual(resumed.returncode, 0, resumed.stdout + resumed.stderr)
             self.assertEqual(calls.read_text().splitlines(), ["gpt-6-luna", "gpt-6.1-sol"])
             self.assertIn("[DONE]", (root / "tasks.done").read_text(),
                           (root / "progress.log").read_text())

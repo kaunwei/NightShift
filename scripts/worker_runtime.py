@@ -682,16 +682,22 @@ def should_failover_agent(exit_code, result_text):
 def read_agent_state(path):
     path = Path(path)
     if not path.exists():
-        return {"version": 1, "exhausted": {}}
+        return {"version": 1, "exhausted": {}, "task_exclusions": {}}
     state = json.loads(path.read_text(encoding="utf-8"))
     if state.get("version") != 1 or not isinstance(state.get("exhausted"), dict):
         raise ValueError(f"invalid agent quota state file: {path}")
+    if not isinstance(state.get("task_exclusions", {}), dict):
+        raise ValueError(f"invalid agent task exclusion state file: {path}")
+    state.setdefault("task_exclusions", {})
     return state
 
 
 def execute_registered_agents(args, agents, state_path, rollback):
     state = read_agent_state(state_path)
-    available = [agent for agent in agents if agent["id"] not in state["exhausted"]]
+    task_exclusions = state["task_exclusions"].get(args.task_id, [])
+    available = [agent for agent in agents
+                 if agent["id"] not in state["exhausted"]
+                 and agent["id"] not in task_exclusions]
     if not available:
         print("[WORKER] QUOTA_EXHAUSTED: all registered agents are exhausted; task remains queued.")
         return 0, True
@@ -733,6 +739,8 @@ def execute_registered_agents(args, agents, state_path, rollback):
         result_text = result_path.read_text(encoding="utf-8", errors="replace") if result_path.exists() else ""
         quota_exhausted = quota_error(output_text + "\n" + result_text)
         if not quota_exhausted and not should_failover_agent(code, output_text):
+            if state["task_exclusions"].pop(args.task_id, None) is not None:
+                atomic_write(state_path, json.dumps(state, ensure_ascii=False, indent=2) + "\n")
             return code, False
         if quota_exhausted:
             state["exhausted"][agent["id"]] = {
@@ -745,6 +753,30 @@ def execute_registered_agents(args, agents, state_path, rollback):
         rollback(attempt.attempt_baseline, attempt.attempt_id)
         if index + 1 == len(available):
             print("[WORKER] QUOTA_EXHAUSTED: all registered agents are exhausted; task remains queued.")
+            return 0, True
+        next_agent = available[index + 1]
+        if not quota_exhausted:
+            task_exclusions.append(agent["id"])
+            state["task_exclusions"][args.task_id] = task_exclusions
+        events_path = getattr(args, "agent_events_file", "")
+        if events_path:
+            def score_for(registration_id):
+                try:
+                    score_state = read_agent_score_state(
+                        getattr(args, "agent_score_state_file", ""), registration_id)
+                    return score_state["score"]
+                except (OSError, ValueError, TypeError):
+                    return None
+            append_agent_event(events_path, {
+                "event_id": str(uuid.uuid4()), "registration_id": next_agent["id"],
+                "cause": "main_task_failover", "task_id": args.task_id,
+                "previous_registration_id": agent["id"],
+                "current_registration_id": next_agent["id"],
+                "previous_score": score_for(agent["id"]),
+                "current_score": score_for(next_agent["id"]),
+            }, getattr(args, "dispatch_gate_file", ""))
+            atomic_write(state_path, json.dumps(state, ensure_ascii=False, indent=2) + "\n")
+            args.awaiting_planner = True
             return 0, True
     return 0, True
 
@@ -1769,6 +1801,9 @@ def worker_daemon(root):
                     if recover_current_attempt(snapshot, attempt_id) is None:
                         raise RuntimeError("attempt recovery failed; replacement execution was not started")
                 quota_exhausted = False
+                cli_args.awaiting_planner = False
+                cli_args.agent_events_file = str(agent_events_path)
+                cli_args.dispatch_gate_file = str(dispatch_gate_file)
                 try:
                     if agents:
                         exit_code, quota_exhausted = execute_registered_agents(
@@ -1814,7 +1849,8 @@ def worker_daemon(root):
                 if structured_execution_status == "cancellation_failed":
                     structured_status = "cancel_failed"
 
-                outcome = ("quota_exhausted" if quota_exhausted else
+                outcome = ("planner_gate" if cli_args.awaiting_planner else
+                           "quota_exhausted" if quota_exhausted else
                            "cancel_failed" if structured_status == "cancel_failed" else
                            "timeout" if exit_code == 124 else
                            "step_budget" if exit_code == 125 else
@@ -1827,9 +1863,21 @@ def worker_daemon(root):
                            "guidance" if re.search(r"\[(?:NEED_GUIDANCE|NEED_DECOMPOSITION)\]", result_text) else
                            "success")
                 stamp_now = stamp()
-                if outcome not in ("success", "quota_exhausted"):
+                if outcome not in ("success", "quota_exhausted", "planner_gate"):
                     pending_planner = (task_id, outcome.upper())
-                if outcome == "quota_exhausted":
+                if outcome == "planner_gate":
+                    restore_task_front(tasks_file, raw_task)
+                    append_line(progress_file,
+                                f"[PLANNER_REVIEW_REQUIRED] {task_id}: agent failover recorded; replacement waits for Planner acknowledgement.")
+                    print(f"[{stamp_now}] [PLANNER_REVIEW_REQUIRED] Replacement agent is held until Planner acknowledges the change.")
+                    update_status("PAUSED_FOR_PLANNER", task, duration, current, total,
+                                  remaining, percent, bar)
+                    if run_once:
+                        final_state = "PAUSED_FOR_PLANNER"
+                        break
+                    stop_requested.wait(poll_interval)
+                    continue
+                elif outcome == "quota_exhausted":
                     restore_task_front(tasks_file, raw_task)
                     warning = ("=" * 80 + f"\n[QUOTA_EXHAUSTED] {task_id}: All registered agents are exhausted\n"
                                f"Time: {stamp_now} | Status: QUOTA_EXHAUSTED\n"
