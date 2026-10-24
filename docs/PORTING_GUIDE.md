@@ -14,15 +14,22 @@ The callbacks are:
 | `closeout` | `protocol_version`, `execution_id`, `prompt_path`, `output_dir`, `result_path`, remaining budget and deadline | `execution_id`, `status_location` |
 | `cancel` | `protocol_version`, `execution_id`, reason and stop deadline | a termination result |
 
-Register the executable without adding its name to NightShift:
+Register the executable in the shared name-keyed registry without adding its name to NightShift:
 
 ```json
-[
-  {"id":"team-model-a", "adapter":"team-adapter", "command":"/opt/team/adapter", "args":[], "env":{}, "model":"model-a", "overrides":{"region":"west"}}
-]
+{
+  "team-model-a": {
+    "default": true,
+    "adapter": "team-adapter",
+    "command": "/opt/team/adapter",
+    "args": [],
+    "env": {},
+    "config": {"model": "model-a", "region": "west"}
+  }
+}
 ```
 
-`adapter` is an opaque registration label. `command` and `args` select the executable; `env` adds string environment entries; `model`, `effort`, and arbitrary JSON `overrides` are passed to `get_config` for adapter-owned interpretation. Multiple registrations may name the same adapter executable with different IDs and overrides.
+The object key is the stable registration ID. `adapter` is opaque; `command` and `args` select the executable, and `env` adds string environment entries. The `config` object, including model/effort and tool settings, is passed as callback `overrides` to `get_config` for adapter interpretation. Callback `overrides` is a protocol field, not another registry format. Default registrations run first; JSON order is retained within each priority group. Multiple names may use one executable with different config.
 
 `start` and `closeout` must return promptly with an execution handle; they do not wait for model work to finish. `status` reads local state and must not call a model or query quota. The adapter interprets registration overrides and returns normalized settings under `configuration`. `limits.poll_interval_seconds` and `limits.callback_timeout_seconds` are seconds; callback timeout limits each individual callback response, while the task execution timeout independently limits the full work after `start`. A responsive `running` status never extends the task deadline. On timeout, `cancel` must stop the execution and return `stopped: true`; an accepted request without confirmed termination is a cancellation failure. The runtime kills timed-out callback process groups, then requests cancellation of the managed execution. A completed execution points to a JSON result file; result fields are task outcome, evidence, change/no-change information, and `commit_message`. Do not write protocol data to stderr or diagnostics to stdout. The runtime keeps callback stdout and stderr separate.
 
@@ -57,13 +64,13 @@ The runtime implements configuration discovery, asynchronous `start`, local `sta
 
 ## Migrating a generic executable wrapper
 
-Set the profile adapter to `generic` and the command to Python with the shipped compatibility adapter as its argument. Pass the previous wrapper executable and fixed arguments through overrides:
+Set the profile adapter to `generic` and the command to Python with the shipped compatibility adapter as its argument. Put the previous wrapper executable and fixed arguments in its config:
 
 ```json
-[{"id":"custom","adapter":"generic","command":"python3",
+{"custom":{"default":true,"adapter":"generic","command":"python3",
   "args":["scripts/adapters/generic.py"],
-  "overrides":{"executable":"./my-worker","args":["--quiet"],
-    "model":"model-name","effort":"high","env":{"MY_SETTING":"value"}}}]
+  "config":{"executable":"./my-worker","args":["--quiet"],
+    "model":"model-name","effort":"high","env":{"MY_SETTING":"value"}}}}
 ```
 
 The wrapper receives `NIGHTSHIFT_PROMPT_FILE`, `NIGHTSHIFT_RESULT_FILE`, `NIGHTSHIFT_TASK_ID`, `NIGHTSHIFT_EXECUTION_KIND` (`main` or `closeout`), `NIGHTSHIFT_MODEL`, `NIGHTSHIFT_EFFORT`, `NIGHTSHIFT_ACTION_LIMIT`, `NIGHTSHIFT_EXECUTION_TIMEOUT`, `PORT`, and `TEST_PORT`. It must write one JSON object to the result path with a supported `outcome`; successful outcomes also require the standard evidence, change, and `commit_message` fields. The wrapper owns enforcement of action limits and duration using the supplied values. Text-only legacy wrappers fail with an actionable structured-result diagnostic; migrate them to write protocol JSON before switching registrations.
@@ -86,7 +93,7 @@ NightShift can be deployed into an existing repository with `install.sh`. The sc
 
 ## What installation changes
 
-The installer copies or updates NightShift-owned files: `worker.sh`, `scripts/`, `agents/agents.json` when absent, the runtime regression tests under `test/nightshift_worker/`, `.skills/universal-build-verify.md`, and the shipped `.agents/skills/` categories. It initializes missing queue, history, notes, and granularity files; existing `.agents/skills.json`, agent registry, queue, history, notes, and granularity profile are preserved. It adds missing NightShift ignore entries to `.gitignore` and validates Bash and Python syntax.
+The installer copies or updates NightShift-owned files: `worker.sh`, `update.sh`, `scripts/`, `agents/agents.json` when absent, the runtime regression tests under `test/nightshift_worker/`, `.skills/universal-build-verify.md`, and the shipped `.agents/skills/` categories. The deployed `update.sh` can update the same project again. It initializes missing queue, history, notes, and granularity files; existing `.agents/skills.json`, agent registry, queue, history, notes, and granularity profile are preserved. It adds missing NightShift ignore entries to `.gitignore` and validates Bash and Python syntax.
 
 An update overwrites the deployed NightShift-owned runtime, helper, test, example, and skill files. It also removes a fixed list of legacy NightShift skill directories. Review the target repository's working tree before updating if those paths contain local edits. The installer does not edit the target's application code, `AGENTS.md`, `CLAUDE.md`, or `README.md`.
 
@@ -94,11 +101,17 @@ An update overwrites the deployed NightShift-owned runtime, helper, test, exampl
 
 The Worker now runs tasks in the target project directory. `.worker.env` is no longer read by the launcher, runtime, or helper scripts; move operational settings into `worker.sh` and agent settings into `agents/agents.json`. Updates remove the obsolete `.worker.env.example`, but leave an existing `.worker.env` untouched so local values can be migrated without losing data. The installer does not delete `.worker-tree`, its branches, or `.preview`; those locations may contain unintegrated work. Before removing any of them yourself, inspect the worktree status and commits, compare its branch with the project branch, and review preview artifacts. Unmerged work is not copied into the project directory automatically. The status dashboard no longer reports preview versions. New verified trial task outputs belong under `.trials/<TASK-ID>/`, which the installer ignores so binary-only deliveries do not become source commits. Build and verify the staged copy before publishing its directory; remove only the current task ID’s incomplete output when a check fails. A trial that needs a shared project resource should include the exact dependency and conflict in its handoff. Resolve the deployed `PAUSE_FILE` before recommending a pause; relative values are rooted at the installation directory, and `./scripts/status.sh` confirms whether the user-created flag has reached the PAUSED state. The flag stops future claims after the active task completes; it does not cancel that task.
 
+## Runtime settings and helper commands
+
+There is no worker env configuration file to create or source. Runtime defaults are at the top of the launcher and can be overridden by the launch environment. Agent models, effort, permissions and tool-specific values belong in the shared registry's config objects. Updates replace the owned launcher; review and reapply local default edits, or maintain the values as launch-environment overrides. Updates preserve an existing registry and keep legacy env data only for manual migration.
+
+Helpers use their own defaults and environment overrides; they do not source the launcher. For a custom pause/status/queue path or Worker ID, pass the same resolved settings to the helper. Planner obtains these values from the actual Worker launch configuration, not the removed env file. Relative runtime paths are rooted at the project directory; preserve absolute paths. Provide concrete pause-flag creation and matching status commands for that deployment. A pause flag holds future claims after the active task completes; wait for PAUSED with no current task before trying conflicting resources. A trial task never sets the flag itself.
+
 ## Configure and run
 
-On a fresh installation, `worker.sh` supplies worker runtime defaults and `agents/agents.json` supplies the default Codex and backup AgY registrations. Configure at least one named agent before adding work to the queue. Each entry selects an adapter and command; its `config` object is passed to that adapter, and `default: true` makes it the first candidate. Failover follows the remaining JSON order after quota exhaustion or a confirmed timeout. The runtime restores the failed attempt and raises a durable Planner gate before a replacement starts. After Planner review, use `watch_worker.sh` acknowledgement with resolution `acknowledged` or `revised`. When all registrations are quota-exhausted, the task remains queued until the exhausted state is reset; explicit `RUN_ONCE=1` exits instead of waiting.
+On a fresh installation, `worker.sh` supplies worker runtime defaults and `agents/agents.json` supplies the default Codex and backup AgY registrations. Configure at least one named agent before adding work to the queue. Each entry selects an adapter and command; its `config` object is passed to that adapter, and `default: true` makes it the first candidate. Failover follows the remaining JSON order after quota exhaustion or a confirmed timeout. The runtime restores the failed attempt and raises a durable Planner gate before a replacement starts. After Planner review, use the `agent-event-ack` CLI shown above with resolution `acknowledged` or `revised`, then let the watcher resolve the gate. When all registrations are quota-exhausted, the task remains queued until the exhausted state is reset; explicit `RUN_ONCE=1` exits instead of waiting.
 
-Use `/planner` for ticket planning and acceptance, `/explore` for read-only seam research, and `./worker.sh` to run the queue. The runtime handles one ticket at a time. It does not start a Planner agent or automatically integrate the Worker branch into the main checkout. See the [complete behavior specification](NIGHTSHIFT_SPEC.md) before relying on any workflow detail.
+Use `/planner` for ticket planning and acceptance, `/explore` for read-only seam research, and `./worker.sh` to run the queue. The runtime handles one ticket at a time. It runs directly in the project directory and does not start a Planner agent or maintain an isolated Worker branch. See the [complete behavior specification](NIGHTSHIFT_SPEC.md) before relying on any workflow detail.
 
 ## Verify the deployment
 

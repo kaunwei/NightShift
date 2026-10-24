@@ -2580,6 +2580,7 @@ class InstallerIntegrationTests(unittest.TestCase):
                                     cwd=ROOT, capture_output=True, text=True, timeout=30)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertEqual(skills_manifest.read_text(), '{"entries":[{"path":"custom/skills"}]}\n')
+            self.assertEqual((target / "update.sh").read_bytes(), (ROOT / "update.sh").read_bytes())
             deployed_runtime = target / "scripts/worker_runtime.py"
             self.assertEqual(deployed_runtime.read_bytes(), (ROOT / "scripts/worker_runtime.py").read_bytes())
             for adapter in ("codex.py", "agy.py", "generic.py"):
@@ -2606,6 +2607,7 @@ class InstallerIntegrationTests(unittest.TestCase):
             custom_registry = '{"custom":{"default":true,"adapter":"opaque","command":"custom"}}\n'
             agent_registry.write_text(custom_registry)
             (target / ".worker.env.example").write_text("stale environment example\n")
+            (target / "update.sh").write_text("stale updater\n")
             deployed_runtime.write_text("stale runtime\n")
             update = subprocess.run(["bash", str(ROOT / "install.sh"), str(target)],
                                     cwd=ROOT, capture_output=True, text=True, timeout=30)
@@ -2619,6 +2621,7 @@ class InstallerIntegrationTests(unittest.TestCase):
             self.assertIn("full discovered graph", planner_skill)
             self.assertEqual(agent_registry.read_text(), custom_registry)
             self.assertFalse((target / ".worker.env.example").exists())
+            self.assertEqual((target / "update.sh").read_bytes(), (ROOT / "update.sh").read_bytes())
             self.assertEqual(deployed_runtime.read_bytes(), (ROOT / "scripts/worker_runtime.py").read_bytes())
             installed = subprocess.run(
                 [sys.executable, "-m", "unittest", "discover", "-s", "test", "-v"],

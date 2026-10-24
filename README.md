@@ -29,6 +29,8 @@ Update a deployment with the same installer interface:
 ./update.sh /path/to/target-project
 ```
 
+The installer also deploys `update.sh` into the target project so future updates can be started there.
+
 Worker runtime settings are configured at the top of `worker.sh`. Agent registrations live together in `agents/agents.json`, keyed by agent name; each entry provides an adapter, command, optional args/env, adapter config, and a `default` flag. The Worker puts default agents first and uses the same config object for every adapter. The installer preserves an existing agent registry. Failover follows registration order after quota exhaustion or a confirmed timeout. A capability change creates a Planner gate, so the replacement waits until the Planner acknowledges or revises the affected work. If every registration is quota-exhausted, the task remains queued until quota state is reset.
 
 ## Run and inspect
