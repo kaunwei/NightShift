@@ -24,6 +24,7 @@ tasks.txt.lock/
 .trials/
 tasks.done
 tasks.done.*
+/test/.install-add-task-smoke/
 
 # Build & Environment Artifacts
 build/
