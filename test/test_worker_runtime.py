@@ -41,7 +41,7 @@ class WorkerPromptContractTests(unittest.TestCase):
             "src/parser.py", "Action budget: 22", "base 12 + 2 target files × 5",
             "Timeout is per task invocation", "python3 -m unittest", "TASK-9",
             "Planner reviews the evidence and records the score",
-            "[EXEC] <brief action>", "[CLOSEOUT_REQUIRED]", "[SCOPE_BLOCKED]", "[DEAD_END]",
+            "[EXEC] <brief action>", "closeout_required", "[SCOPE_BLOCKED]", "[DEAD_END]",
             "progress.log",
         ):
             with self.subTest(required=required):
@@ -151,6 +151,14 @@ class AdapterDeadlineContractTests(unittest.TestCase):
     def test_fake_adapter_completes_through_versioned_callbacks(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            repo = root / "repo"
+            repo.mkdir()
+            subprocess.run(["git", "init", "-q", str(repo)], check=True)
+            subprocess.run(["git", "-C", str(repo), "config", "user.name", "Worker Test"], check=True)
+            subprocess.run(["git", "-C", str(repo), "config", "user.email", "worker@example.invalid"], check=True)
+            (repo / "baseline.txt").write_text("baseline\n")
+            subprocess.run(["git", "-C", str(repo), "add", "baseline.txt"], check=True)
+            subprocess.run(["git", "-C", str(repo), "commit", "-qm", "baseline"], check=True)
             adapter = root / "adapter.py"
             adapter.write_text(
                 "import json, pathlib, sys\n"
@@ -498,9 +506,92 @@ class StatusContractTests(unittest.TestCase):
 
 
 class CliContractTests(unittest.TestCase):
+    def test_external_adapter_commit_uses_structured_message_after_verification(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = root / "repo"
+            repo.mkdir()
+            subprocess.run(["git", "init", "-q", str(repo)], check=True)
+            subprocess.run(["git", "-C", str(repo), "config", "user.name", "Worker Test"], check=True)
+            subprocess.run(["git", "-C", str(repo), "config", "user.email", "worker@example.invalid"], check=True)
+            (repo / "output.txt").write_text("before\n")
+            subprocess.run(["git", "-C", str(repo), "add", "output.txt"], check=True)
+            subprocess.run(["git", "-C", str(repo), "commit", "-qm", "baseline"], check=True)
+            adapter = root / "adapter.py"
+            adapter.write_text(
+                "import json, pathlib, sys\nrequest=json.load(sys.stdin); op=sys.argv[1]\n"
+                "if op == 'get_config': response={'protocol_version':1,'initial_score':5,'limits':{'poll_interval_seconds':0.01}}\n"
+                "elif op == 'start':\n"
+                " pathlib.Path(request['working_directory'],'output.txt').write_text('after\\n')\n"
+                " pathlib.Path(request['result_path']).write_text(json.dumps({'outcome':'complete','changed':True,'commit_message':'fix(parser): honor exact structured message'}))\n"
+                " p=pathlib.Path(request['output_dir']); (p/'status.json').write_text(json.dumps({'status':'complete','result_location':request['result_path']}))\n"
+                " response={'execution_id':'commit-1','status_location':str(p/'status.json')}\n"
+                "else: response=json.loads(pathlib.Path(request['status_location']).read_text())\n"
+                "print(json.dumps(response))\n"
+            )
+            result = runtime(
+                "task-cli", "--provider", "unknown-adapter", "--executable", sys.executable,
+                "--extra-arg", adapter, "--work-dir", repo, "--prompt-file", root / "prompt.txt",
+                "--output-file", root / "adapter.log", "--result-file", root / "result.json",
+                "--task-id", "TASK-COMMIT", "--target", "output.txt", "--base", "HEAD",
+                "--verify", "python3 -c 'print(\"verified\")'",
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            subject = subprocess.run(["git", "-C", str(repo), "log", "-1", "--format=%s"],
+                                     check=True, capture_output=True, text=True).stdout.strip()
+            self.assertEqual(subject, "fix(parser): honor exact structured message")
+
+    def test_prompt_is_provider_invariant_and_requires_structured_script_owned_closeout(self):
+        prompt = build_task_prompt("task", "TASK-9", "2", "src/a.py", "python -m unittest",
+                                   "", "", 15, 1, 10, 5, "progress.log")
+        self.assertNotRegex(prompt, r"(?i)codex|agy|generic adapter|selected adapter policy")
+        self.assertIn("commit_message", prompt)
+        self.assertIn("Do not stage or commit", prompt)
+
+    def test_structured_no_change_finishes_without_a_commit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = root / "repo"
+            repo.mkdir()
+            subprocess.run(["git", "init", "-q", str(repo)], check=True)
+            subprocess.run(["git", "-C", str(repo), "config", "user.name", "Worker Test"], check=True)
+            subprocess.run(["git", "-C", str(repo), "config", "user.email", "worker@example.invalid"], check=True)
+            (repo / "baseline.txt").write_text("baseline\n")
+            subprocess.run(["git", "-C", str(repo), "add", "baseline.txt"], check=True)
+            subprocess.run(["git", "-C", str(repo), "commit", "-qm", "baseline"], check=True)
+            base = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
+                                  check=True, capture_output=True, text=True).stdout.strip()
+            adapter = root / "adapter.py"
+            adapter.write_text(
+                "import json, pathlib, sys\nrequest=json.load(sys.stdin); op=sys.argv[1]\n"
+                "if op == 'get_config': response={'protocol_version':1,'initial_score':5}\n"
+                "elif op == 'start':\n"
+                " pathlib.Path(request['result_path']).write_text(json.dumps({'outcome':'no_change','changed':False,'no_change_reason':'The requested state already holds.'}))\n"
+                " p=pathlib.Path(request['output_dir']); (p/'status.json').write_text(json.dumps({'status':'complete','result_location':request['result_path']}))\n"
+                " response={'execution_id':'no-change-1','status_location':str(p/'status.json')}\n"
+                "else: response=json.loads(pathlib.Path(request['status_location']).read_text())\n"
+                "print(json.dumps(response))\n"
+            )
+            result = runtime("task-cli", "--provider", "new-adapter", "--executable", sys.executable,
+                             "--extra-arg", adapter, "--work-dir", repo, "--prompt-file", root / "prompt",
+                             "--output-file", root / "adapter.log", "--result-file", root / "result.json",
+                             "--task-id", "TASK-NO-CHANGE", "--base", base)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            current = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
+                                     check=True, capture_output=True, text=True).stdout.strip()
+            self.assertEqual(current, base)
+
     def test_task_cli_executes_an_unrecognized_adapter_with_protocol(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            repo = root / "repo"
+            repo.mkdir()
+            subprocess.run(["git", "init", "-q", str(repo)], check=True)
+            subprocess.run(["git", "-C", str(repo), "config", "user.name", "Worker Test"], check=True)
+            subprocess.run(["git", "-C", str(repo), "config", "user.email", "worker@example.invalid"], check=True)
+            (repo / "baseline.txt").write_text("baseline\n")
+            subprocess.run(["git", "-C", str(repo), "add", "baseline.txt"], check=True)
+            subprocess.run(["git", "-C", str(repo), "commit", "-qm", "baseline"], check=True)
             adapter = root / "adapter.py"
             adapter.write_text(
                 "import json, pathlib, sys\nrequest=json.load(sys.stdin); op=sys.argv[1]\n"
@@ -517,9 +608,9 @@ class CliContractTests(unittest.TestCase):
             prompt.write_text("same shared task prompt")
             result = runtime(
                 "task-cli", "--provider", "unlisted-adapter", "--executable", sys.executable,
-                "--extra-arg", adapter, "--work-dir", root, "--prompt-file", prompt,
+                "--extra-arg", adapter, "--work-dir", repo, "--prompt-file", prompt,
                 "--output-file", output, "--result-file", result_file,
-                "--task-id", "TASK-UNKNOWN", "--worker-port", "4100",
+                "--task-id", "TASK-UNKNOWN", "--worker-port", "4100", "--base", "HEAD",
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(json.loads(result_file.read_text())["commit_message"], "adapter result")

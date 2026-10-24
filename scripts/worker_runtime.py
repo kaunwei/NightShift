@@ -848,7 +848,7 @@ def finalize_task_git(args):
                        "test" if "[DIAGNOSTIC]" in title else "feat")
         commit = subprocess.run([
             "git", "-C", args.work_dir, "commit", "-m",
-            f"{commit_type}(worker): complete {args.task_id}", "-m",
+            getattr(args, "commit_message", "") or f"{commit_type}(worker): complete {args.task_id}", "-m",
             f"Task: {args.task_id} (Level {args.level})\nScope: {args.target or '<modified files>'}\n"
             f"Verification: {args.verify or '<worker post-flight>'}\n"
             "Attempts: wrapper-managed | Confidence: pending audit",
@@ -857,6 +857,51 @@ def finalize_task_git(args):
             print(f"[WORKER] Failed to commit task changes for {args.task_id}.", file=sys.stderr)
             return 1
     return 0
+
+
+def finalize_structured_adapter_result(args, result):
+    outcome = result.get("outcome")
+    if outcome == "no_change":
+        reason = result.get("no_change_reason")
+        if not isinstance(reason, str) or not reason.strip():
+            raise ValueError("no_change result requires a non-empty no_change_reason")
+        tracked = subprocess.run(["git", "-C", args.work_dir, "diff", "--name-only", args.base],
+                                 capture_output=True, text=True, check=False).stdout.splitlines()
+        untracked = subprocess.run(["git", "-C", args.work_dir, "ls-files", "--others",
+                                    "--exclude-standard"], capture_output=True, text=True,
+                                   check=False).stdout.splitlines()
+        runtime_file = re.compile(r"(?:^|/)(?:progress\.log|tasks\.txt|tasks\.done|worker\..*\.status|\.worker\..*|\.preview(?:/|$)|\.reports(?:/|$))")
+        changes = [name for name in tracked + untracked if not runtime_file.search(name)]
+        if changes:
+            raise ValueError("no_change result conflicts with workspace changes")
+        return 0
+    if outcome in ("scope_blocked", "guidance", "blocked", "failure", "closeout_required"):
+        return 126 if outcome == "closeout_required" else 1
+    if outcome != "complete":
+        raise ValueError(f"unsupported adapter result outcome: {outcome!r}")
+    message = result.get("commit_message")
+    if not isinstance(message, str) or not message.strip():
+        return 126
+    if args.verify:
+        verify_code, verify_output = run_verify(args.verify, args.work_dir,
+                                                args.worker_port, args.timeout)
+        if verify_output:
+            print(verify_output, end="" if verify_output.endswith("\n") else "\n")
+        if verify_code:
+            print(f"[WORKER] Verification failed ({verify_code}); refusing script-owned commit.",
+                  file=sys.stderr)
+            return 1
+    audit_args = argparse.Namespace(
+        work_dir=args.work_dir, base=args.base, target=args.target,
+        constraints=getattr(args, "constraints", ""), title=args.title,
+        level=int(args.level or 1), allow_dirty=True,
+    )
+    audit_code, audit_reason = git_audit(audit_args)
+    if audit_code:
+        print(f"[WORKER] Pre-commit audit failed: {audit_reason}", file=sys.stderr)
+        return audit_code
+    args.commit_message = message
+    return finalize_task_git(args)
 
 
 def execute_task_cli(args):
@@ -901,9 +946,18 @@ def execute_adapter_task(args):
             shutil.copy2(result_path, destination)
     result_path = Path(args.result_file or output.with_name("adapter-result.json"))
     result = json.loads(result_path.read_text(encoding="utf-8")) if result_path.exists() else {}
+    if status.get("status") == "complete":
+        if not isinstance(result, dict):
+            raise ValueError("adapter result must be a JSON object")
+        code = finalize_structured_adapter_result(args, result)
+    else:
+        code = {"quota_exhausted": 124, "step_budget_exceeded": 125,
+                "closeout_required": 126, "execution_timeout": 124,
+                "callback_timeout": 124, "cancellation_failed": 124}.get(
+                    status["status"], 1)
     output.write_text(json.dumps({"status": status["status"], "result": result}, ensure_ascii=False),
                       encoding="utf-8")
-    return 0 if status["status"] == "complete" else 124 if status["status"] == "quota_exhausted" else 1
+    return code
 
 
 def _execute_task_cli(args, adapter_prompt):
@@ -912,12 +966,6 @@ def _execute_task_cli(args, adapter_prompt):
     if not args.result_file:
         args.result_file = str(Path(args.output_file).with_name("last-message.txt"))
     prompt = Path(args.prompt_file).read_text(encoding="utf-8")
-    if args.provider == "generic":
-        prompt += "\nSELECTED ADAPTER POLICY: Generic adapter. The host runtime stages and commits TARGET paths. Verify the task, then write the final UTF-8 outcome to NIGHTSHIFT_RESULT_FILE. Do not request restricted closeout; this adapter does not support it. Use [BLOCKED] if verification cannot finish.\n"
-    elif args.provider == "codex":
-        prompt += "\nSELECTED ADAPTER POLICY: Codex. The host runtime stages and commits TARGET paths. Run verification and report the outcome. If verification still needs a restricted continuation, use [CLOSEOUT_REQUIRED].\n"
-    else:
-        prompt += "\nSELECTED ADAPTER POLICY: AgY. Commit only verified task changes. If verification or Git closeout remains, use [CLOSEOUT_REQUIRED].\n"
     adapter_prompt.write_text(prompt, encoding="utf-8")
     Path(args.result_file).unlink(missing_ok=True)
     environment = os.environ.copy()
@@ -1051,11 +1099,11 @@ LIMITS
 - Honor FORBIDDEN_SHORTCUTS ({forbidden or 'none specified'}) and CONSTRAINTS ({constraints or 'none specified'}). Never weaken assertions, hide errors, use dummy behavior, or use thread sleeps to mask a race. Do not run sudo or host package managers.
 
 WORK
-- Keep each action independent. Before every AgY tool call, emit one `[EXEC] <brief action>` line; the runtime counts these as steps. Codex actions are counted from CLI events. Do not dictate command formatting, bundle actions, or fabricate markers to evade the budget.
+- Keep each action independent. Emit one `[EXEC] <brief action>` line before actions where the runtime uses that marker for accounting. Do not dictate command formatting, bundle actions, or fabricate markers to evade the budget.
 - Run {verify or 'the task verification'} and report only checks actually completed. A [DEAD_END] claim needs an isolated passing test or runtime evidence that the suspected module is healthy while the symptom remains.
 - Make at most 3 implementation attempts. If blocked, report [BLOCKED] and the cause; the runtime preserves failed work and restores the task baseline. Do not destructively reset files. Do not edit {progress_file}; the runtime records the task and performs mechanical audits.
-- Follow the selected adapter's Git policy; only verified task changes may be staged or committed. Use a concise English Conventional Commit and include the task ID. End your report with Attempts: <N> | Confidence: <HIGH|MED|LOW>. The Planner reviews the evidence and records the score; never adjust the shared score yourself.
-- If the selected adapter supports restricted closeout and implementation is complete with only verification/Git closeout remaining, stop and emit [CLOSEOUT_REQUIRED]. The runtime may launch one restricted closeout for this task; it may verify and finalize existing changes but may not edit project files. If implementation remains, stop.
+- Do not stage or commit. Return one JSON object through the adapter result file: {{"outcome":"complete|closeout_required|blocked|scope_blocked|guidance|failure|no_change","changed":true|false,"no_change_reason":"...","verification_evidence":"...","commit_message":"..."}}. Use `complete` only for finished work and `no_change` only when the task required no edits, with a reason. Use `closeout_required` when verification or a commit message remains. Never infer a missing message from logs. End diagnostic text with Attempts: <N> | Confidence: <HIGH|MED|LOW>. The Planner reviews the evidence and records the score; never adjust the shared score yourself.
+- The runtime runs declared verification, audits scope, and commits only the structured `commit_message`. Do not change the assignment to fit an adapter.
 """
 
 
@@ -1331,11 +1379,26 @@ def worker_daemon(root):
                     stream.write("\n")
                 result_text = result_output.read_text(encoding="utf-8", errors="replace") if result_output.exists() else ""
 
+                structured_outcome = ""
+                try:
+                    payload = json.loads(result_text)
+                    if isinstance(payload, dict):
+                        structured_outcome = payload.get("outcome", "")
+                except json.JSONDecodeError:
+                    pass
+                structured_status = {
+                    "complete": "success", "no_change": "success",
+                    "closeout_required": "closeout_required", "scope_blocked": "scope",
+                    "guidance": "guidance", "blocked": "blocked", "failure": "error",
+                }.get(structured_outcome, "")
+
                 outcome = ("quota_exhausted" if quota_exhausted else
                            "timeout" if exit_code == 124 else
                            "step_budget" if exit_code == 125 else
+                           "closeout_required" if exit_code == 126 and structured_outcome == "closeout_required" else
                            "closeout_failed" if exit_code == 126 else
                            "error" if exit_code else
+                           structured_status if structured_status else
                            "scope" if "[SCOPE_BLOCKED]" in result_text else
                            "blocked" if "[BLOCKED]" in result_text else
                            "guidance" if re.search(r"\[(?:NEED_GUIDANCE|NEED_DECOMPOSITION)\]", result_text) else
@@ -1504,11 +1567,14 @@ def git_audit(args):
     ignored = re.compile(r"progress\.log|tasks\.txt|tasks\.done|worker\..*\.status|\.preview|\.reports")
     dirty = [entry.decode("utf-8", "replace") for entry in status.split(b"\0")
              if entry and not ignored.search(entry.decode("utf-8", "replace"))]
-    if dirty:
+    if dirty and not getattr(args, "allow_dirty", False):
         return 1, "Dirty working tree or untracked ghost files detected after task. " + ", ".join(dirty)
 
     changed = [name.decode("utf-8", "replace") for name in
-               git("diff", "--name-only", "-z", args.base, "HEAD").split(b"\0") if name]
+               git("diff", "--name-only", "-z", args.base).split(b"\0") if name]
+    if getattr(args, "allow_dirty", False):
+        changed.extend(name.decode("utf-8", "replace") for name in
+                       git("ls-files", "--others", "--exclude-standard", "-z").split(b"\0") if name)
     context = f"{args.title} {args.constraints}"
     diagnostic = bool(re.search(r"\[DIAGNOSTIC\]", context, re.I))
     research = bool(re.search(r"\[RESEARCH\]", context, re.I))
@@ -1522,7 +1588,7 @@ def git_audit(args):
                             or not re.search(r"tests/|Tests/|test", args.target, re.I))
             if unauthorized and not re.search(r"test refactor approved", args.constraints, re.I):
                 return 5, f"Test Immutability Violation: Modified test files without authorization in TARGET ({', '.join(tests)})."
-            diff = git("diff", args.base, "HEAD", "--", *tests).decode("utf-8", "replace")
+            diff = git("diff", args.base, "--", *tests).decode("utf-8", "replace")
             assertion = re.compile(r"\s*(XCTAssert|#expect|assert|expect\(|self\.assert)")
             deleted = sum(bool(assertion.match(line[1:])) for line in diff.splitlines()
                           if line.startswith("-") and not line.startswith("---"))
@@ -1531,7 +1597,7 @@ def git_audit(args):
             if deleted > added:
                 return 7, f"Assertion Non-Decrease Violation: Deleted {deleted} assertions while adding only {added}."
 
-    numstat = git("diff", "--numstat", args.base, "HEAD").decode("utf-8", "replace")
+    numstat = git("diff", "--numstat", args.base).decode("utf-8", "replace")
     deleted_lines = 0
     for line in numstat.splitlines():
         parts = line.split("\t")
