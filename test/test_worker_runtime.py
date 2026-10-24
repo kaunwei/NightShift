@@ -2214,6 +2214,11 @@ class InstallerIntegrationTests(unittest.TestCase):
             self.assertEqual(skills_manifest.read_text(), '{"entries":[{"path":"custom/skills"}]}\n')
             deployed_runtime = target / "scripts/worker_runtime.py"
             self.assertEqual(deployed_runtime.read_bytes(), (ROOT / "scripts/worker_runtime.py").read_bytes())
+            for adapter in ("codex.py", "agy.py", "generic.py"):
+                self.assertEqual((target / "scripts/adapters" / adapter).read_bytes(),
+                                 (ROOT / "scripts/adapters" / adapter).read_bytes())
+            self.assertEqual((target / "docs/PORTING_GUIDE.md").read_bytes(),
+                             (ROOT / "docs/PORTING_GUIDE.md").read_bytes())
             operations = target / ".agents/skills/nightshift/planner/OPERATIONS.md"
             self.assertFalse(operations.exists())
             operations.parent.mkdir(parents=True, exist_ok=True)
@@ -2246,6 +2251,41 @@ class InstallerIntegrationTests(unittest.TestCase):
                 cwd=target, capture_output=True, text=True, timeout=45,
             )
             self.assertEqual(installed.returncode, 0, installed.stdout + installed.stderr)
+
+    @unittest.skipUnless((ROOT / "install.sh").exists(), "source checkout only")
+    def test_installed_runtime_executes_unknown_protocol_adapter_without_source_checkout(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target=Path(directory)/"project"; target.mkdir()
+            installed=subprocess.run(["bash",str(ROOT/"install.sh"),str(target)],
+                cwd=ROOT,capture_output=True,text=True,timeout=30)
+            self.assertEqual(installed.returncode,0,installed.stdout+installed.stderr)
+            repo=Path(directory)/"work"; repo.mkdir()
+            subprocess.run(["git","init","-q",str(repo)],check=True)
+            for args in (("config","user.name","Installed Test"),
+                         ("config","user.email","installed@example.invalid"),
+                         ("add","."),):
+                subprocess.run(["git","-C",str(repo),*args],check=True)
+            subprocess.run(["git","-C",str(repo),"commit","--allow-empty","-qm","baseline"],check=True)
+            adapter=Path(directory)/"unregistered.py"
+            adapter.write_text(
+                "import json,pathlib,sys\nr=json.load(sys.stdin); op=sys.argv[-1]\n"
+                "if op=='get_config': x={'protocol_version':1,'initial_score':4,'limits':{'poll_interval_seconds':0.01}}\n"
+                "elif op=='start':\n"
+                " p=pathlib.Path(r['output_dir']);p.mkdir(parents=True,exist_ok=True)\n"
+                " q=pathlib.Path(r['result_path']);q.write_text(json.dumps({'outcome':'no_change','changed':False,'no_change_reason':'verified fixture'}))\n"
+                " (p/'status.json').write_text(json.dumps({'status':'complete','result_location':str(q)}))\n"
+                " x={'execution_id':'installed-run','status_location':str(p/'status.json')}\n"
+                "else:x=json.loads(pathlib.Path(r['status_location']).read_text())\n"
+                "print(json.dumps(x))\n")
+            (Path(directory)/"prompt.txt").write_text("common task prompt")
+            runtime_path=target/"scripts/worker_runtime.py"
+            result=subprocess.run([sys.executable,str(runtime_path),"task-cli","--provider","unknown-extension",
+                "--executable",sys.executable,"--extra-arg",str(adapter),"--work-dir",str(repo),
+                "--prompt-file",str(Path(directory)/"prompt.txt"),"--output-file",str(Path(directory)/"run.log"),
+                "--result-file",str(Path(directory)/"result.json"),"--task-id","TASK-INSTALLED",
+                "--target",".","--base","HEAD"],cwd=target,capture_output=True,text=True,timeout=15)
+            self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+            self.assertEqual(json.loads((Path(directory)/"result.json").read_text())["outcome"],"no_change")
 
     @unittest.skipUnless((ROOT / "install.sh").exists(), "source checkout only")
     def test_installer_resolves_symlink_target_before_self_install_guard(self):
