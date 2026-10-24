@@ -667,6 +667,18 @@ def quota_error(text):
     return any(re.search(pattern, text, re.I) for pattern in patterns)
 
 
+def should_failover_agent(exit_code, result_text):
+    """Only provider quota and confirmed timeout statuses may select another registration."""
+    try:
+        payload = json.loads(result_text)
+    except (TypeError, json.JSONDecodeError):
+        payload = {}
+    status = payload.get("status", "") if isinstance(payload, dict) else ""
+    if status in ("cancellation_failed", "step_budget_exceeded") or exit_code == 125:
+        return False
+    return status in ("quota_exhausted", "execution_timeout", "callback_timeout")
+
+
 def read_agent_state(path):
     path = Path(path)
     if not path.exists():
@@ -719,14 +731,17 @@ def execute_registered_agents(args, agents, state_path, rollback):
         result_path = Path(attempt.result_file) if attempt.result_file else output_path
         output_text = output_path.read_text(encoding="utf-8", errors="replace") if output_path.exists() else ""
         result_text = result_path.read_text(encoding="utf-8", errors="replace") if result_path.exists() else ""
-        if code in (0, 124) or not quota_error(output_text + "\n" + result_text):
+        quota_exhausted = quota_error(output_text + "\n" + result_text)
+        if not quota_exhausted and not should_failover_agent(code, output_text):
             return code, False
-        state["exhausted"][agent["id"]] = {
-            "provider": agent["provider"], "command": agent["command"],
-            "reason": "quota", "detected_at": datetime.now(timezone.utc).isoformat(),
-        }
-        atomic_write(state_path, json.dumps(state, ensure_ascii=False, indent=2) + "\n")
-        print(f"[WORKER] Agent {agent['id']} quota exhausted; switching to the next registered agent.", file=sys.stderr)
+        if quota_exhausted:
+            state["exhausted"][agent["id"]] = {
+                "provider": agent["provider"], "command": agent["command"],
+                "reason": "quota", "detected_at": datetime.now(timezone.utc).isoformat(),
+            }
+            atomic_write(state_path, json.dumps(state, ensure_ascii=False, indent=2) + "\n")
+        reason = "quota exhausted" if quota_exhausted else "timed out"
+        print(f"[WORKER] Agent {agent['id']} {reason}; switching to the next registered agent.", file=sys.stderr)
         rollback(attempt.attempt_baseline, attempt.attempt_id)
         if index + 1 == len(available):
             print("[WORKER] QUOTA_EXHAUSTED: all registered agents are exhausted; task remains queued.")

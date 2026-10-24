@@ -11,6 +11,7 @@ import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 
+from scripts import worker_runtime as runtime_module
 from scripts.worker_runtime import build_task_prompt, first_report, publish_research_reports
 
 
@@ -183,6 +184,15 @@ class WatcherDispatchGateContractTests(unittest.TestCase):
                                  "--work-dir", root)
             self.assertEqual(dispatched.stdout.split("\0")[0], "task")
             self.assertEqual(dispatched.stdout.split("\0")[1], "TASK-WATCH | TARGET: src/a.py | ACTION: continue")
+
+
+class RegisteredAgentFailoverContractTests(unittest.TestCase):
+    def test_timeout_is_task_local_failover_but_budget_and_cancellation_failure_are_not(self):
+        self.assertTrue(runtime_module.should_failover_agent(124, '{"status":"execution_timeout"}'))
+        self.assertTrue(runtime_module.should_failover_agent(124, '{"status":"callback_timeout"}'))
+        self.assertFalse(runtime_module.should_failover_agent(125, '{"status":"step_budget_exceeded"}'))
+        self.assertFalse(runtime_module.should_failover_agent(124, '{"status":"cancellation_failed"}'))
+        self.assertFalse(runtime_module.should_failover_agent(1, '{"status":"error"}'))
 
 
 class AdapterDeadlineContractTests(unittest.TestCase):
