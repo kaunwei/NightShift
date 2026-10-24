@@ -127,7 +127,7 @@ def read_agent_score_state(root, registration_id):
     return state
 
 
-def append_agent_event(path, event):
+def append_agent_event(path, event, gate_path=""):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     lock = Path(f"{path}.lock")
@@ -144,10 +144,137 @@ def append_agent_event(path, event):
             stream.write(json.dumps(event, ensure_ascii=False) + "\n")
     finally:
         lock.rmdir()
+    gate_path = Path(gate_path) if gate_path else path.parent / ".worker-dispatch-gate.json"
+    gate_lock = Path(f"{gate_path}.lock")
+    for _ in range(100):
+        try:
+            gate_lock.mkdir()
+            break
+        except FileExistsError:
+            time.sleep(0.05)
+    else:
+        raise TimeoutError(f"dispatch gate lock remains held: {gate_lock}")
+    try:
+        gate_state = json.loads(gate_path.read_text(encoding="utf-8")) if gate_path.exists() else {
+            "version": 1, "pending_event_ids": []}
+        pending = gate_state.setdefault("pending_event_ids", [])
+        if event["event_id"] not in pending:
+            pending.append(event["event_id"])
+        atomic_write(gate_path, json.dumps(gate_state, ensure_ascii=False, indent=2) + "\n")
+    finally:
+        gate_lock.rmdir()
+
+
+def _read_json_lines(path):
+    source = Path(path)
+    if not source.is_file():
+        return []
+    rows = []
+    for line_number, line in enumerate(source.read_text(encoding="utf-8").splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError as error:
+            raise ValueError(f"invalid JSON line {line_number} in {source}: {error}") from error
+        if not isinstance(row, dict):
+            raise ValueError(f"event line {line_number} in {source} must be an object")
+        rows.append(row)
+    return rows
+
+
+def _watch_agent_events_locked(events_path, cursor_path, acknowledgements_path, gate_path, handoff_path):
+    events = _read_json_lines(events_path)
+    acknowledgements = _read_json_lines(acknowledgements_path)
+    acked = {item.get("event_id") for item in acknowledgements}
+    cursor_path, gate_path, handoff_path = map(Path, (cursor_path, gate_path, handoff_path))
+    cursor = json.loads(cursor_path.read_text(encoding="utf-8")) if cursor_path.exists() else {
+        "version": 1, "seen_event_ids": []}
+    if cursor.get("version") != 1 or not isinstance(cursor.get("seen_event_ids"), list):
+        raise ValueError(f"invalid agent event cursor: {cursor_path}")
+    seen = set(cursor["seen_event_ids"])
+    already_handed_off = handoff_path.read_text(encoding="utf-8") if handoff_path.exists() else ""
+    emitted = []
+    for event in events:
+        event_id = event.get("event_id")
+        if not isinstance(event_id, str) or not event_id:
+            raise ValueError("agent event requires a non-empty event_id")
+        if event_id not in seen:
+            if event_id not in already_handed_off:
+                line = (f"[PLANNER_REVIEW_REQUIRED] Event={event_id} Cause={event.get('cause', 'unknown')} "
+                        f"Task={event.get('task_id', 'unknown')} Registration={event.get('registration_id', 'unknown')} "
+                        f"Score={event.get('previous_score', '?')}->{event.get('current_score', '?')} "
+                        f"Level={event.get('previous_level', '?')}->{event.get('current_level', '?')}; "
+                        "review affected queued work and acknowledge or revise it before dispatch resumes.")
+                with handoff_path.open("a", encoding="utf-8") as stream:
+                    stream.write(line + "\n")
+                already_handed_off += line + "\n"
+                emitted.append(line)
+            seen.add(event_id)
+    cursor_path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write(cursor_path, json.dumps({"version": 1, "seen_event_ids": sorted(seen)},
+                                         ensure_ascii=False, indent=2) + "\n")
+    pending = [event.get("event_id") for event in events if event.get("event_id") not in acked]
+    if pending:
+        atomic_write(gate_path, json.dumps({"version": 1, "pending_event_ids": pending},
+                                           ensure_ascii=False, indent=2) + "\n")
+    else:
+        gate_path.unlink(missing_ok=True)
+    return emitted
+
+
+def watch_agent_events(events_path, cursor_path, acknowledgements_path, gate_path, handoff_path):
+    gate_path = Path(gate_path)
+    gate_path.parent.mkdir(parents=True, exist_ok=True)
+    gate_lock = Path(f"{gate_path}.lock")
+    for _ in range(100):
+        try:
+            gate_lock.mkdir()
+            break
+        except FileExistsError:
+            time.sleep(0.05)
+    else:
+        raise TimeoutError(f"dispatch gate lock remains held: {gate_lock}")
+    try:
+        return _watch_agent_events_locked(events_path, cursor_path,
+                                          acknowledgements_path, gate_path,
+                                          handoff_path)
+    finally:
+        gate_lock.rmdir()
+
+
+def acknowledge_agent_event(events_path, acknowledgements_path, event_id, resolution):
+    if resolution not in ("acknowledged", "revised"):
+        raise ValueError("event resolution must be 'acknowledged' or 'revised'")
+    event_ids = {item.get("event_id") for item in _read_json_lines(events_path)}
+    if event_id not in event_ids:
+        raise ValueError(f"unknown agent event: {event_id}")
+    path = Path(acknowledgements_path)
+    existing = _read_json_lines(path)
+    if any(item.get("event_id") == event_id for item in existing):
+        return False
+    append_agent_event_row = {"event_id": event_id, "resolution": resolution,
+                              "at": datetime.now(timezone.utc).isoformat()}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock = Path(f"{path}.lock")
+    for _ in range(100):
+        try:
+            lock.mkdir()
+            break
+        except FileExistsError:
+            time.sleep(0.05)
+    else:
+        raise TimeoutError(f"agent acknowledgement lock remains held: {lock}")
+    try:
+        with path.open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps(append_agent_event_row, ensure_ascii=False) + "\n")
+    finally:
+        lock.rmdir()
+    return True
 
 
 def record_agent_score_result(root, registration_id, task_id, result, evidence="",
-                              events_path="", mid_batch=False):
+                              events_path="", mid_batch=False, gate_path=""):
     path = registered_agent_score_path(root, registration_id)
     before = read_agent_score_state(root, registration_id)
     updated = record_score_result(path, task_id, result, evidence)
@@ -161,7 +288,7 @@ def record_agent_score_result(root, registration_id, task_id, result, evidence="
             "previous_level": score_task_level(before["score"]),
             "current_level": score_task_level(updated["score"]),
             "at": datetime.now(timezone.utc).isoformat(),
-        })
+        }, gate_path)
     return {**updated, "registration_id": registration_id}
 
 
@@ -617,7 +744,8 @@ def progress_bar(current, total, width=30):
 def poll_next(args):
     """Claim one queue item and return the scheduler's external state as fields."""
     fields = [""] * 16
-    if Path(args.pause).exists():
+    if Path(args.pause).exists() or (getattr(args, "dispatch_gate", "")
+                                     and Path(args.dispatch_gate).exists()):
         fields[0] = "paused"
         return fields
     raw = pop_task(args.tasks)
@@ -1364,6 +1492,7 @@ def worker_daemon(root):
     done_file = resolve("TASKS_DONE_FILE", "tasks.done")
     progress_file = resolve("PROGRESS_FILE", "progress.log")
     pause_file = resolve("PAUSE_FILE", "PAUSE")
+    dispatch_gate_file = resolve("AGENT_DISPATCH_GATE_FILE", ".worker-dispatch-gate.json")
     status_file = (resolve("STATUS_FILE", "worker.status") if worker_id == "default"
                    else root / f"worker.{worker_id}.status")
     log_file = (resolve("LOG_FILE", ".worker.log") if worker_id == "default"
@@ -1484,9 +1613,15 @@ def worker_daemon(root):
                 waiting_for_quota = False
             poll_args = argparse.Namespace(tasks=str(tasks_file), done=str(done_file),
                                            pause=str(pause_file), work_dir=str(work_dir),
+                                           dispatch_gate=str(dispatch_gate_file),
                                            **step_args)
             fields = poll_next(poll_args)
             if fields[0] == "paused":
+                if dispatch_gate_file.exists():
+                    print(f"[{stamp()}] [PLANNER_REVIEW_REQUIRED] Dispatch held by {dispatch_gate_file}.")
+                    update_status("PAUSED_FOR_PLANNER", f"Review agent event in {dispatch_gate_file}", percentage="0%", bar="[PLANNER]")
+                    stop_requested.wait(poll_interval)
+                    continue
                 print(f"[{stamp()}] [PAUSED] Found {pause_file}. Sleeping...")
                 update_status("PAUSED", f"Paused via {pause_file} file", percentage="0%", bar="[PAUSED]")
                 stop_requested.wait(poll_interval)
@@ -1583,6 +1718,7 @@ def worker_daemon(root):
                         return record_agent_score_result(
                             agent_score_state_path, registration_id, task_id,
                             result, evidence, agent_events_path,
+                            gate_path=dispatch_gate_file,
                         )
                     return record_score_result(score_state_path, task_id, result, evidence)
 
@@ -2440,6 +2576,18 @@ def main(argv=None):
     score_record.add_argument("--agent-id", default="")
     score_record.add_argument("--events", default="")
     score_record.add_argument("--mid-batch", action="store_true")
+    score_record.add_argument("--dispatch-gate", default="")
+    event_watch = commands.add_parser("agent-events-watch")
+    event_watch.add_argument("--events", required=True)
+    event_watch.add_argument("--cursor", required=True)
+    event_watch.add_argument("--acknowledgements", required=True)
+    event_watch.add_argument("--gate", required=True)
+    event_watch.add_argument("--handoff", required=True)
+    event_ack = commands.add_parser("agent-event-ack")
+    event_ack.add_argument("--events", required=True)
+    event_ack.add_argument("--acknowledgements", required=True)
+    event_ack.add_argument("--event-id", required=True)
+    event_ack.add_argument("--resolution", choices=("acknowledged", "revised"), required=True)
     ghost_prompt = commands.add_parser("ghost-prompt")
     ghost_prompt.add_argument("--output", required=True)
     ghost_prompt.add_argument("--task-id", required=True)
@@ -2571,6 +2719,7 @@ def main(argv=None):
     poll.add_argument("--tasks", required=True)
     poll.add_argument("--done", required=True)
     poll.add_argument("--pause", required=True)
+    poll.add_argument("--dispatch-gate", default="")
     poll.add_argument("--work-dir", required=True)
     poll.add_argument("--step-base", type=int, default=12)
     poll.add_argument("--step-per-file", type=int, default=5)
@@ -2586,10 +2735,19 @@ def main(argv=None):
             event_path = args.events or str(Path(args.state).parent / ".worker-agent-events.jsonl")
             result = record_agent_score_result(args.state, args.agent_id, args.task_id,
                                                args.result, args.evidence,
-                                               event_path, args.mid_batch)
+                                               event_path, args.mid_batch,
+                                               args.dispatch_gate)
         else:
             result = record_score_result(args.state, args.task_id, args.result, args.evidence)
         print(json.dumps(result, ensure_ascii=False))
+    elif args.command == "agent-events-watch":
+        for line in watch_agent_events(args.events, args.cursor, args.acknowledgements,
+                                       args.gate, args.handoff):
+            print(line)
+    elif args.command == "agent-event-ack":
+        print(json.dumps({"event_id": args.event_id,
+                          "recorded": acknowledge_agent_event(args.events,
+                              args.acknowledgements, args.event_id, args.resolution)}))
     elif args.command == "ghost-prompt":
         atomic_write(args.output, build_ghost_closeout_prompt(args.task_id, args.verify, args.progress_file))
     elif args.command == "queue-pop":

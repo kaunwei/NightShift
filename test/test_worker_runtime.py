@@ -135,6 +135,56 @@ class AgentScoreContractTests(unittest.TestCase):
             self.assertEqual((event["previous_score"], event["current_score"]), (3, 4))
 
 
+class WatcherDispatchGateContractTests(unittest.TestCase):
+    def test_watcher_handoffs_each_event_once_and_dispatch_waits_for_planner_ack(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            tasks = root / "tasks.txt"
+            events = root / "events.jsonl"
+            cursor = root / "cursor.json"
+            acknowledgements = root / "acks.jsonl"
+            gate = root / "dispatch-gate.json"
+            handoff = root / "progress.log"
+            tasks.write_text("TASK-WATCH | TARGET: src/a.py | ACTION: continue\n")
+            event = {"event_id":"event-1", "registration_id":"agent-a", "cause":"mid_batch_score_change",
+                     "task_id":"TASK-WATCH", "previous_registration_id":"agent-a",
+                     "current_registration_id":"agent-a", "previous_score":3,
+                     "current_score":4, "previous_level":2, "current_level":2}
+            events.write_text(json.dumps(event) + "\n")
+            first = runtime("agent-events-watch", "--events", events, "--cursor", cursor,
+                            "--acknowledgements", acknowledgements, "--gate", gate,
+                            "--handoff", handoff)
+            self.assertEqual(first.returncode, 0, first.stderr)
+            self.assertIn("event-1", first.stdout)
+            self.assertTrue(gate.exists())
+            self.assertIn("[PLANNER_REVIEW_REQUIRED]", handoff.read_text())
+            resumed = runtime("agent-events-watch", "--events", events, "--cursor", cursor,
+                              "--acknowledgements", acknowledgements, "--gate", gate,
+                              "--handoff", handoff)
+            self.assertEqual(resumed.returncode, 0, resumed.stderr)
+            self.assertEqual(resumed.stdout, "")
+            self.assertEqual(handoff.read_text().count("event-1"), 1)
+            paused = runtime("poll-next", "--tasks", tasks, "--done", root / "tasks.done",
+                             "--pause", root / "PAUSE", "--dispatch-gate", gate,
+                             "--work-dir", root)
+            self.assertEqual(paused.stdout.split("\0")[0], "paused")
+            self.assertIn("TASK-WATCH", tasks.read_text())
+            acknowledged = runtime("agent-event-ack", "--events", events,
+                                   "--acknowledgements", acknowledgements,
+                                   "--event-id", "event-1", "--resolution", "revised")
+            self.assertEqual(acknowledged.returncode, 0, acknowledged.stderr)
+            released = runtime("agent-events-watch", "--events", events, "--cursor", cursor,
+                               "--acknowledgements", acknowledgements, "--gate", gate,
+                               "--handoff", handoff)
+            self.assertEqual(released.returncode, 0, released.stderr)
+            self.assertFalse(gate.exists())
+            dispatched = runtime("poll-next", "--tasks", tasks, "--done", root / "tasks.done",
+                                 "--pause", root / "PAUSE", "--dispatch-gate", gate,
+                                 "--work-dir", root)
+            self.assertEqual(dispatched.stdout.split("\0")[0], "task")
+            self.assertEqual(dispatched.stdout.split("\0")[1], "TASK-WATCH | TARGET: src/a.py | ACTION: continue")
+
+
 class AdapterDeadlineContractTests(unittest.TestCase):
     def run_adapter(self, status_body, cancel_response, callback_timeout="0.1", execution_timeout="2"):
         directory = tempfile.TemporaryDirectory()

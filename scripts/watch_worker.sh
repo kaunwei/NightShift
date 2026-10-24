@@ -20,6 +20,10 @@ fi
 MAX_WAIT_SECONDS="${1:-3600}"
 POLL_INTERVAL="${2:-5}"
 EXPECTED_TASK_ID="${3:-${WATCH_TASK_ID:-}}"
+AGENT_EVENTS_FILE="${WORKER_AGENT_EVENTS_FILE:-.worker-agent-events.jsonl}"
+AGENT_EVENTS_CURSOR_FILE="${WORKER_AGENT_EVENTS_CURSOR_FILE:-.worker-agent-events.cursor.json}"
+AGENT_EVENTS_ACK_FILE="${WORKER_AGENT_EVENTS_ACK_FILE:-.worker-agent-events.acks.jsonl}"
+AGENT_DISPATCH_GATE_FILE="${AGENT_DISPATCH_GATE_FILE:-.worker-dispatch-gate.json}"
 
 START_TIME=$(date +%s)
 LAST_DONE_BYTES=0
@@ -57,6 +61,10 @@ track_task "$EXPECTED_TASK_ID"
 echo "[SENTINEL] Watching background worker (Timeout: ${MAX_WAIT_SECONDS}s, Interval: ${POLL_INTERVAL}s${EXPECTED_TASK_ID:+, Task: ${EXPECTED_TASK_ID}})..."
 
 while true; do
+  python3 "$SCRIPT_DIR/scripts/worker_runtime.py" agent-events-watch \
+    --events "$AGENT_EVENTS_FILE" --cursor "$AGENT_EVENTS_CURSOR_FILE" \
+    --acknowledgements "$AGENT_EVENTS_ACK_FILE" --gate "$AGENT_DISPATCH_GATE_FILE" \
+    --handoff "$PROGRESS_FILE" >/dev/null || echo "[SENTINEL_WARNING] Agent event watcher failed; dispatch remains gated." >&2
   NOW=$(date +%s)
   ELAPSED=$(( NOW - START_TIME ))
 

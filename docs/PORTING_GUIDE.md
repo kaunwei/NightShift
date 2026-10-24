@@ -42,7 +42,18 @@ python3 scripts/worker_runtime.py score-record --state .worker-agent-scores --ag
 
 Add `--mid-batch` when a score change occurs before the next batch boundary; the durable event records cause, task, registration, previous/current score, and previous/current task level. Normal feedback records a batch-boundary cause. Ghost execution does not initialize or update its own score. Existing `.worker-score.json` remains intact for inspection; NightShift does not guess which registration owns its historical shared score. New score files live under `.worker-agent-scores/`.
 
-The runtime currently implements configuration discovery, asynchronous `start`, and local `status` for arbitrary adapter names. Cancellation and closeout are wired into the subsequent lifecycle migration tickets. Until those tickets are complete, configure migrated built-in providers on their existing paths.
+## Planner handoff for capability changes
+
+Every registration score change creates a durable event and raises `.worker-dispatch-gate.json`. `watch_worker.sh` runs the event watcher and appends one `[PLANNER_REVIEW_REQUIRED]` handoff to `progress.log` for each event, including after a watcher restart. The sentinel does not invoke Planner or rewrite queued work. New task dispatch stays paused until the Planner has reviewed the affected work and an operator records a resolution:
+
+```sh
+python3 scripts/worker_runtime.py agent-event-ack --events .worker-agent-events.jsonl \
+  --acknowledgements .worker-agent-events.acks.jsonl --event-id EVENT_ID --resolution revised
+```
+
+Use `acknowledged` when the queued work remains valid, or `revised` after updating it. The next watcher pass clears the gate when every event is resolved; already-running work may finish. `AGENT_DISPATCH_GATE_FILE`, `WORKER_AGENT_EVENTS_FILE`, `WORKER_AGENT_EVENTS_CURSOR_FILE`, and `WORKER_AGENT_EVENTS_ACK_FILE` can override the default artifact paths.
+
+The runtime implements configuration discovery, asynchronous `start`, local `status`, cancellation, and private closeout for arbitrary adapter names. Configure migrated built-in providers through the adapter registry when using this lifecycle.
 
 NightShift can be deployed into an existing repository with `install.sh`. The script requires the target directory to exist and refuses to install into the NightShift source repository itself.
 
