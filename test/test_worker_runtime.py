@@ -73,6 +73,81 @@ class AgentConfigContractTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("Queue is empty", result.stdout)
 
+
+class AdapterDeadlineContractTests(unittest.TestCase):
+    def run_adapter(self, status_body, cancel_response, callback_timeout="0.1", execution_timeout="2"):
+        directory = tempfile.TemporaryDirectory()
+        root = Path(directory.name)
+        adapter = root / "adapter.py"
+        adapter.write_text(
+            "import json, pathlib, subprocess, sys, time\nrequest=json.load(sys.stdin); op=sys.argv[1]\n"
+            "if op == 'get_config': response={'protocol_version':1,'initial_score':5,'limits':{'poll_interval_seconds':0.01}}\n"
+            "elif op == 'start':\n"
+            " p=pathlib.Path(request['output_dir']); p.mkdir(parents=True,exist_ok=True)\n"
+            " (p/'status.json').write_text(json.dumps({'status':'running'}))\n"
+            " response={'execution_id':'exec-deadline','status_location':str(p/'status.json')}\n"
+            f"elif op == 'status':\n{status_body}\n"
+            f"elif op == 'cancel': response={cancel_response}\n"
+            "else: response={'error':{'code':'unsupported','message':op}}\n"
+            "print(json.dumps(response))\n"
+        )
+        result = runtime("adapter-exec", "--command", sys.executable,
+                         "--adapter-arg", adapter, "--request", root / "request.json",
+                         "--callback-timeout", callback_timeout,
+                         "--execution-timeout", execution_timeout)
+        return directory, result
+
+    def test_blocked_status_callback_is_bounded_and_cancel_is_confirmed(self):
+        directory, result = self.run_adapter(
+            " time.sleep(5); response={'status':'running'}", "{'stopped':True}")
+        try:
+            self.assertEqual(result.returncode, 0, result.stderr)
+            status = json.loads(result.stdout)
+            self.assertEqual(status["status"], "callback_timeout")
+            self.assertTrue(status["stopped"])
+        finally:
+            directory.cleanup()
+
+    def test_responsive_running_status_does_not_bypass_execution_deadline(self):
+        directory, result = self.run_adapter(
+            " response={'status':'running'}", "{'stopped':True}", execution_timeout="0.08")
+        try:
+            self.assertEqual(result.returncode, 0, result.stderr)
+            status = json.loads(result.stdout)
+            self.assertEqual(status["status"], "execution_timeout")
+            self.assertTrue(status["stopped"])
+        finally:
+            directory.cleanup()
+
+    def test_cancel_acknowledgement_without_termination_is_not_stopped(self):
+        directory, result = self.run_adapter(
+            " time.sleep(5); response={'status':'running'}", "{'accepted':True,'stopped':False}")
+        try:
+            self.assertEqual(result.returncode, 0, result.stderr)
+            status = json.loads(result.stdout)
+            self.assertEqual(status["status"], "cancellation_failed")
+            self.assertFalse(status["stopped"])
+        finally:
+            directory.cleanup()
+
+    def test_timeout_terminates_children_left_by_a_callback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            pid_file = Path(directory) / "child.pid"
+            status_body = (
+                " child=subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(20)'])\n"
+                f" pathlib.Path({str(pid_file)!r}).write_text(str(child.pid))\n"
+                " time.sleep(5); response={'status':'running'}"
+            )
+            directory_handle, result = self.run_adapter(
+                status_body, "{'stopped':True}", callback_timeout="0.15")
+            try:
+                self.assertEqual(result.returncode, 0, result.stderr)
+                child_pid = int(pid_file.read_text())
+                with self.assertRaises(ProcessLookupError):
+                    os.kill(child_pid, 0)
+            finally:
+                directory_handle.cleanup()
+
     def test_fake_adapter_completes_through_versioned_callbacks(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

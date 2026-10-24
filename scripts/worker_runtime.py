@@ -311,10 +311,39 @@ ADAPTER_TERMINAL_STATUSES = {"complete", "closeout_required", "quota_exhausted",
 
 def adapter_callback(command, callback, request, extra_args=(), timeout=30):
     """Invoke one versioned JSON callback; stdout is protocol data, stderr is diagnostics."""
-    completed = subprocess.run(
-        [command, *extra_args, callback], input=json.dumps(request), text=True,
-        capture_output=True, timeout=timeout, check=False,
+    process = subprocess.Popen(
+        [command, *extra_args, callback], stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        start_new_session=(os.name == "posix"),
     )
+    try:
+        stdout, stderr = process.communicate(json.dumps(request), timeout=timeout)
+    except subprocess.TimeoutExpired:
+        if os.name == "posix":
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except subprocess.TimeoutExpired:
+                pass
+            except ProcessLookupError:
+                pass
+            try:
+                process.wait(timeout=0.25)
+            except subprocess.TimeoutExpired:
+                pass
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        else:
+            process.kill()
+        try:
+            process.communicate(timeout=1)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.communicate()
+        raise
+    completed = subprocess.CompletedProcess(process.args, process.returncode,
+                                            stdout=stdout, stderr=stderr)
     if completed.returncode:
         raise RuntimeError(f"adapter {callback} failed ({completed.returncode}): {completed.stderr.strip()}")
     try:
@@ -329,17 +358,22 @@ def adapter_callback(command, callback, request, extra_args=(), timeout=30):
     return response
 
 
-def execute_adapter_protocol(command, request, extra_args=(), trace=None):
+def execute_adapter_protocol(command, request, extra_args=(), trace=None,
+                             callback_timeout=30, execution_timeout=1800):
     """Run one external adapter execution through config, asynchronous start and status."""
     base = {"protocol_version": ADAPTER_PROTOCOL_VERSION, **request}
     if trace:
         base["trace"] = str(trace)
-    configuration = adapter_callback(command, "get_config", {
-        "protocol_version": ADAPTER_PROTOCOL_VERSION,
-        "registration_id": base.get("registration_id", "default"),
-        "overrides": base.get("overrides", {}),
-        **({"trace": str(trace)} if trace else {}),
-    }, extra_args)
+    try:
+        configuration = adapter_callback(command, "get_config", {
+            "protocol_version": ADAPTER_PROTOCOL_VERSION,
+            "registration_id": base.get("registration_id", "default"),
+            "overrides": base.get("overrides", {}),
+            **({"trace": str(trace)} if trace else {}),
+        }, extra_args, timeout=callback_timeout)
+    except subprocess.TimeoutExpired:
+        return {"status": "callback_timeout", "stopped": True,
+                "diagnostic": "get_config callback process exceeded its response deadline"}
     version = configuration.get("protocol_version")
     if version != ADAPTER_PROTOCOL_VERSION:
         raise ValueError(f"adapter protocol version {version!r} is incompatible; expected {ADAPTER_PROTOCOL_VERSION}")
@@ -349,18 +383,50 @@ def execute_adapter_protocol(command, request, extra_args=(), trace=None):
         raise ValueError("adapter get_config limits must be an object")
     if not isinstance(configuration.get("configuration", {}), dict):
         raise ValueError("adapter get_config configuration must be an object")
+    callback_timeout = configuration.get("limits", {}).get(
+        "callback_timeout_seconds", callback_timeout)
+    if not isinstance(callback_timeout, (int, float)) or callback_timeout <= 0:
+        raise ValueError("adapter callback_timeout_seconds must be positive")
     base["configuration"] = configuration.get("configuration", {})
     base["limits"] = configuration.get("limits", {})
-    execution = adapter_callback(command, "start", base, extra_args)
+    try:
+        execution = adapter_callback(command, "start", base, extra_args, timeout=callback_timeout)
+    except subprocess.TimeoutExpired:
+        return {"status": "cancellation_failed", "stopped": False,
+                "diagnostic": "start callback timed out before returning an execution handle"}
     execution_id, status_location = execution.get("execution_id"), execution.get("status_location")
     if not isinstance(execution_id, str) or not execution_id or not isinstance(status_location, str) or not status_location:
         raise ValueError("adapter start response requires execution_id and status_location")
+    started = time.monotonic()
+
+    def cancel(reason):
+        try:
+            response = adapter_callback(command, "cancel", {
+                "protocol_version": ADAPTER_PROTOCOL_VERSION,
+                "execution_id": execution_id, "reason": reason,
+                "stop_timeout_seconds": callback_timeout,
+                **({"trace": str(trace)} if trace else {}),
+            }, extra_args, timeout=callback_timeout)
+            stopped = response.get("stopped") is True
+            return {"status": reason if stopped else "cancellation_failed",
+                    "execution_id": execution_id, "stopped": stopped,
+                    **({} if stopped else {"diagnostic": "adapter did not confirm termination"})}
+        except (OSError, RuntimeError, subprocess.TimeoutExpired, ValueError) as error:
+            return {"status": "cancellation_failed", "execution_id": execution_id,
+                    "stopped": False, "diagnostic": str(error)}
+
     while True:
-        status = adapter_callback(command, "status", {
-            "protocol_version": ADAPTER_PROTOCOL_VERSION,
-            "execution_id": execution_id, "status_location": status_location,
-            **({"trace": str(trace)} if trace else {}),
-        }, extra_args)
+        elapsed = time.monotonic() - started
+        if elapsed >= execution_timeout:
+            return cancel("execution_timeout")
+        try:
+            status = adapter_callback(command, "status", {
+                "protocol_version": ADAPTER_PROTOCOL_VERSION,
+                "execution_id": execution_id, "status_location": status_location,
+                **({"trace": str(trace)} if trace else {}),
+            }, extra_args, timeout=callback_timeout)
+        except subprocess.TimeoutExpired:
+            return cancel("callback_timeout")
         current = status.get("status")
         if current in ADAPTER_TERMINAL_STATUSES:
             if current == "complete" and not status.get("result_location"):
@@ -373,7 +439,7 @@ def execute_adapter_protocol(command, request, extra_args=(), trace=None):
             interval = max(0.01, float(interval))
         except (TypeError, ValueError) as error:
             raise ValueError("adapter poll_interval_seconds must be a positive number") from error
-        time.sleep(interval)
+        time.sleep(min(interval, max(0, execution_timeout - (time.monotonic() - started))))
 
 
 def quota_error(text):
@@ -823,7 +889,9 @@ def execute_adapter_task(args):
                    "action_limit": args.step_budget},
     }
     status = execute_adapter_protocol(args.executable, request,
-                                      getattr(args, "extra_args", ()))
+                                      getattr(args, "extra_args", ()),
+                                      callback_timeout=getattr(args, "callback_timeout", 30),
+                                      execution_timeout=getattr(args, "execution_timeout", args.timeout))
     if status.get("result_location"):
         result_path = Path(status["result_location"])
         if not result_path.is_file():
@@ -1251,7 +1319,7 @@ def worker_daemon(root):
                         )
                     else:
                         exit_code = execute_task_cli(cli_args)
-                except (OSError, ValueError, subprocess.CalledProcessError) as error:
+                except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as error:
                     print(f"[WORKER] CLI execution failed: {error}", file=sys.stderr)
                     exit_code = 2
                     quota_exhausted = False
@@ -1921,6 +1989,8 @@ def main(argv=None):
     adapter_exec.add_argument("--adapter-arg", action="append", default=[])
     adapter_exec.add_argument("--request", required=True)
     adapter_exec.add_argument("--trace", default="")
+    adapter_exec.add_argument("--callback-timeout", type=float, default=30)
+    adapter_exec.add_argument("--execution-timeout", type=float, default=1800)
     timeout = commands.add_parser("run-timeout")
     timeout.add_argument("seconds", type=float)
     timeout.add_argument("argv", nargs=argparse.REMAINDER)
@@ -1999,7 +2069,9 @@ def main(argv=None):
             "registration_id": "contract-test", "overrides": {},
             "output_dir": str(request_path.parent / "adapter-output"),
         }
-        status = execute_adapter_protocol(args.adapter_command, request, args.adapter_arg, args.trace)
+        status = execute_adapter_protocol(args.adapter_command, request, args.adapter_arg, args.trace,
+                                          callback_timeout=args.callback_timeout,
+                                          execution_timeout=args.execution_timeout)
         print(json.dumps(status, ensure_ascii=False))
     elif args.command == "run-timeout":
         command = args.argv[1:] if args.argv[:1] == ["--"] else args.argv
@@ -2039,6 +2111,6 @@ def main(argv=None):
 if __name__ == "__main__":
     try:
         sys.exit(main())
-    except (OSError, TimeoutError, ValueError, json.JSONDecodeError, subprocess.CalledProcessError) as error:
+    except (OSError, TimeoutError, ValueError, RuntimeError, json.JSONDecodeError, subprocess.CalledProcessError) as error:
         print(f"worker_runtime: {error}", file=sys.stderr)
         sys.exit(2)
