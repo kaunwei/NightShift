@@ -1209,6 +1209,7 @@ def run_adapter_ghost(args, main_request, main_status, main_result):
     before = workspace_snapshot(args.work_dir, args.base)
     request = {
         **main_request,
+        "kind": "closeout",
         "execution_id": main_status["execution_id"],
         "prompt_path": str(prompt_path.resolve()),
         "output_dir": str(ghost_dir.resolve()),

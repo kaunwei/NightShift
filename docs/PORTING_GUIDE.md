@@ -55,6 +55,19 @@ Use `acknowledged` when the queued work remains valid, or `revised` after updati
 
 The runtime implements configuration discovery, asynchronous `start`, local `status`, cancellation, and private closeout for arbitrary adapter names. Configure migrated built-in providers through the adapter registry when using this lifecycle.
 
+## Migrating a generic executable wrapper
+
+Set the profile adapter to `generic` and the command to Python with the shipped compatibility adapter as its argument. Pass the previous wrapper executable and fixed arguments through overrides:
+
+```json
+[{"id":"custom","adapter":"generic","command":"python3",
+  "args":["scripts/adapters/generic.py"],
+  "overrides":{"executable":"./my-worker","args":["--quiet"],
+    "model":"model-name","effort":"high","env":{"MY_SETTING":"value"}}}]
+```
+
+The wrapper receives `NIGHTSHIFT_PROMPT_FILE`, `NIGHTSHIFT_RESULT_FILE`, `NIGHTSHIFT_TASK_ID`, `NIGHTSHIFT_EXECUTION_KIND` (`main` or `closeout`), `NIGHTSHIFT_MODEL`, `NIGHTSHIFT_EFFORT`, `NIGHTSHIFT_ACTION_LIMIT`, `NIGHTSHIFT_EXECUTION_TIMEOUT`, `PORT`, and `TEST_PORT`. It must write one JSON object to the result path with a supported `outcome`; successful outcomes also require the standard evidence, change, and `commit_message` fields. The wrapper owns enforcement of action limits and duration using the supplied values. Text-only legacy wrappers fail with an actionable structured-result diagnostic; migrate them to write protocol JSON before switching registrations.
+
 NightShift can be deployed into an existing repository with `install.sh`. The script requires the target directory to exist and refuses to install into the NightShift source repository itself.
 
 ```sh

@@ -267,6 +267,42 @@ class BuiltinAdapterContractTests(unittest.TestCase):
             self.assertEqual(result["status"],"complete")
             self.assertEqual(json.loads(Path(result["result_location"]).read_text())["outcome"],"complete")
 
+    def test_generic_compatibility_adapter_passes_paths_environment_and_structured_result(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory); wrapper=root/"legacy-wrapper.py"; marker=root/"marker.json"
+            wrapper.write_text(
+                "import json,os,pathlib,sys\n"
+                "prompt=pathlib.Path(os.environ['NIGHTSHIFT_PROMPT_FILE']).read_text()\n"
+                "json.dump({'prompt':prompt,'model':os.environ['NIGHTSHIFT_MODEL'],"
+                "'effort':os.environ['NIGHTSHIFT_EFFORT'],'kind':os.environ['NIGHTSHIFT_EXECUTION_KIND']},"
+                "open("+repr(str(marker))+",'w'))\n"
+                "json.dump({'outcome':'complete','changed':False,'no_change_reason':'fixture',"
+                "'commit_message':'docs: no changes'},open(os.environ['NIGHTSHIFT_RESULT_FILE'],'w'))\n")
+            adapter=ROOT/"scripts/adapters/generic.py"
+            request={"protocol_version":1,"registration_id":"custom","overrides":{
+                "executable":sys.executable,"args":[str(wrapper)],"model":"model-x","effort":"high"},
+                "task_id":"TASK-GENERIC","working_directory":str(root),
+                "prompt_path":str(root/"prompt.txt"),"output_dir":str(root/"run"),
+                "result_path":str(root/"result.json"),"limits":{"action_limit":2}}
+            (root/"prompt.txt").write_text("common prompt")
+            def callback(name,payload):
+                return subprocess.run([sys.executable,str(adapter),name],input=json.dumps(payload),
+                    text=True,capture_output=True,timeout=10)
+            config=json.loads(callback("get_config",{"protocol_version":1,"registration_id":"custom",
+                "overrides":request["overrides"]}).stdout)
+            self.assertEqual(config["initial_score"],3)
+            started=callback("start",{**request,"configuration":config["configuration"]})
+            self.assertEqual(started.returncode,0,started.stderr)
+            handle=json.loads(started.stdout); deadline=time.monotonic()+5
+            while time.monotonic()<deadline:
+                checked=callback("status",{"protocol_version":1,**handle})
+                result=json.loads(checked.stdout)
+                if result["status"]!="running": break
+                time.sleep(.02)
+            self.assertEqual(result["status"],"complete")
+            self.assertEqual(json.loads(marker.read_text()),{"prompt":"common prompt","model":"model-x",
+                "effort":"high","kind":"main"})
+
 
 class AdapterDeadlineContractTests(unittest.TestCase):
     def run_adapter(self, status_body, cancel_response, callback_timeout="0.1", execution_timeout="2"):
