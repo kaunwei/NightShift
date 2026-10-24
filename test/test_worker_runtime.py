@@ -234,6 +234,39 @@ class BuiltinAdapterContractTests(unittest.TestCase):
             self.assertEqual(json.loads(Path(result["result_location"]).read_text())["commit_message"],
                              "docs: no changes")
 
+    def test_agy_adapter_probes_fake_cli_and_extracts_structured_result(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory); executable=root/"fake-agy"
+            executable.write_text(
+                "#!/usr/bin/env python3\nimport json,sys\n"
+                "if '--help' in sys.argv: print('--max-steps'); raise SystemExit(0)\n"
+                "print(json.dumps({'outcome':'complete','changed':False,"
+                "'no_change_reason':'fixture','commit_message':'docs: no changes'}))\n")
+            executable.chmod(0o755)
+            adapter=ROOT/"scripts/adapters/agy.py"
+            request={"protocol_version":1,"registration_id":"agy-test","overrides":{
+                "executable":str(executable)},"task_id":"TASK-AGY",
+                "working_directory":str(root),"prompt_path":str(root/"prompt.txt"),
+                "output_dir":str(root/"run"),"result_path":str(root/"result.json"),
+                "limits":{"action_limit":3}}
+            (root/"prompt.txt").write_text("implement nothing")
+            def callback(name,payload):
+                return subprocess.run([sys.executable,str(adapter),name],input=json.dumps(payload),
+                    text=True,capture_output=True,timeout=10)
+            configuration=json.loads(callback("get_config",{"protocol_version":1,
+                "registration_id":"agy-test","overrides":{"executable":str(executable)}}).stdout)
+            self.assertEqual(configuration["initial_score"],5)
+            started=callback("start",{**request,"configuration":configuration["configuration"]})
+            self.assertEqual(started.returncode,0,started.stderr)
+            handle=json.loads(started.stdout); deadline=time.monotonic()+5
+            while time.monotonic()<deadline:
+                checked=callback("status",{"protocol_version":1,**handle})
+                result=json.loads(checked.stdout)
+                if result["status"]!="running": break
+                time.sleep(.02)
+            self.assertEqual(result["status"],"complete")
+            self.assertEqual(json.loads(Path(result["result_location"]).read_text())["outcome"],"complete")
+
 
 class AdapterDeadlineContractTests(unittest.TestCase):
     def run_adapter(self, status_body, cancel_response, callback_timeout="0.1", execution_timeout="2"):
