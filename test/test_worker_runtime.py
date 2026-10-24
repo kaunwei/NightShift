@@ -1122,6 +1122,75 @@ class ReportArchiveContractTests(unittest.TestCase):
 
 
 class RollbackContractTests(unittest.TestCase):
+    def test_attempt_recovery_restores_head_index_dirty_and_untracked_baseline(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "repo"
+            root.mkdir()
+            def git(*args):
+                return subprocess.run(["git", "-C", str(root), *args], check=True,
+                                      capture_output=True, text=True).stdout.strip()
+            git("init", "-q")
+            git("config", "user.name", "Recovery Test")
+            git("config", "user.email", "recovery@example.invalid")
+            (root / "tracked.txt").write_text("committed\n")
+            git("add", "tracked.txt")
+            git("commit", "-qm", "baseline")
+            baseline_head = git("rev-parse", "HEAD")
+            (root / "tracked.txt").write_text("staged baseline\n")
+            git("add", "tracked.txt")
+            (root / "tracked.txt").write_text("unstaged baseline\n")
+            (root / "preexisting.txt").write_text("preexisting untracked\n")
+            snapshot = Path(directory) / "snapshot"
+            archived = Path(directory) / "archived"
+            captured = runtime("attempt-snapshot", "--work-dir", root, "--task-id", "TASK-R",
+                               "--attempt-id", "attempt-A", "--snapshot", snapshot)
+            self.assertEqual(captured.returncode, 0, captured.stderr)
+            (root / "tracked.txt").write_text("failed attempt\n")
+            (root / "attempt-commit.txt").write_text("committed by failed attempt\n")
+            git("add", "tracked.txt", "attempt-commit.txt")
+            git("commit", "-qm", "failed attempt commit")
+            (root / "attempt-untracked.txt").write_text("failed attempt untracked\n")
+
+            recovered = runtime("attempt-recover", "--work-dir", root, "--snapshot", snapshot,
+                                "--archive", archived)
+
+            self.assertEqual(recovered.returncode, 0, recovered.stderr)
+            self.assertEqual(git("rev-parse", "HEAD"), baseline_head)
+            self.assertEqual(git("show", ":tracked.txt"), "staged baseline")
+            self.assertEqual((root / "tracked.txt").read_text(), "unstaged baseline\n")
+            self.assertEqual((root / "preexisting.txt").read_text(), "preexisting untracked\n")
+            self.assertFalse((root / "attempt-commit.txt").exists())
+            self.assertFalse((root / "attempt-untracked.txt").exists())
+            self.assertTrue((archived / "changes.diff").is_file())
+            self.assertIn("failed attempt commit", (archived / "commits.txt").read_text())
+            self.assertEqual((archived / "failed-files/attempt-commit.txt").read_text(),
+                             "committed by failed attempt\n")
+
+    def test_invalid_attempt_baseline_stops_recovery_without_resetting_workspace(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "repo"
+            root.mkdir()
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            subprocess.run(["git", "-C", str(root), "config", "user.name", "Recovery Test"], check=True)
+            subprocess.run(["git", "-C", str(root), "config", "user.email", "recovery@example.invalid"], check=True)
+            (root / "tracked.txt").write_text("baseline\n")
+            subprocess.run(["git", "-C", str(root), "add", "tracked.txt"], check=True)
+            subprocess.run(["git", "-C", str(root), "commit", "-qm", "baseline"], check=True)
+            snapshot = Path(directory) / "snapshot"
+            self.assertEqual(runtime("attempt-snapshot", "--work-dir", root, "--task-id", "TASK-R",
+                                     "--attempt-id", "attempt-A", "--snapshot", snapshot).returncode, 0)
+            metadata_path = snapshot / "snapshot.json"
+            metadata = json.loads(metadata_path.read_text())
+            metadata["head"] = "not-a-commit"
+            metadata_path.write_text(json.dumps(metadata))
+            (root / "tracked.txt").write_text("do not destroy\n")
+
+            recovered = runtime("attempt-recover", "--work-dir", root, "--snapshot", snapshot,
+                                "--archive", Path(directory) / "archive")
+
+            self.assertNotEqual(recovered.returncode, 0)
+            self.assertEqual((root / "tracked.txt").read_text(), "do not destroy\n")
+
     def test_failed_workspace_changes_are_saved_and_runtime_files_survive_restore(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -1154,6 +1223,53 @@ class RollbackContractTests(unittest.TestCase):
 
 
 class WorkerIntegrationTests(unittest.TestCase):
+    def test_worker_halts_before_backup_agent_when_baseline_restore_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "repo"
+            root.mkdir()
+            for name in ("worker.sh", ".gitignore"):
+                shutil.copy2(ROOT / name, root / name)
+            (root / "scripts").mkdir()
+            shutil.copy2(RUNTIME, root / "scripts/worker_runtime.py")
+            profiles = [
+                {"id": "first", "provider": "codex", "command": "codex", "model": "first-model"},
+                {"id": "second", "provider": "codex", "command": "codex", "model": "second-model"},
+            ]
+            (root / ".worker.env").write_text(
+                "AI_CLI=codex\nWORKER_ISOLATION=0\nRUN_ONCE=1\nPOLL_INTERVAL=0\n"
+                "AI_AGENTS_JSON='" + json.dumps(profiles) + "'\n"
+            )
+            task = "TASK-RECOVER | LEVEL: 1 | TARGET: output.txt | ACTION: write | VERIFY: true\n"
+            (root / "tasks.txt").write_text(task)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            subprocess.run(["git", "-C", str(root), "config", "user.name", "Worker Test"], check=True)
+            subprocess.run(["git", "-C", str(root), "config", "user.email", "worker@example.invalid"], check=True)
+            subprocess.run(["git", "-C", str(root), "add", "worker.sh", "scripts/worker_runtime.py", ".gitignore", "tasks.txt"], check=True)
+            subprocess.run(["git", "-C", str(root), "commit", "-qm", "fixture"], check=True)
+            bin_dir = Path(directory) / "bin"
+            bin_dir.mkdir()
+            fake = bin_dir / "codex"
+            fake.write_text(
+                "#!/bin/sh\nmodel=\nwhile [ \"$#\" -gt 0 ]; do\n"
+                " if [ \"$1\" = --model ]; then shift; model=$1; fi\n"
+                " if [ \"$1\" = --output-last-message ]; then shift; result=$1; fi\n"
+                " shift\ndone\n"
+                "printf '%s\\n' \"$model\" >> \"$AGENT_CALLS\"\n"
+                "if [ \"$model\" = first-model ]; then touch .git/index.lock; echo 'insufficient_quota'; exit 1; fi\n"
+                "printf 'Attempts: 1 | Confidence: HIGH\\n' > \"$result\"\n"
+            )
+            fake.chmod(0o755)
+            calls = Path(directory) / "calls.log"
+            result = subprocess.run(["bash", str(root / "worker.sh")], cwd=root,
+                                    env={**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+                                         "AGENT_CALLS": str(calls)},
+                                    capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(calls.read_text().splitlines(), ["first-model"])
+            self.assertIn(task, (root / "tasks.txt").read_text())
+            self.assertEqual(json.loads((root / "worker.status").read_text())["state"],
+                             "RECOVERY_FAILED")
+
     def test_worker_rejects_zero_exit_when_final_response_says_blocked(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "repo"

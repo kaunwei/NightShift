@@ -474,6 +474,19 @@ def execute_registered_agents(args, agents, state_path, rollback):
         return 0, True
     for index, agent in enumerate(available):
         attempt = argparse.Namespace(**vars(args))
+        attempt.attempt_id = str(uuid.uuid4())
+        snapshot_root = Path(getattr(args, "attempt_snapshot_root", "") or
+                             (Path(args.work_dir) / ".scratch/attempts" / args.task_id))
+        attempt.attempt_baseline = str(snapshot_root / attempt.attempt_id / "baseline")
+        args.attempt_id = attempt.attempt_id
+        args.attempt_baseline = attempt.attempt_baseline
+        try:
+            capture_attempt_baseline(attempt.work_dir, args.task_id, attempt.attempt_id,
+                                     attempt.attempt_baseline)
+        except Exception:
+            args.recovery_failed = True
+            raise
+        args.recovery_failed = False
         attempt.provider = agent["provider"]
         attempt.executable = agent["command"]
         attempt.model = agent["model"]
@@ -501,7 +514,7 @@ def execute_registered_agents(args, agents, state_path, rollback):
         }
         atomic_write(state_path, json.dumps(state, ensure_ascii=False, indent=2) + "\n")
         print(f"[WORKER] Agent {agent['id']} quota exhausted; switching to the next registered agent.", file=sys.stderr)
-        rollback()
+        rollback(attempt.attempt_baseline, attempt.attempt_id)
         if index + 1 == len(available):
             print("[WORKER] QUOTA_EXHAUSTED: all registered agents are exhausted; task remains queued.")
             return 0, True
@@ -1057,7 +1070,9 @@ def execute_adapter_task(args):
                 "closeout_required": 126, "execution_timeout": 124,
                 "callback_timeout": 124, "cancellation_failed": 124}.get(
                     status["status"], 1)
-    output.write_text(json.dumps({"status": status["status"], "result": result}, ensure_ascii=False),
+    output.write_text(json.dumps({"status": status["status"],
+                                  "stopped": status.get("stopped"),
+                                  "result": result}, ensure_ascii=False),
                       encoding="utf-8")
     return code
 
@@ -1461,18 +1476,54 @@ def worker_daemon(root):
                     base=base, progress_file=str(progress_file),
                     ghost_state_path=str(ghost_state_path),
                     ghost_artifact_root=str(ghost_artifact_root),
+                    attempt_snapshot_root=str(root / ".scratch/attempts" /
+                                              re.sub(r"[^A-Za-z0-9_.-]", "_", task_id)),
+                    recovery_failed=False,
+                    recovery_halted=False,
                 )
+
+                def recover_current_attempt(snapshot=None, attempt_id=None):
+                    nonlocal final_state
+                    try:
+                        return rollback_failed_task(
+                            root, work_dir, task_id,
+                            (tasks_file, done_file, progress_file, agent_state_path,
+                             ghost_state_path, ghost_artifact_root, score_state_path),
+                            snapshot if snapshot is not None else cli_args.attempt_baseline,
+                            attempt_id or cli_args.attempt_id,
+                        )
+                    except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as error:
+                        cli_args.recovery_failed = True
+                        print(f"[WORKER] Attempt recovery failed; stopping before another execution: {error}",
+                              file=sys.stderr)
+                        restore_task_front(tasks_file, raw_task)
+                        append_line(progress_file,
+                                    f"[RECOVERY_HALTED] {task_id}: baseline could not be restored; task requeued.")
+                        final_state = "RECOVERY_FAILED"
+                        update_status(final_state, f"{task_id} (baseline restore failed)",
+                                      int(time.time() - started), current, total, remaining,
+                                      percent, bar)
+                        cli_args.recovery_halted = True
+                        return None
+
+                def recover_before_switch(snapshot, attempt_id):
+                    if recover_current_attempt(snapshot, attempt_id) is None:
+                        raise RuntimeError("attempt recovery failed; replacement execution was not started")
                 quota_exhausted = False
                 try:
                     if agents:
                         exit_code, quota_exhausted = execute_registered_agents(
                             cli_args, agents, agent_state_path,
-                            lambda: rollback_failed_task(
-                                root, work_dir, task_id,
-                                (tasks_file, done_file, progress_file, agent_state_path),
-                            ),
+                            recover_before_switch,
                         )
                     else:
+                        cli_args.recovery_failed = True
+                        cli_args.attempt_id = str(uuid.uuid4())
+                        cli_args.attempt_baseline = str(Path(cli_args.attempt_snapshot_root) /
+                                                        cli_args.attempt_id / "baseline")
+                        capture_attempt_baseline(work_dir, task_id, cli_args.attempt_id,
+                                                 cli_args.attempt_baseline)
+                        cli_args.recovery_failed = False
                         exit_code = execute_task_cli(cli_args)
                 except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as error:
                     print(f"[WORKER] CLI execution failed: {error}", file=sys.stderr)
@@ -1487,19 +1538,25 @@ def worker_daemon(root):
                 result_text = result_output.read_text(encoding="utf-8", errors="replace") if result_output.exists() else ""
 
                 structured_outcome = ""
+                structured_execution_status = ""
                 try:
                     payload = json.loads(result_text)
                     if isinstance(payload, dict):
                         structured_outcome = payload.get("outcome", "")
+                        structured_execution_status = payload.get("status", "")
                 except json.JSONDecodeError:
                     pass
                 structured_status = {
                     "complete": "success", "no_change": "success",
                     "closeout_required": "closeout_required", "scope_blocked": "scope",
                     "guidance": "guidance", "blocked": "blocked", "failure": "error",
+                    "cancellation_failed": "cancel_failed",
                 }.get(structured_outcome, "")
+                if structured_execution_status == "cancellation_failed":
+                    structured_status = "cancel_failed"
 
                 outcome = ("quota_exhausted" if quota_exhausted else
+                           "cancel_failed" if structured_status == "cancel_failed" else
                            "timeout" if exit_code == 124 else
                            "step_budget" if exit_code == 125 else
                            "closeout_required" if exit_code == 126 and structured_outcome == "closeout_required" else
@@ -1529,12 +1586,20 @@ def worker_daemon(root):
                     waiting_for_quota = True
                     stop_requested.wait(poll_interval)
                     continue
+                elif outcome == "cancel_failed":
+                    restore_task_front(tasks_file, raw_task)
+                    final_state = "CANCEL_FAILED"
+                    update_status(final_state, f"{task_id} (execution may still be active)", duration,
+                                  current, total, remaining, percent, bar)
+                    append_line(progress_file,
+                                f"[RECOVERY_HALTED] {task_id}: execution stop was not confirmed; task requeued without restoring workspace.")
+                    break
                 elif outcome == "timeout":
                     print(f"[{stamp_now}] [TIMEOUT] Task exceeded {timeout}s limit!")
                     record_score_result(score_state_path, task_id, "hard_failure",
                                         f"timeout after {timeout}s")
-                    rollback_failed_task(root, work_dir, task_id,
-                                         (tasks_file, done_file, progress_file))
+                    if recover_current_attempt() is None:
+                        break
                     summary = ("=" * 80 + f"\n[BLOCKED] {task_id}: Timeout Exceeded ({timeout}s)\n"
                                f"Time: {stamp_now} | Status: TIMEOUT\nFailure Reason: Task execution timed out after {timeout} seconds.\n"
                                "Action Needed for Human: Task may be too complex. Split into smaller atomic tasks.\n" + "=" * 80)
@@ -1547,8 +1612,8 @@ def worker_daemon(root):
                               else "Restricted ghost closeout failed or attempted implementation")
                     print(f"[{stamp_now}] [HARD FAILURE] {task_id}: {reason}")
                     record_score_result(score_state_path, task_id, "hard_failure", reason)
-                    rollback_failed_task(root, work_dir, task_id,
-                                         (tasks_file, done_file, progress_file))
+                    if recover_current_attempt() is None:
+                        break
                     prepend_progress(progress_file,
                                      f"[HARD_FAILURE] {task_id}: {reason}; score now {read_score_state(score_state_path)['score']}/5\n"
                                      f"{'[NEED_DECOMPOSITION]' if outcome == 'step_budget' else '[PLANNER_REQUIRED]'} {task_id}: "
@@ -1558,7 +1623,8 @@ def worker_daemon(root):
                                   total, max(0, remaining - 1), percent, bar)
                 elif outcome == "scope":
                     print(f"[{stamp_now}] 🚧 [SCOPE BLOCKED] Worker honestly stopped at unannounced downstream boundaries.")
-                    rollback_failed_task(root, work_dir, task_id, (tasks_file, done_file, progress_file))
+                    if recover_current_attempt() is None:
+                        break
                     summary = ("=" * 80 + f"\n[SCOPE_BLOCKED] {task_id}: Downstream Scope Boundary Reached\n"
                                f"Time: {stamp_now} | Status: SCOPE_BLOCKED\nDetails: Compiler errors detected in files outside TARGET whitelist.\n"
                                "Worker honestly stopped without violating boundaries. (No credit deduction).\n"
@@ -1569,13 +1635,15 @@ def worker_daemon(root):
                                   max(0, remaining - 1), percent, bar)
                 elif outcome == "guidance":
                     print(f"[{stamp_now}] ✋ [AWAITING GUIDANCE] Worker honestly requested manager guidance.")
-                    rollback_failed_task(root, work_dir, task_id, (tasks_file, done_file, progress_file))
+                    if recover_current_attempt() is None:
+                        break
                     append_line(done_file, f"[{stamp_now}] [GUIDANCE_REQUESTED] {task}")
                     update_status("AWAITING_GUIDANCE", task, duration, current, total,
                                   max(0, remaining - 1), percent, bar)
                 elif outcome == "blocked":
                     print(f"[{stamp_now}] 🚧 [WORKER BLOCKED] Worker reported [BLOCKED]; rejecting task success.")
-                    rollback_failed_task(root, work_dir, task_id, (tasks_file, done_file, progress_file))
+                    if recover_current_attempt() is None:
+                        break
                     summary = ("=" * 80 + f"\n[BLOCKED] {task_id}: Worker Reported Blocked\n"
                                f"Time: {stamp_now} | Status: BLOCKED\n"
                                "Failure Reason: Worker final response contained [BLOCKED].\n"
@@ -1588,7 +1656,17 @@ def worker_daemon(root):
                                   max(0, remaining - 1), percent, bar)
                 elif outcome == "error":
                     print(f"[{stamp_now}] [ERROR] CLI exited with code {exit_code}")
-                    rollback_failed_task(root, work_dir, task_id, (tasks_file, done_file, progress_file))
+                    if cli_args.recovery_failed:
+                        if not cli_args.recovery_halted:
+                            restore_task_front(tasks_file, raw_task)
+                            append_line(progress_file,
+                                        f"[RECOVERY_HALTED] {task_id}: attempt baseline was not captured; task requeued.")
+                            final_state = "RECOVERY_FAILED"
+                            update_status(final_state, f"{task_id} (baseline missing)", duration,
+                                          current, total, remaining, percent, bar)
+                        break
+                    if recover_current_attempt() is None:
+                        break
                     summary = ("=" * 80 + f"\n[BLOCKED] {task_id}: Execution Failed (Exit Code: {exit_code})\n"
                                f"Time: {stamp_now} | Status: FAILED\nFailure Reason: Worker CLI returned non-zero exit status {exit_code}.\n"
                                "Action Needed for Human: Inspect .worker.log for error details.\n" + "=" * 80)
@@ -1615,8 +1693,8 @@ def worker_daemon(root):
                     if guard_status:
                         pending_planner = (task_id, "GUARD_VIOLATION")
                         print(f"[{stamp()}] 🛑 [GUARD REJECTION] Post-flight validation failed: {guard_error}")
-                        rollback_failed_task(root, work_dir, task_id,
-                                             (tasks_file, done_file, progress_file))
+                        if recover_current_attempt() is None:
+                            break
                         summary = (f"[MECHANICAL_AUDIT] Status: FAIL | Verify_Exit: {audit['verify_exit']} | Whitelist: {guard_status} | Tree: DIRTY\n"
                                    + "=" * 80 + f"\n[BLOCKED] {task_id}: Guard Validation Failed\n"
                                    f"Time: {stamp()} | Status: GUARD_VIOLATION\nFailure Reason: {guard_error}\n"
@@ -2032,7 +2110,171 @@ def archive_overlapping_reports(root, work_dir, base):
             print(f"[WORKER] 📦 Archiving stale report '{entry.name}' (referenced file modified in commit)...")
 
 
-def rollback_failed_task(root, work_dir, task_id, runtime_paths):
+def _git_path_state(path):
+    path = Path(path)
+    if path.is_symlink():
+        return {"kind": "symlink", "target": os.readlink(path),
+                "mode": path.lstat().st_mode & 0o777}
+    if path.is_file():
+        return {"kind": "file", "mode": path.stat().st_mode & 0o777}
+    return {"kind": "missing"}
+
+
+def _save_git_path_state(path, destination):
+    path, destination = Path(path), Path(destination)
+    state = _git_path_state(path)
+    if state["kind"] == "file":
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, destination)
+    return state
+
+
+def _restore_git_path_state(path, state, content_path=None):
+    path = Path(path)
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+    elif path.is_dir():
+        shutil.rmtree(path)
+    kind = state["kind"]
+    if kind == "file":
+        path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(content_path, path)
+        path.chmod(state["mode"])
+    elif kind == "symlink":
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.symlink_to(state["target"])
+
+
+def _git_names(work_dir, *arguments):
+    result = subprocess.run(["git", "-C", str(work_dir), *arguments],
+                            check=True, capture_output=True)
+    return [os.fsdecode(name) for name in result.stdout.split(b"\0") if name]
+
+
+def capture_attempt_baseline(work_dir, task_id, attempt_id, snapshot_path):
+    """Capture the exact Git/worktree state at the seam before an execution attempt."""
+    work_dir, snapshot_path = Path(work_dir).resolve(), Path(snapshot_path).resolve()
+    if snapshot_path.exists():
+        raise FileExistsError(f"attempt snapshot already exists: {snapshot_path}")
+    head = subprocess.run(["git", "-C", str(work_dir), "rev-parse", "HEAD"],
+                          check=True, capture_output=True, text=True).stdout.strip()
+    index_value = subprocess.run(["git", "-C", str(work_dir), "rev-parse", "--git-path", "index"],
+                                 check=True, capture_output=True, text=True).stdout.strip()
+    index_path = Path(index_value)
+    if not index_path.is_absolute():
+        index_path = work_dir / index_path
+    paths = sorted(set(_git_names(work_dir, "diff", "--name-only", "-z", "HEAD")
+                       + _git_names(work_dir, "ls-files", "--others", "-z")))
+    snapshot_path.mkdir(parents=True)
+    (snapshot_path / "files").mkdir()
+    entries = {}
+    for relative in paths:
+        source = work_dir / relative
+        artifact = snapshot_path / "files" / relative
+        entries[relative] = _save_git_path_state(source, artifact)
+    index_state = _save_git_path_state(index_path, snapshot_path / "index")
+    atomic_write(snapshot_path / "snapshot.json", json.dumps({
+        "version": 1, "task_id": task_id, "attempt_id": attempt_id,
+        "work_dir": str(work_dir), "head": head,
+        "index_path": str(index_path), "index": index_state,
+        "paths": entries,
+    }, ensure_ascii=False, indent=2) + "\n")
+    return snapshot_path
+
+
+def recover_attempt_baseline(work_dir, snapshot_path, archive_path, runtime_paths=()):
+    """Archive a failed attempt and restore the captured HEAD, index, and file state."""
+    work_dir, snapshot_path, archive_path = map(Path, (work_dir, snapshot_path, archive_path))
+    work_dir, snapshot_path, archive_path = work_dir.resolve(), snapshot_path.resolve(), archive_path.resolve()
+    metadata_path = snapshot_path / "snapshot.json"
+    if not metadata_path.is_file():
+        raise ValueError(f"attempt snapshot is missing metadata: {metadata_path}")
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    if metadata.get("version") != 1 or not isinstance(metadata.get("paths"), dict):
+        raise ValueError(f"invalid attempt snapshot: {metadata_path}")
+    baseline_head = metadata.get("head", "")
+    valid_head = subprocess.run(["git", "-C", str(work_dir), "cat-file", "-e", f"{baseline_head}^{{commit}}"],
+                                check=False, capture_output=True)
+    if valid_head.returncode:
+        raise ValueError(f"attempt baseline commit is unavailable: {baseline_head}")
+    if archive_path.exists():
+        raise FileExistsError(f"attempt archive already exists: {archive_path}")
+
+    current_paths = sorted(set(
+        _git_names(work_dir, "diff", "--name-only", "-z", baseline_head)
+        + _git_names(work_dir, "ls-files", "--others", "-z")))
+    archive_path.mkdir(parents=True)
+    (archive_path / "failed-files").mkdir()
+    diff = subprocess.run(["git", "-C", str(work_dir), "diff", "--binary", baseline_head],
+                          check=True, capture_output=True).stdout
+    (archive_path / "changes.diff").write_bytes(diff)
+    status = subprocess.run(["git", "-C", str(work_dir), "status", "--porcelain", "-z"],
+                            check=True, capture_output=True).stdout
+    (archive_path / "status.txt").write_bytes(status)
+    commits = subprocess.run(["git", "-C", str(work_dir), "log", "--format=%H %s",
+                              f"{baseline_head}..HEAD"], check=True,
+                             capture_output=True, text=True).stdout
+    atomic_write(archive_path / "commits.txt", commits)
+    failed_entries = {}
+    for relative in current_paths:
+        failed_entries[relative] = _save_git_path_state(
+            work_dir / relative, archive_path / "failed-files" / relative)
+
+    runtime_states = {}
+    for raw_path in runtime_paths:
+        candidate = Path(raw_path)
+        if not candidate.is_absolute():
+            candidate = work_dir / candidate
+        runtime_states[str(candidate.resolve())] = _save_git_path_state(candidate,
+                                                                         archive_path / "runtime" / candidate.name)
+    atomic_write(archive_path / "failed-files.json", json.dumps(failed_entries,
+                  ensure_ascii=False, indent=2) + "\n")
+
+    reset = subprocess.run(["git", "-C", str(work_dir), "reset", "--hard", baseline_head],
+                           check=False, capture_output=True)
+    if reset.returncode:
+        raise RuntimeError("could not reset failed attempt commits: " +
+                           reset.stderr.decode("utf-8", "replace"))
+    baseline_paths = set(metadata["paths"])
+    runtime_resolved = set(runtime_states)
+    for relative in _git_names(work_dir, "ls-files", "--others", "-z"):
+        path = work_dir / relative
+        if (relative in baseline_paths or relative.startswith((".scratch/", ".worker-ghosts/"))
+                or path.resolve().is_relative_to(snapshot_path)
+                or path.resolve().is_relative_to(archive_path)
+                or str(path.resolve()) in runtime_resolved):
+            continue
+        _restore_git_path_state(path, {"kind": "missing"})
+    for relative, state in metadata["paths"].items():
+        content = snapshot_path / "files" / relative
+        _restore_git_path_state(work_dir / relative, state, content)
+    index_state = metadata.get("index", {"kind": "missing"})
+    _restore_git_path_state(metadata["index_path"], index_state, snapshot_path / "index")
+    runtime_meta = {}
+    for raw_path, state in runtime_states.items():
+        candidate = Path(raw_path)
+        content = archive_path / "runtime" / candidate.name
+        _restore_git_path_state(candidate, state, content)
+        runtime_meta[raw_path] = state
+    atomic_write(archive_path / "recovery.json", json.dumps({
+        "task_id": metadata["task_id"], "attempt_id": metadata["attempt_id"],
+        "baseline_head": baseline_head, "recovered": True,
+        "runtime_paths": runtime_meta,
+    }, ensure_ascii=False, indent=2) + "\n")
+    return archive_path
+
+
+def rollback_failed_task(root, work_dir, task_id, runtime_paths, baseline_snapshot=None,
+                         attempt_id=""):
+    if baseline_snapshot:
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        base = Path(root) / ".scratch" / "failed_tasks" / f"{task_id}_{attempt_id or stamp}"
+        archive = base
+        suffix = 1
+        while archive.exists():
+            archive = Path(f"{base}_{suffix}")
+            suffix += 1
+        return recover_attempt_baseline(work_dir, baseline_snapshot, archive, runtime_paths)
     root, work_dir = Path(root).resolve(), Path(work_dir).resolve()
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     backup = root / ".scratch" / "failed_tasks" / f"{task_id}_{stamp}"
@@ -2159,6 +2401,15 @@ def main(argv=None):
     task_cli.add_argument("--base", default="")
     task_cli.add_argument("--progress-file", default="progress.log")
     task_cli.add_argument("--ghost-state-file", default="")
+    attempt_snapshot = commands.add_parser("attempt-snapshot")
+    attempt_snapshot.add_argument("--work-dir", required=True)
+    attempt_snapshot.add_argument("--task-id", required=True)
+    attempt_snapshot.add_argument("--attempt-id", required=True)
+    attempt_snapshot.add_argument("--snapshot", required=True)
+    attempt_recover = commands.add_parser("attempt-recover")
+    attempt_recover.add_argument("--work-dir", required=True)
+    attempt_recover.add_argument("--snapshot", required=True)
+    attempt_recover.add_argument("--archive", required=True)
     adapter_exec = commands.add_parser("adapter-exec")
     adapter_exec.add_argument("--command", dest="adapter_command", required=True)
     adapter_exec.add_argument("--adapter-arg", action="append", default=[])
@@ -2240,6 +2491,11 @@ def main(argv=None):
         if args.ghost_state_file:
             args.ghost_state_path = args.ghost_state_file
         return execute_task_cli(args)
+    elif args.command == "attempt-snapshot":
+        print(capture_attempt_baseline(args.work_dir, args.task_id, args.attempt_id,
+                                       args.snapshot))
+    elif args.command == "attempt-recover":
+        print(recover_attempt_baseline(args.work_dir, args.snapshot, args.archive))
     elif args.command == "adapter-exec":
         request_path = Path(args.request)
         request = json.loads(request_path.read_text(encoding="utf-8")) if request_path.exists() else {
