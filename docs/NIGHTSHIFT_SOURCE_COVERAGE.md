@@ -17,7 +17,7 @@ For every later simplification, compare the changed source hashes and each affec
 | [README.md](../README.md) | 2184cdf0f0eb91b8c004b73f3b7df821a91312dd9f49c3bd32f2207a9fb3cb93 |
 | [scripts/adapters/agents.json](../scripts/adapters/agents.json) | 71efea4a203a9eb9a6678a83cb2e5db4409fd74ece9e5da4bb8e9e2d34129959 |
 | [install.sh](../install.sh) | be34d79ad7d2511c8c5d93033dbb630e976d5c84a8d2bbe92f78ecf343932950 |
-| [scripts/adapters/agy.py](../scripts/adapters/agy.py) | 4e48a4f8afaf3f2b4d086a7c0dfaf0376edc8adb0087964f352a19d074ad52d0 |
+| [scripts/adapters/agy.py](../scripts/adapters/agy.py) | 0e6126f132b5e981b55f5bc6a8aa94f12a1516418322911350f0b41d15f9cfd9 |
 | [scripts/adapters/aider.py](../scripts/adapters/aider.py) | d9446c5eaa87452caa23edf31f592a81161f349a8e6bfb623b6a9f00db71cbc2 |
 | [scripts/adapters/aider_explore.py](../scripts/adapters/aider_explore.py) | 13ca9c1a7daef513a9c95549c2b8e48b591e6c401e428e6fea6230a51c491b39 |
 | [scripts/adapters/codex.py](../scripts/adapters/codex.py) | 1ca11f13f347d7c58dbc2f2a5429abb569273528411c04a3a7ab219bd78d1814 |

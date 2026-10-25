@@ -108,7 +108,7 @@ with open(log, "w", encoding="utf-8") as stream:
         process.stdin.close()
     except (BrokenPipeError, OSError):
         pass
-    actions, over_budget = 0, False
+    actions, over_budget, error_messages = 0, False, []
     for line in process.stdout:
         stream.write(line)
         stream.flush()
@@ -116,6 +116,11 @@ with open(log, "w", encoding="utf-8") as stream:
             event = json.loads(line)
             item = event.get("item", {})
             actions += event.get("type") == "item.completed" and item.get("type") == "command_execution"
+            if event.get("type") in ("error", "turn.failed"):
+                error = event.get("error")
+                message_text = event.get("message") or (error.get("message") if isinstance(error, dict) else error)
+                if isinstance(message_text, str):
+                    error_messages.append(message_text)
         except (ValueError, AttributeError):
             pass
         actions += any(token in line for token in ("[EXEC]", "Tool Call", "edit_file", "write_file", "run_command", "read_file"))
@@ -130,9 +135,14 @@ with open(log, "w", encoding="utf-8") as stream:
         over_budget = True
 if actions > int(limit):
     over_budget = True
-diagnostic = open(log, encoding="utf-8", errors="replace").read()
-quota = any(term in diagnostic.lower() for term in ("insufficient_quota", "rate limit", "resource_exhausted", "429", "out of credits"))
-timed_out = "print timeout after" in diagnostic.lower()
+full_log = open(log, encoding="utf-8", errors="replace").read()
+diagnostic = "\n".join(error_messages)
+# Tool output and quoted transcripts may contain quota-like strings. Only
+# AgY's own error events can establish a quota failure.
+quota = code != 0 and any(term in diagnostic.lower() for term in (
+    "insufficient_quota", "rate limit", "resource_exhausted",
+    "http 429", "status code 429", "out of credits"))
+timed_out = "print timeout after" in full_log.lower()
 outcome = "quota_exhausted" if quota else "execution_timeout" if timed_out else "step_budget_exceeded" if over_budget else "complete" if code == 0 else "failure"
 
 text = ""
@@ -152,7 +162,7 @@ if text:
         pass
 
 if payload is None:
-    for line in reversed(diagnostic.strip().splitlines()):
+    for line in reversed(full_log.strip().splitlines()):
         line = line.strip()
         if line.startswith("{") and line.endswith("}"):
             try:
@@ -164,7 +174,7 @@ if payload is None:
                 pass
 
 if payload is None:
-    matches = re.findall(r"```(?:json)?\s*(\{.*?\})\s*```", diagnostic, re.DOTALL)
+    matches = re.findall(r"```(?:json)?\s*(\{.*?\})\s*```", full_log, re.DOTALL)
     for m in reversed(matches):
         try:
             parsed = json.loads(m.strip())
@@ -176,7 +186,7 @@ if payload is None:
 
 if payload is None:
     try:
-        parsed = json.loads(diagnostic.strip().splitlines()[-1])
+        parsed = json.loads(full_log.strip().splitlines()[-1])
         if isinstance(parsed, dict):
             payload = parsed
     except (ValueError, IndexError):
@@ -187,7 +197,7 @@ if not isinstance(payload, dict):
                ("NEED_GUIDANCE", "guidance"), ("NEED_DECOMPOSITION", "guidance"),
                ("CLOSEOUT_INCOMPLETE", "blocked"), ("CLOSEOUT_REQUIRED", "closeout_required"),
                ("DEAD_END", "blocked"))
-    final_outcome = next((val for marker, val in markers if re.search(r"\[" + marker + r"\]", text or diagnostic)), "failure")
+    final_outcome = next((val for marker, val in markers if re.search(r"\[" + marker + r"\]", text or full_log)), "failure")
     payload = {"outcome": final_outcome, "diagnostic": text or diagnostic or "AgY returned no final result"}
     if final_outcome == "failure":
         payload["error_code"] = "invalid_result"
@@ -198,6 +208,7 @@ if not isinstance(payload.get("outcome"), str) or payload["outcome"] not in allo
                "diagnostic": "AgY final JSON requires a supported outcome"}
 
 payload["actions_used"] = actions
+payload["cli_exit_code"] = code
 if outcome != "complete":
     payload["outcome"] = outcome
     final_status = "failed" if outcome == "failure" else outcome

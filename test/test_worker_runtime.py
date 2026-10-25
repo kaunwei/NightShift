@@ -722,6 +722,57 @@ class BuiltinAdapterContractTests(unittest.TestCase):
             self.assertIn("--max-steps",argv); self.assertIn("23",argv)
             self.assertIn("--custom-flag",argv)
 
+    def test_agy_adapter_ignores_quota_words_and_status_codes_in_command_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fake = root / "fake-agy"
+            fake.write_text(
+                "#!/usr/bin/env python3\nimport json,sys\n"
+                "if '--help' in sys.argv: sys.exit(0)\n"
+                "print(json.dumps({'type':'item.completed','item':{'type':'command_execution',"
+                "'aggregated_output':'HTTP 429: insufficient_quota'}}), flush=True)\n"
+                "print('tool output line containing 429 and rate limit', flush=True)\n"
+                "sys.exit(1)\n")
+            fake.chmod(0o755)
+            (root / "prompt.txt").write_text("task")
+            request = {"protocol_version": 1, "overrides": {"command": str(fake)},
+                       "task_id": "TASK-AGY-QUOTED-ERROR", "working_directory": str(root),
+                       "prompt_path": str(root / "prompt.txt"), "output_dir": str(root / "run"),
+                       "result_path": str(root / "result.json"), "limits": {"action_limit": 3}}
+            (root / "request.json").write_text(json.dumps(request))
+            executed = runtime("adapter-exec", "--command", sys.executable,
+                               "--adapter-arg", ROOT / "scripts/adapters/agy.py",
+                               "--request", root / "request.json", "--execution-timeout", "2",
+                               "--callback-timeout", "0.5")
+            self.assertEqual(executed.returncode, 0, executed.stderr)
+            self.assertEqual(json.loads(executed.stdout)["status"], "failed")
+            self.assertEqual(json.loads((root / "result.json").read_text())["outcome"], "failure")
+
+    def test_agy_adapter_recognizes_quota_from_error_event(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fake = root / "fake-agy"
+            fake.write_text(
+                "#!/usr/bin/env python3\nimport json,sys\n"
+                "if '--help' in sys.argv: sys.exit(0)\n"
+                "print(json.dumps({'type':'turn.failed','error':"
+                "{'message':'insufficient_quota'}}), flush=True)\n"
+                "sys.exit(1)\n")
+            fake.chmod(0o755)
+            (root / "prompt.txt").write_text("task")
+            request = {"protocol_version": 1, "overrides": {"command": str(fake)},
+                       "task_id": "TASK-AGY-QUOTA", "working_directory": str(root),
+                       "prompt_path": str(root / "prompt.txt"), "output_dir": str(root / "run"),
+                       "result_path": str(root / "result.json"), "limits": {"action_limit": 3}}
+            (root / "request.json").write_text(json.dumps(request))
+            executed = runtime("adapter-exec", "--command", sys.executable,
+                               "--adapter-arg", ROOT / "scripts/adapters/agy.py",
+                               "--request", root / "request.json", "--execution-timeout", "2",
+                               "--callback-timeout", "0.5")
+            self.assertEqual(executed.returncode, 0, executed.stderr)
+            self.assertEqual(json.loads(executed.stdout)["status"], "quota_exhausted")
+            self.assertEqual(json.loads((root / "result.json").read_text())["outcome"], "quota_exhausted")
+
     def test_generic_compatibility_adapter_passes_paths_environment_and_structured_result(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory); wrapper=root/"legacy-wrapper.py"; marker=root/"marker.json"
