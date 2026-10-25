@@ -7,7 +7,9 @@ Each command receives explicit inputs so callers and tests exercise the same sea
 """
 
 import argparse
+from contextlib import contextmanager
 from datetime import datetime, timezone
+from functools import wraps
 import hashlib
 import json
 import math
@@ -30,6 +32,18 @@ FIELD_NAMES = (
     "LEVEL", "TARGET", "ACTION", "GOAL", "VERIFY",
     "FORBIDDEN_SHORTCUTS", "CONSTRAINTS", "DEPENDS_ON",
 )
+
+
+_workspace_state_lock = threading.RLock()
+
+
+def serialize_workspace_state(function):
+    """Keep heartbeat's atomic-write temporaries out of task snapshots."""
+    @wraps(function)
+    def serialized(*args, **kwargs):
+        with _workspace_state_lock:
+            return function(*args, **kwargs)
+    return serialized
 
 
 def atomic_write(path, content):
@@ -356,6 +370,7 @@ Progress log: {progress_file}
 """
 
 
+@serialize_workspace_state
 def workspace_snapshot(work_dir, base):
     changed = subprocess.run(["git", "-C", work_dir, "diff", "--name-only", "-z", base],
                              capture_output=True, check=False).stdout
@@ -918,6 +933,7 @@ def task_field(raw, key):
     return (rest[:end.start()] if end else rest).strip()
 
 
+@serialize_workspace_state
 def write_status(args):
     state = {
         "worker_id": args.worker_id,
@@ -998,7 +1014,68 @@ def run_with_timeout(seconds, command):
     return 128 + abs(return_code) if return_code < 0 else return_code
 
 
+@contextmanager
+def temporary_git_index(work_dir, tree="HEAD"):
+    """Use Git's tree machinery without staging or replacing the user's index."""
+    with tempfile.TemporaryDirectory(prefix="nightshift-index-") as directory:
+        environment = {**os.environ, "GIT_INDEX_FILE": str(Path(directory) / "index")}
+        def git(*argv):
+            return subprocess.run(["git", "-C", str(work_dir), *argv], env=environment,
+                                  check=True, capture_output=True).stdout
+        git("read-tree", tree)
+        yield git
+
+
+@serialize_workspace_state
+def worktree_tree(work_dir):
+    with temporary_git_index(work_dir) as git:
+        git("add", "-A", "--", ".")
+        return git("write-tree").decode().strip()
+
+
+def attempt_audit_trees(args):
+    snapshot = getattr(args, "baseline_snapshot", "") or getattr(args, "attempt_baseline", "")
+    if not snapshot:
+        return None
+    metadata = json.loads((Path(snapshot) / "snapshot.json").read_text(encoding="utf-8"))
+    if Path(metadata.get("work_dir", "")).resolve() != Path(args.work_dir).resolve():
+        raise ValueError("audit baseline belongs to another workspace")
+    if not metadata.get("audit_tree"):
+        raise ValueError("attempt baseline is missing its audit tree")
+    return metadata["audit_tree"], worktree_tree(args.work_dir)
+
+
+def changed_tree_paths(work_dir, before, after):
+    return _git_names(work_dir, "diff", "--name-only", "-z", before, after)
+
+
 def finalize_task_git(args):
+    trees = attempt_audit_trees(args)
+    if trees:
+        before, after = trees
+        changed = changed_tree_paths(args.work_dir, before, after)
+        targets = [item.strip().rstrip("/") for item in args.target.split(",") if item.strip()]
+        changed = [name for name in changed if any(name == target or name.startswith(target + "/")
+                                                  for target in targets)]
+        original = set(changed_tree_paths(args.work_dir, args.base, before))
+        snapshot = getattr(args, "baseline_snapshot", "") or getattr(args, "attempt_baseline", "")
+        metadata = json.loads((Path(snapshot) / "snapshot.json").read_text(encoding="utf-8"))
+        original.update(metadata.get("index_changes", []))
+        overlap = original.intersection(changed)
+        if overlap:
+            raise ValueError("Task overlaps pre-existing user changes; refusing to commit mixed work: "
+                             + ", ".join(sorted(overlap)))
+        if not changed:
+            return 0
+        with temporary_git_index(args.work_dir) as git:
+            git("add", "-A", "--", *changed)
+            if git("diff", "--cached", "--name-only", "-z"):
+                git("commit", "-m", args.commit_message, "-m",
+                    f"Task: {args.task_id}\nScope: {args.target}\nVerification: {args.verify}")
+        # Refresh only the task entries; unrelated staged/unstaged user work remains intact.
+        subprocess.run(["git", "-C", args.work_dir, "reset", "-q", "HEAD", "--", *changed],
+                       check=True, capture_output=True)
+        return 0
     targets = [item.strip() for item in args.target.split(",") if item.strip()]
     for target in targets:
         subprocess.run(["git", "-C", args.work_dir, "add", "-A", "--", target],
@@ -1030,11 +1107,16 @@ def finalize_structured_adapter_result(args, result):
         reason = result.get("no_change_reason")
         if not isinstance(reason, str) or not reason.strip():
             raise ValueError("no_change result requires a non-empty no_change_reason")
-        tracked = subprocess.run(["git", "-C", args.work_dir, "diff", "--name-only", args.base],
-                                 capture_output=True, text=True, check=False).stdout.splitlines()
-        untracked = subprocess.run(["git", "-C", args.work_dir, "ls-files", "--others",
-                                    "--exclude-standard"], capture_output=True, text=True,
-                                   check=False).stdout.splitlines()
+        trees = attempt_audit_trees(args)
+        if trees:
+            tracked = changed_tree_paths(args.work_dir, *trees)
+            untracked = []
+        else:
+            tracked = subprocess.run(["git", "-C", args.work_dir, "diff", "--name-only", args.base],
+                                     capture_output=True, text=True, check=False).stdout.splitlines()
+            untracked = subprocess.run(["git", "-C", args.work_dir, "ls-files", "--others",
+                                        "--exclude-standard"], capture_output=True, text=True,
+                                       check=False).stdout.splitlines()
         runtime_file = re.compile(r"(?:^|/)(?:progress\.log|tasks\.txt|tasks\.done|worker\..*\.status|\.worker\..*|\.preview(?:/|$)|\.reports(?:/|$))")
         changes = [name for name in tracked + untracked if not runtime_file.search(name)]
         if changes:
@@ -1053,20 +1135,34 @@ def finalize_structured_adapter_result(args, result):
         if verify_output:
             print(verify_output, end="" if verify_output.endswith("\n") else "\n")
         if verify_code:
-            print(f"[WORKER] Verification failed ({verify_code}); refusing script-owned commit.",
-                  file=sys.stderr)
+            reason = f"Verification failed ({verify_code}): {args.verify}; refusing script-owned commit."
+            result["runtime_error"] = {"phase": "verification", "message": reason,
+                                       "code": verify_code}
+            print(f"[WORKER] {reason}", file=sys.stderr)
             return 1
     audit_args = argparse.Namespace(
         work_dir=args.work_dir, base=args.base, target=args.target,
         constraints=getattr(args, "constraints", ""), title=args.title,
         level=int(args.level or 1), allow_dirty=True,
+        baseline_snapshot=getattr(args, "attempt_baseline", ""),
     )
     audit_code, audit_reason = git_audit(audit_args)
     if audit_code:
+        result["runtime_error"] = {"phase": "pre_commit_audit", "message": audit_reason,
+                                   "code": audit_code}
         print(f"[WORKER] Pre-commit audit failed: {audit_reason}", file=sys.stderr)
         return audit_code
     args.commit_message = message
-    return finalize_task_git(args)
+    try:
+        return finalize_task_git(args)
+    except (ValueError, OSError, subprocess.CalledProcessError) as error:
+        detail = getattr(error, "stderr", b"") or str(error)
+        if isinstance(detail, bytes):
+            detail = detail.decode("utf-8", "replace")
+        result["runtime_error"] = {"phase": "git_finalization", "message": detail,
+                                   "code": getattr(error, "returncode", 1)}
+        print(f"[WORKER] Git finalization failed: {detail}", file=sys.stderr)
+        return 1
 
 
 def claim_ghost_allowance(state_path, task_id, registration_id):
@@ -1180,6 +1276,12 @@ def execute_adapter_task(args):
             artifact_root = work_dir.parent / ".nightshift-adapter-artifacts" / args.task_id
     adapter_output_dir = Path(artifact_root) / attempt_id
     adapter_output_dir.mkdir(parents=True, exist_ok=True)
+    if not getattr(args, "attempt_baseline", ""):
+        inside_git = subprocess.run(["git", "-C", args.work_dir, "rev-parse", "--is-inside-work-tree"],
+                                    capture_output=True, check=False).returncode == 0
+        if inside_git:
+            args.attempt_baseline = str(adapter_output_dir / "baseline")
+            capture_attempt_baseline(args.work_dir, args.task_id, attempt_id, args.attempt_baseline)
     prompt_path = Path(args.prompt_file)
     adapter_command = getattr(args, "adapter_command", args.executable)
     adapter_args = getattr(args, "adapter_args", getattr(args, "extra_args", ()))
@@ -1246,6 +1348,8 @@ def execute_adapter_task(args):
                 "closeout_required": 126, "execution_timeout": 124,
                 "callback_timeout": 124, "cancellation_failed": 124}.get(
                     status["status"], 1)
+    if isinstance(result, dict):
+        atomic_write(result_path, json.dumps(result, ensure_ascii=False) + "\n")
     output.write_text(json.dumps({"status": status["status"],
                                   "stopped": status.get("stopped"),
                                   "result": result}, ensure_ascii=False),
@@ -1392,18 +1496,43 @@ def worker_daemon(root):
     signal.signal(signal.SIGINT, request_stop)
     signal.signal(signal.SIGTERM, request_stop)
 
+    status_lock = _workspace_state_lock
+    latest_status = None
+    running_since = None
+    heartbeat_stop = threading.Event()
+
     def update_status(state, task="", elapsed=0, current=0, total=0, remaining=0,
                       percentage="0%", bar=""):
-        status_args = argparse.Namespace(
-            path=str(status_file), worker_id=worker_id, os_name=active_os,
-            platform=platform_name, work_dir=str(work_dir),
-            state=state, current_task=task, elapsed=int(elapsed),
-            current_index=int(current), total_tasks=int(total), remaining=int(remaining),
-            percentage=percentage, bar=bar or progress_bar(int(current), int(total)),
-            pid=pid, model="", cli="registered-adapters", timeout=timeout,
-            worker_score=read_score_state(score_state_path)["score"],
-        )
-        write_status(status_args)
+        nonlocal latest_status, running_since
+        with status_lock:
+            if state == "RUNNING":
+                if latest_status is None or latest_status.state != "RUNNING" or latest_status.current_task != task:
+                    running_since = time.monotonic() - elapsed
+            else:
+                running_since = None
+            status_args = argparse.Namespace(
+                path=str(status_file), worker_id=worker_id, os_name=active_os,
+                platform=platform_name, work_dir=str(work_dir),
+                state=state, current_task=task, elapsed=int(elapsed),
+                current_index=int(current), total_tasks=int(total), remaining=int(remaining),
+                percentage=percentage, bar=bar or progress_bar(int(current), int(total)),
+                pid=pid, model="", cli="registered-adapters", timeout=timeout,
+                worker_score=read_score_state(score_state_path)["score"],
+            )
+            write_status(status_args)
+            latest_status = status_args
+
+    def refresh_running_status():
+        while not heartbeat_stop.wait(1):
+            with status_lock:
+                if latest_status is not None and latest_status.state == "RUNNING" and running_since is not None:
+                    latest_status.elapsed = int(time.monotonic() - running_since)
+                    try:
+                        write_status(latest_status)
+                    except OSError as error:
+                        print(f"[WORKER] Heartbeat write failed: {error}", file=sys.stderr)
+
+    heartbeat = threading.Thread(target=refresh_running_status, name="worker-heartbeat", daemon=True)
 
     def append_line(path, line):
         with Path(path).open("a", encoding="utf-8") as stream:
@@ -1413,6 +1542,7 @@ def worker_daemon(root):
         return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     try:
+        heartbeat.start()
         for path in (tasks_file, done_file, progress_file):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.touch(exist_ok=True)
@@ -1564,7 +1694,7 @@ def worker_daemon(root):
                                              if adapter_dir.is_dir() else [])
                         return rollback_failed_task(
                             root, work_dir, task_id,
-                            (tasks_file, done_file, progress_file, agent_state_path,
+                            (tasks_file, done_file, progress_file, log_file, status_file, agent_state_path,
                              ghost_state_path, ghost_artifact_root, score_state_path,
                              *adapter_artifacts),
                             snapshot if snapshot is not None else cli_args.attempt_baseline,
@@ -1592,11 +1722,13 @@ def worker_daemon(root):
                 cli_args.awaiting_agent = False
                 cli_args.agent_events_file = str(agent_events_path)
                 cli_args.dispatch_gate_file = str(dispatch_gate_file)
+                execution_error = ""
                 try:
                     exit_code, quota_exhausted = execute_registered_agents(
                         cli_args, agents, agent_state_path, recover_before_switch,
                     )
                 except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as error:
+                    execution_error = str(error)
                     print(f"[WORKER] CLI execution failed: {error}", file=sys.stderr)
                     exit_code = 2
                     quota_exhausted = False
@@ -1605,16 +1737,22 @@ def worker_daemon(root):
                 append_line(log_file, f"=== [{stamp()}] Task: {task} (Duration: {duration}s, Exit: {exit_code}) ===")
                 with Path(log_file).open("a", encoding="utf-8") as stream:
                     stream.write(output_path.read_text(encoding="utf-8", errors="replace") if output_path.exists() else "")
+                    if execution_error:
+                        stream.write(f"\n[WORKER] Runtime execution error: {execution_error}")
                     stream.write("\n")
                 result_text = result_output.read_text(encoding="utf-8", errors="replace") if result_output.exists() else ""
 
                 structured_outcome = ""
                 structured_execution_status = ""
+                failure_reason = execution_error
                 try:
                     payload = json.loads(result_text)
                     if isinstance(payload, dict):
                         structured_outcome = payload.get("outcome", "")
                         structured_execution_status = payload.get("status", "")
+                        runtime_error = payload.get("runtime_error", {})
+                        if isinstance(runtime_error, dict) and runtime_error.get("message"):
+                            failure_reason = str(runtime_error["message"])
                 except json.JSONDecodeError:
                     pass
                 structured_status = {
@@ -1767,7 +1905,7 @@ def worker_daemon(root):
                     if recover_current_attempt() is None:
                         break
                     summary = ("=" * 80 + f"\n[BLOCKED] {task_id}: Execution Failed (Exit Code: {exit_code})\n"
-                               f"Time: {stamp_now} | Status: FAILED\nFailure Reason: Worker CLI returned non-zero exit status {exit_code}.\n"
+                               f"Time: {stamp_now} | Status: FAILED\nFailure Reason: {failure_reason or f'Worker CLI returned non-zero exit status {exit_code}.'}\n"
                                "Action Needed for Human: Inspect .worker.log for error details.\n" + "=" * 80)
                     prepend_progress(progress_file, summary)
                     append_line(done_file, f"[{stamp_now}] [FAILED] {task} [EXIT_{exit_code}]")
@@ -1778,6 +1916,7 @@ def worker_daemon(root):
                         work_dir=str(work_dir), root=str(root), base=base, target=target,
                         constraints=constraints, title=task, level=int(level or 1),
                         task_id=task_id, verify=verify, port=worker_port, verify_timeout=180,
+                        baseline_snapshot=getattr(cli_args, "attempt_baseline", ""),
                     )
                     audit = mechanical_audit(audit_args)
                     if audit["status"] == 0 and is_research:
@@ -1825,6 +1964,9 @@ def worker_daemon(root):
             stop_requested.wait(poll_interval)
         return 0
     finally:
+        heartbeat_stop.set()
+        if heartbeat.is_alive():
+            heartbeat.join(timeout=2)
         try:
             pid_file.unlink(missing_ok=True)
         except OSError:
@@ -1841,18 +1983,26 @@ def git_audit(args):
         return subprocess.run(["git", "-C", args.work_dir, *command],
                               check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout
 
-    status = git("status", "--porcelain", "--untracked-files=all", "-z")
+    trees = attempt_audit_trees(args)
     ignored = re.compile(r"progress\.log|tasks\.txt|tasks\.done|worker\..*\.status|\.preview|\.reports|\.worker-ghosts|\.worker-ghost-state")
-    dirty = [entry.decode("utf-8", "replace") for entry in status.split(b"\0")
-             if entry and not ignored.search(entry.decode("utf-8", "replace"))]
+    if trees:
+        changed = changed_tree_paths(args.work_dir, *trees)
+        dirty = set(changed_tree_paths(args.work_dir, "HEAD", trees[1])).intersection(changed)
+        dirty = [name for name in dirty if not ignored.search(name)]
+        diff_base = list(trees)
+    else:
+        status = git("status", "--porcelain", "--untracked-files=all", "-z")
+        dirty = [entry.decode("utf-8", "replace") for entry in status.split(b"\0")
+                 if entry and not ignored.search(entry.decode("utf-8", "replace"))]
+        changed = [name.decode("utf-8", "replace") for name in
+                   git("diff", "--name-only", "-z", args.base).split(b"\0") if name]
+        if getattr(args, "allow_dirty", False):
+            changed.extend(name.decode("utf-8", "replace") for name in
+                           git("ls-files", "--others", "--exclude-standard", "-z").split(b"\0") if name)
+        diff_base = [args.base]
     if dirty and not getattr(args, "allow_dirty", False):
         return 1, "Dirty working tree or untracked ghost files detected after task. " + ", ".join(dirty)
 
-    changed = [name.decode("utf-8", "replace") for name in
-               git("diff", "--name-only", "-z", args.base).split(b"\0") if name]
-    if getattr(args, "allow_dirty", False):
-        changed.extend(name.decode("utf-8", "replace") for name in
-                       git("ls-files", "--others", "--exclude-standard", "-z").split(b"\0") if name)
     context = f"{args.title} {args.constraints}"
     diagnostic = bool(re.search(r"\[DIAGNOSTIC\]", context, re.I))
     research = bool(re.search(r"\[RESEARCH\]", context, re.I))
@@ -1866,7 +2016,7 @@ def git_audit(args):
                             or not re.search(r"tests/|Tests/|test", args.target, re.I))
             if unauthorized and not re.search(r"test refactor approved", args.constraints, re.I):
                 return 5, f"Test Immutability Violation: Modified test files without authorization in TARGET ({', '.join(tests)})."
-            diff = git("diff", args.base, "--", *tests).decode("utf-8", "replace")
+            diff = git("diff", *diff_base, "--", *tests).decode("utf-8", "replace")
             assertion = re.compile(r"\s*(XCTAssert|#expect|assert|expect\(|self\.assert)")
             deleted = sum(bool(assertion.match(line[1:])) for line in diff.splitlines()
                           if line.startswith("-") and not line.startswith("---"))
@@ -1875,7 +2025,7 @@ def git_audit(args):
             if deleted > added:
                 return 7, f"Assertion Non-Decrease Violation: Deleted {deleted} assertions while adding only {added}."
 
-    numstat = git("diff", "--numstat", args.base).decode("utf-8", "replace")
+    numstat = git("diff", "--numstat", *diff_base).decode("utf-8", "replace")
     deleted_lines = 0
     for line in numstat.splitlines():
         parts = line.split("\t")
@@ -2165,6 +2315,7 @@ def _git_names(work_dir, *arguments):
     return [os.fsdecode(name) for name in result.stdout.split(b"\0") if name]
 
 
+@serialize_workspace_state
 def capture_attempt_baseline(work_dir, task_id, attempt_id, snapshot_path):
     """Capture the exact Git/worktree state at the seam before an execution attempt."""
     work_dir, snapshot_path = Path(work_dir).resolve(), Path(snapshot_path).resolve()
@@ -2191,11 +2342,13 @@ def capture_attempt_baseline(work_dir, task_id, attempt_id, snapshot_path):
         "version": 1, "task_id": task_id, "attempt_id": attempt_id,
         "work_dir": str(work_dir), "head": head,
         "index_path": str(index_path), "index": index_state,
-        "paths": entries,
+        "paths": entries, "audit_tree": worktree_tree(work_dir),
+        "index_changes": _git_names(work_dir, "diff", "--cached", "--name-only", "-z", head),
     }, ensure_ascii=False, indent=2) + "\n")
     return snapshot_path
 
 
+@serialize_workspace_state
 def recover_attempt_baseline(work_dir, snapshot_path, archive_path, runtime_paths=()):
     """Archive a failed attempt and restore the captured HEAD, index, and file state."""
     work_dir, snapshot_path, archive_path = map(Path, (work_dir, snapshot_path, archive_path))
@@ -2433,6 +2586,7 @@ def main(argv=None):
     timeout.add_argument("argv", nargs=argparse.REMAINDER)
     audit = commands.add_parser("git-audit")
     audit.add_argument("--work-dir", required=True)
+    audit.add_argument("--baseline-snapshot", default="")
     audit.add_argument("--base", required=True)
     audit.add_argument("--target", default="")
     audit.add_argument("--constraints", default="")
@@ -2455,6 +2609,7 @@ def main(argv=None):
     progress.add_argument("--path", required=True)
     progress.add_argument("--entry", required=True)
     audit = commands.add_parser("mechanical-audit")
+    audit.add_argument("--baseline-snapshot", default="")
     for name in ("work-dir", "base", "task-id"):
         audit.add_argument(f"--{name}", required=True)
     for name in ("target", "constraints", "title", "verify"):

@@ -1074,6 +1074,7 @@ class WorkerScoreTests(unittest.TestCase):
                 "if kind == 'closeout': payload={'outcome':os.environ.get('CLOSEOUT_OUTCOME','complete'),"
                 "'changed':False,'commit_message':'fix: complete TASK-CLOSE'}\n"
                 "else:\n"
+                " open('output.txt','w').write('after\\n')\n"
                 " payload={'outcome':os.environ.get('INITIAL_OUTCOME','closeout_required'),'changed':True}\n"
                 "if kind=='closeout' and os.environ.get('MISSING_CLOSEOUT_MESSAGE')=='1': payload.pop('commit_message',None)\n"
                 "json.dump(payload,open(result,'w'))\n"
@@ -1091,7 +1092,6 @@ class WorkerScoreTests(unittest.TestCase):
                     "--task-id","TASK-CLOSE","--title","[CODE: FIX] change output",
                     "--base",base,"--step-budget","2",env=env)
 
-            (root/"output.txt").write_text("after\n")
             completed=invoke()
             self.assertEqual(completed.returncode,0,completed.stdout+completed.stderr+(Path(directory)/"kind.log").read_text())
             self.assertEqual(git("log","-1","--pretty=%s"),"fix: complete TASK-CLOSE")
@@ -1099,7 +1099,6 @@ class WorkerScoreTests(unittest.TestCase):
             self.assertEqual(git("status","--porcelain"),"")
             def reset_task_state():
                 git("reset","--hard",base)
-                (root/"output.txt").write_text("after\n")
                 (root/".worker-ghost-state.json").unlink(missing_ok=True)
                 shutil.rmtree(root/".worker-ghosts",ignore_errors=True)
             for mode in ("auto","approve-for-me","prompt","default","","bypass"):
@@ -2544,6 +2543,106 @@ class DaemonLifecycleTests(unittest.TestCase):
         p = self.root / "worker.status"
         return json.loads(p.read_text())["state"] if p.exists() else None
 
+    def test_task_audit_and_commit_preserve_preexisting_user_work(self):
+        def git(*args):
+            return subprocess.run(["git", "-C", str(self.root), *args], check=True,
+                                  capture_output=True, text=True).stdout
+        (self.root / "docs/agents").mkdir(parents=True)
+        (self.root / "docs/agents/granularity-profile.json").write_text("original\n")
+        (self.root / "staged.txt").write_text("original\n")
+        (self.root / "deleted.txt").write_text("original\n")
+        (self.root / "tests").mkdir()
+        (self.root / "tests/test_user.py").write_text("assert True\n" * 60)
+        git("add", "docs", "staged.txt", "deleted.txt", "tests")
+        git("commit", "-qm", "user baseline")
+        (self.root / "docs/agents/granularity-profile.json").write_text("user configuration\n")
+        (self.root / "staged.txt").write_text("user staged work\n")
+        git("add", "staged.txt")
+        (self.root / "staged.txt").write_text("user unstaged work after staging\n")
+        (self.root / "deleted.txt").unlink()
+        (self.root / "tests/test_user.py").write_text("assert True\n")
+        (self.root / "user-notes.txt").write_text("untracked user work\n")
+        (self.root / "user-link").symlink_to("user-notes.txt")
+        index_before = git("diff", "--cached", "--binary")
+        self.enqueue("TASK-USER-BASELINE")
+        queue = self.root / "tasks.txt"
+        queue.write_text(queue.read_text().replace("LEVEL: 1", "LEVEL: 3"))
+        self.start()
+        self.wait_for(lambda: (self.root / "tasks.done").exists() and
+                      "[DONE] TASK-USER-BASELINE" in (self.root / "tasks.done").read_text())
+        self.wait_for(lambda: self.state() == "IDLE")
+        self.assertEqual(git("diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD").strip(), "output.txt")
+        self.assertEqual(git("diff", "--cached", "--binary"), index_before)
+        self.assertEqual((self.root / "docs/agents/granularity-profile.json").read_text(), "user configuration\n")
+        self.assertEqual((self.root / "staged.txt").read_text(), "user unstaged work after staging\n")
+        self.assertFalse((self.root / "deleted.txt").exists())
+        self.assertEqual((self.root / "tests/test_user.py").read_text(), "assert True\n")
+        self.assertEqual((self.root / "user-link").readlink(), Path("user-notes.txt"))
+        self.assertIn("user-notes.txt", git("ls-files", "--others", "--exclude-standard"))
+
+    def test_worker_modification_to_preexisting_out_of_scope_file_is_rejected(self):
+        user_file = self.root / "user-notes.txt"
+        user_file.write_text("user baseline\n")
+        self.fake.write_text(self.fake.read_text().replace(
+            "Path('output.txt').write_text('recovered')",
+            "Path('user-notes.txt').write_text('worker overwrite');Path('output.txt').write_text('recovered')"))
+        self.enqueue("TASK-OUTSIDE")
+        self.start()
+        self.wait_for(lambda: (self.root / "tasks.done").exists() and
+                      "[FAILED] TASK-OUTSIDE" in (self.root / "tasks.done").read_text())
+        self.assertEqual(user_file.read_text(), "user baseline\n")
+        self.assertFalse((self.root / "output.txt").exists())
+        for path in ("progress.log", ".worker.log"):
+            details = (self.root / path).read_text()
+            self.assertIn("Target Whitelist Violation", details)
+            self.assertIn("user-notes.txt", details)
+
+    def test_preexisting_dirty_target_is_not_silently_committed(self):
+        target = self.root / "output.txt"
+        target.write_text("original\n")
+        subprocess.run(["git", "-C", str(self.root), "add", "output.txt"], check=True)
+        subprocess.run(["git", "-C", str(self.root), "commit", "-qm", "baseline target"], check=True)
+        target.write_text("user work\n")
+        self.enqueue("TASK-OVERLAP")
+        self.start()
+        self.wait_for(lambda: (self.root / "tasks.done").exists() and
+                      "[FAILED] TASK-OVERLAP" in (self.root / "tasks.done").read_text())
+        self.assertEqual(target.read_text(), "user work\n")
+
+    def test_staged_target_is_preserved_when_worktree_matches_head(self):
+        def git(*args):
+            return subprocess.run(["git", "-C", str(self.root), *args], check=True,
+                                  capture_output=True, text=True).stdout
+        target = self.root / "output.txt"
+        target.write_text("original\n")
+        git("add", "output.txt")
+        git("commit", "-qm", "baseline target")
+        target.write_text("user staged\n")
+        git("add", "output.txt")
+        target.write_text("original\n")
+        staged_before = git("diff", "--cached", "--binary")
+        self.enqueue("TASK-STAGED-TARGET")
+        self.start()
+        self.wait_for(lambda: (self.root / "tasks.done").exists() and
+                      "[FAILED] TASK-STAGED-TARGET" in (self.root / "tasks.done").read_text())
+        self.assertEqual(git("diff", "--cached", "--binary"), staged_before)
+        self.assertEqual(target.read_text(), "original\n")
+
+    def test_running_task_refreshes_elapsed_time_and_heartbeat(self):
+        self.env["AGENT_DELAY"] = "2.5"
+        self.enqueue("TASK-HEARTBEAT")
+        self.start()
+        self.wait_for(lambda: self.state() == "RUNNING")
+        status = self.root / "worker.status"
+        initial = json.loads(status.read_text())
+        self.wait_for(lambda: self.state() == "RUNNING" and
+                      json.loads(status.read_text())["elapsed_seconds"] >= 1 and
+                      json.loads(status.read_text())["last_heartbeat"] != initial["last_heartbeat"])
+        self.wait_for(lambda: "[DONE] TASK-HEARTBEAT" in (self.root / "tasks.done").read_text())
+        self.wait_for(lambda: self.state() == "IDLE")
+        time.sleep(0.15)
+        self.assertEqual(self.state(), "IDLE", "late heartbeat must not overwrite terminal state")
+
     def test_budget_failure_hands_back_to_planner_and_resumes_after_pause(self):
         self.enqueue("TASK-BUDGET")
         self.start()
@@ -2745,7 +2844,7 @@ class InstallerIntegrationTests(unittest.TestCase):
             self.assertEqual(agent_registry.read_text(), preserved_registry)
             installed = subprocess.run(
                 [sys.executable, "-m", "unittest", "discover", "-s", "test", "-v"],
-                cwd=target, capture_output=True, text=True, timeout=45,
+                cwd=target, capture_output=True, text=True, timeout=90,
             )
             self.assertEqual(installed.returncode, 0, installed.stdout + installed.stderr)
 
