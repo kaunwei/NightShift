@@ -1489,7 +1489,7 @@ RULES
 CLOSEOUT
 - Run {verify or 'task verification'} and state actual results. [DEAD_END] requires isolated passing proof. At most 3 implementation attempts; on blocker, return [BLOCKED] with cause.
 - Never stage/commit or change Worker score. Runtime verifies, audits and commits using your message; Planner accepts. Do not adjust scope for the adapter.
-- Return ONE JSON object to the adapter result file: `outcome`=complete|closeout_required|blocked|scope_blocked|guidance|failure|no_change; `changed`=boolean; `verification_evidence`; `commit_message`; `no_change_reason` when relevant. `complete`=finished/verified; `no_change`=no edits needed; `closeout_required`=verification/message pending. Never invent evidence/messages from logs. End diagnostic text: `Attempts: <N> | Confidence: <HIGH|MED|LOW>`.
+- Return exactly one JSON object with no text before or after it. Fields: `outcome`=complete|closeout_required|blocked|scope_blocked|guidance|failure|no_change; `changed`=boolean; `verification_evidence`; `commit_message`; `no_change_reason` when relevant; `attempts`=integer; `confidence`=HIGH|MED|LOW. `complete`=finished/verified; `no_change`=no edits needed; `closeout_required`=verification/message pending. If verification fails, return blocked or failure; closeout_required cannot repair failed tests. Never invent evidence/messages from logs.
 
 {authority}
 """
@@ -1863,11 +1863,17 @@ def worker_daemon(root):
                 structured_outcome = ""
                 structured_execution_status = ""
                 failure_reason = execution_error
+                cli_exit_code = None
+                result_error_code = ""
                 try:
                     payload = json.loads(result_text)
                     if isinstance(payload, dict):
                         structured_outcome = payload.get("outcome", "")
                         structured_execution_status = payload.get("status", "")
+                        raw_cli_exit_code = payload.get("cli_exit_code")
+                        if isinstance(raw_cli_exit_code, int) and not isinstance(raw_cli_exit_code, bool):
+                            cli_exit_code = raw_cli_exit_code
+                        result_error_code = str(payload.get("error_code", ""))
                         runtime_error = payload.get("runtime_error", {})
                         if isinstance(runtime_error, dict) and runtime_error.get("message"):
                             failure_reason = str(runtime_error["message"])
@@ -2044,7 +2050,7 @@ def worker_daemon(root):
                     update_status("BLOCKED", f"{task} (WORKER BLOCKED)", duration, current, total,
                                   max(0, remaining - 1), percent, bar)
                 elif outcome == "error":
-                    print(f"[{stamp_now}] [ERROR] CLI exited with code {exit_code}")
+                    print(f"[{stamp_now}] [ERROR] Task execution exited with code {exit_code}")
                     if cli_args.recovery_failed:
                         if not cli_args.recovery_halted:
                             restore_task_front(tasks_file, raw_task)
@@ -2056,8 +2062,16 @@ def worker_daemon(root):
                         break
                     if recover_current_attempt() is None:
                         break
-                    summary = ("=" * 80 + f"\n[BLOCKED] {task_id}: Execution Failed (Exit Code: {exit_code})\n"
-                               f"Time: {stamp_now} | Status: FAILED\nFailure Reason: {failure_reason or f'Worker CLI returned non-zero exit status {exit_code}.'}\n"
+                    if cli_exit_code is not None and not failure_reason:
+                        failure_reason = ("Codex final result format invalid" if result_error_code == "invalid_result"
+                                          else f"Codex CLI exited with code {cli_exit_code}" if cli_exit_code
+                                          else "Codex reported task failure")
+                    codex_details = (f"CLI Exit Code: {cli_exit_code}\nVerification: not run\n"
+                                     f"Result Error: {result_error_code or 'none'}\nTask Status: FAILED\n"
+                                     if cli_exit_code is not None else "")
+                    summary = ("=" * 80 + f"\n[BLOCKED] {task_id}: Execution Failed (Task Exit Code: {exit_code})\n"
+                               f"Time: {stamp_now} | Status: FAILED\n{codex_details}"
+                               f"Failure Reason: {failure_reason or f'Task execution returned status {exit_code}.'}\n"
                                "Action Needed for Human: Inspect .worker.log for error details.\n" + "=" * 80)
                     prepend_progress(progress_file, summary)
                     append_line(done_file, f"[{stamp_now}] [FAILED] {task} [EXIT_{exit_code}]")
@@ -2095,10 +2109,14 @@ def worker_daemon(root):
                         update_status("BLOCKED", f"{task} (GUARD VIOLATION)", duration,
                                       current, total, max(0, remaining - 1), percent, bar)
                     else:
-                        attempts_match = re.search(r"Attempts:\s*(\d+)", result_text)
-                        if not attempts_match and progress_file.exists():
-                            attempts_match = re.search(r"Attempts:\s*(\d+)", progress_file.read_text(encoding="utf-8", errors="replace"))
-                        attempts = attempts_match.group(1) if attempts_match else "1"
+                        structured_attempts = payload.get("attempts") if isinstance(payload, dict) else None
+                        if isinstance(structured_attempts, int) and not isinstance(structured_attempts, bool) and structured_attempts > 0:
+                            attempts = str(structured_attempts)
+                        else:
+                            attempts_match = re.search(r"Attempts:\s*(\d+)", result_text)
+                            if not attempts_match and progress_file.exists():
+                                attempts_match = re.search(r"Attempts:\s*(\d+)", progress_file.read_text(encoding="utf-8", errors="replace"))
+                            attempts = attempts_match.group(1) if attempts_match else "1"
                         diff = subprocess.run(["git", "-C", str(work_dir), "diff", "--stat", base, "HEAD"],
                                                capture_output=True, text=True, check=False).stdout.splitlines()
                         diff_stat = diff[-1].strip() if diff else "0 files changed"

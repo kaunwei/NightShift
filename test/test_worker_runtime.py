@@ -161,6 +161,16 @@ class WorkerPromptContractTests(unittest.TestCase):
         self.assertIn("never clean or reset the checkout", prompt.lower())
         self.assertNotIn("restore the clean tree", prompt)
 
+    def test_prompt_requires_pure_json_and_failure_for_failed_verification(self):
+        prompt = build_task_prompt("[CODE: FIX] Repair parser", "TASK-JSON", "1", "parser.py",
+                                   "python3 -m unittest", "", "", 12, 1, 12, 0,
+                                   "progress.log")
+        self.assertIn("Return exactly one JSON object with no text before or after it", prompt)
+        self.assertIn("`attempts`=integer; `confidence`=HIGH|MED|LOW", prompt)
+        self.assertIn("If verification fails, return blocked or failure", prompt)
+        self.assertIn("closeout_required cannot repair failed tests", prompt)
+        self.assertNotIn("End diagnostic text: `Attempts:", prompt)
+
 
 class InPlaceExecutionContractTests(unittest.TestCase):
     def test_legacy_isolation_setting_does_not_create_or_select_worker_tree(self):
@@ -593,6 +603,80 @@ class BuiltinAdapterContractTests(unittest.TestCase):
             self.assertEqual(executed.returncode, 0, executed.stderr)
             self.assertEqual(json.loads(executed.stdout)["status"], "complete")
             self.assertEqual(json.loads((root / "result.json").read_text())["outcome"], "complete")
+
+    def test_codex_adapter_ignores_quota_words_in_command_output_after_cli_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fake = root / "fake-codex"
+            fake.write_text(
+                "#!/usr/bin/env python3\nimport json,sys\n"
+                "print(json.dumps({'type':'item.completed','item':{'type':'command_execution',"
+                "'aggregated_output':'Error: insufficient_quota'}}), flush=True)\n"
+                "sys.exit(1)\n")
+            fake.chmod(0o755)
+            (root / "prompt.txt").write_text("task")
+            request = {"protocol_version": 1, "overrides": {"command": str(fake)},
+                       "task_id": "TASK-QUOTED-ERROR", "working_directory": str(root),
+                       "prompt_path": str(root / "prompt.txt"), "output_dir": str(root / "run"),
+                       "result_path": str(root / "result.json"), "limits": {"action_limit": 3}}
+            (root / "request.json").write_text(json.dumps(request))
+            executed = runtime("adapter-exec", "--command", sys.executable,
+                               "--adapter-arg", ROOT / "scripts/adapters/codex.py",
+                               "--request", root / "request.json", "--execution-timeout", "2",
+                               "--callback-timeout", "0.5")
+            self.assertEqual(executed.returncode, 0, executed.stderr)
+            self.assertEqual(json.loads(executed.stdout)["status"], "failed")
+            self.assertEqual(json.loads((root / "result.json").read_text())["outcome"], "failure")
+
+    def test_codex_adapter_recognizes_quota_from_codex_error_event(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fake = root / "fake-codex"
+            fake.write_text(
+                "#!/usr/bin/env python3\nimport json,sys\n"
+                "print(json.dumps({'type':'turn.failed','error':"
+                "{'message':'insufficient_quota'}}), flush=True)\n"
+                "sys.exit(1)\n")
+            fake.chmod(0o755)
+            (root / "prompt.txt").write_text("task")
+            request = {"protocol_version": 1, "overrides": {"command": str(fake)},
+                       "task_id": "TASK-CODEX-QUOTA", "working_directory": str(root),
+                       "prompt_path": str(root / "prompt.txt"), "output_dir": str(root / "run"),
+                       "result_path": str(root / "result.json"), "limits": {"action_limit": 3}}
+            (root / "request.json").write_text(json.dumps(request))
+            executed = runtime("adapter-exec", "--command", sys.executable,
+                               "--adapter-arg", ROOT / "scripts/adapters/codex.py",
+                               "--request", root / "request.json", "--execution-timeout", "2",
+                               "--callback-timeout", "0.5")
+            self.assertEqual(executed.returncode, 0, executed.stderr)
+            self.assertEqual(json.loads(executed.stdout)["status"], "quota_exhausted")
+            self.assertEqual(json.loads((root / "result.json").read_text())["outcome"], "quota_exhausted")
+
+    def test_codex_adapter_preserves_json_result_with_legacy_attempts_line(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fake = root / "fake-codex"
+            fake.write_text(
+                "#!/usr/bin/env python3\nimport sys\nfrom pathlib import Path\n"
+                "message = Path(sys.argv[sys.argv.index('--output-last-message')+1])\n"
+                "message.write_text('{\"outcome\":\"closeout_required\",\"changed\":true}'"
+                " + '\\n\\nAttempts: 1 | Confidence: MED')\n")
+            fake.chmod(0o755)
+            (root / "prompt.txt").write_text("task")
+            request = {"protocol_version": 1, "overrides": {"command": str(fake)},
+                       "task_id": "TASK-LEGACY-RESULT", "working_directory": str(root),
+                       "prompt_path": str(root / "prompt.txt"), "output_dir": str(root / "run"),
+                       "result_path": str(root / "result.json"), "limits": {"action_limit": 3}}
+            (root / "request.json").write_text(json.dumps(request))
+            executed = runtime("adapter-exec", "--command", sys.executable,
+                               "--adapter-arg", ROOT / "scripts/adapters/codex.py",
+                               "--request", root / "request.json", "--execution-timeout", "2",
+                               "--callback-timeout", "0.5")
+            self.assertEqual(executed.returncode, 0, executed.stderr)
+            self.assertEqual(json.loads(executed.stdout)["status"], "closeout_required")
+            payload = json.loads((root / "result.json").read_text())
+            self.assertEqual((payload["outcome"], payload["attempts"], payload["confidence"]),
+                             ("closeout_required", 1, "MED"))
 
     def test_agy_adapter_probes_fake_cli_and_extracts_structured_result(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1916,7 +2000,7 @@ class WorkerIntegrationTests(unittest.TestCase):
                 " if [ \"$1\" = --output-last-message ]; then shift; result=$1; fi\n"
                 " shift\ndone\n"
                 "printf '%s\\n' \"$model\" >> \"$AGENT_CALLS\"\n"
-                "if [ \"$model\" = first-model ]; then touch .git/index.lock; echo 'insufficient_quota'; exit 1; fi\n"
+                "if [ \"$model\" = first-model ]; then touch .git/index.lock; echo '{\"type\":\"turn.failed\",\"error\":{\"message\":\"insufficient_quota\"}}'; exit 1; fi\n"
                 "printf 'Attempts: 1 | Confidence: HIGH\\n' > \"$result\"\n"
             )
             fake.chmod(0o755)
@@ -1976,6 +2060,71 @@ class WorkerIntegrationTests(unittest.TestCase):
             self.assertFalse((root / ".worker-ghost-state.json").exists())
             self.assertIn("[BLOCKED] reports-not-writable", (root / "progress.log").read_text())
             self.assertEqual(json.loads((root / "worker.status").read_text())["state"], "BLOCKED")
+
+    def test_worker_reports_invalid_codex_result_without_calling_cli_exit_one(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "repo"
+            root.mkdir()
+            for name in ("worker.sh", ".gitignore"):
+                shutil.copy2(ROOT / name, root / name)
+            (root / "scripts").mkdir()
+            copy_runtime_fixture(root / "scripts/worker_runtime.py")
+            (root / "tasks.txt").write_text(
+                "TASK-BAD-JSON | LEVEL: 1 | TARGET: output.txt | ACTION: [CODE: FIX] Write output "
+                "| VERIFY: test -f output.txt\n")
+            fake = Path(directory) / "fake-codex"
+            fake.write_text(
+                "#!/usr/bin/env python3\nimport sys\nfrom pathlib import Path\n"
+                "Path(sys.argv[sys.argv.index('--output-last-message')+1]).write_text('not JSON')\n")
+            fake.chmod(0o755)
+            write_legacy_registry(root, json.dumps([codex_registration("codex-main", fake)]))
+            for args in (("init", "-q"), ("config", "user.name", "Worker Test"),
+                         ("config", "user.email", "worker@example.invalid"),
+                         ("add", "worker.sh", "scripts", ".gitignore", "tasks.txt"),
+                         ("commit", "-qm", "fixture")):
+                subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True)
+            env = {**os.environ, "RUN_ONCE": "1", "POLL_INTERVAL": "0"}
+            result = subprocess.run(["bash", str(root / "worker.sh")], cwd=root, env=env,
+                                    capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            progress = (root / "progress.log").read_text()
+            self.assertIn("CLI Exit Code: 0", progress)
+            self.assertIn("Verification: not run", progress)
+            self.assertIn("Result Error: invalid_result", progress)
+            self.assertIn("Task Status: FAILED", progress)
+            self.assertNotIn("Worker CLI returned non-zero exit status 1", progress)
+
+    def test_worker_records_codex_attempts_from_json_result(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "repo"
+            root.mkdir()
+            for name in ("worker.sh", ".gitignore"):
+                shutil.copy2(ROOT / name, root / name)
+            (root / "scripts").mkdir()
+            copy_runtime_fixture(root / "scripts/worker_runtime.py")
+            (root / "tasks.txt").write_text(
+                "TASK-ATTEMPTS | LEVEL: 1 | TARGET: output.txt | ACTION: [CODE: EXPAND] Write output "
+                "| VERIFY: test -f output.txt\n")
+            fake = Path(directory) / "fake-codex"
+            fake.write_text(
+                "#!/usr/bin/env python3\nimport json,sys\nfrom pathlib import Path\n"
+                "Path('output.txt').write_text('done\\n')\n"
+                "Path(sys.argv[sys.argv.index('--output-last-message')+1]).write_text(json.dumps("
+                "{'outcome':'complete','changed':True,'commit_message':'test: finish task',"
+                "'attempts':2,'confidence':'MED'}))\n")
+            fake.chmod(0o755)
+            write_legacy_registry(root, json.dumps([codex_registration("codex-main", fake)]))
+            for args in (("init", "-q"), ("config", "user.name", "Worker Test"),
+                         ("config", "user.email", "worker@example.invalid"),
+                         ("add", "worker.sh", "scripts", ".gitignore", "tasks.txt"),
+                         ("commit", "-qm", "fixture")):
+                subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True)
+            env = {**os.environ, "RUN_ONCE": "1", "POLL_INTERVAL": "0"}
+            result = subprocess.run(["bash", str(root / "worker.sh")], cwd=root, env=env,
+                                    capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("[DONE] TASK-ATTEMPTS", (root / "tasks.done").read_text())
+            self.assertIn("Attempts: 2", (root / "progress.log").read_text())
 
     def test_in_place_research_task_keeps_its_new_report_artifacts(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -2060,7 +2209,7 @@ class WorkerIntegrationTests(unittest.TestCase):
                 "  if [ \"$1\" = --output-last-message ]; then shift; result=$1; fi\n"
                 "  shift\ndone\n"
                 "printf '%s\\n' \"$model\" >> \"$AGENT_CALLS\"\n"
-                "if [ \"$model\" = gpt-6-luna ]; then echo 'Error: insufficient_quota'; exit 1; fi\n"
+                "if [ \"$model\" = gpt-6-luna ]; then echo '{\"type\":\"turn.failed\",\"error\":{\"message\":\"insufficient_quota\"}}'; exit 1; fi\n"
                 "printf '{\"outcome\":\"complete\",\"changed\":true,\"commit_message\":\"feat: complete TASK-Q\"}\\n' > \"$result\"\n"
                 "printf 'hello\\n' > output.txt\n"
             )
@@ -2196,7 +2345,7 @@ class WorkerIntegrationTests(unittest.TestCase):
             bin_dir = Path(directory) / "bin"
             bin_dir.mkdir()
             fake = bin_dir / "codex"
-            fake.write_text("#!/bin/sh\necho 'rate limit exceeded'; exit 1\n")
+            fake.write_text("#!/bin/sh\necho '{\"type\":\"turn.failed\",\"error\":{\"message\":\"rate limit exceeded\"}}'; exit 1\n")
             fake.chmod(0o755)
             subprocess.run(["git", "init", "-q", str(root)], check=True)
             subprocess.run(["git", "-C", str(root), "config", "user.name", "Worker Test"], check=True)
@@ -2730,7 +2879,7 @@ class DaemonLifecycleTests(unittest.TestCase):
         self.fake.write_text(
             "#!/usr/bin/env python3\nimport os,sys,json,time\nfrom pathlib import Path\n"
             "if os.environ.get('AGENT_DELAY'): time.sleep(float(os.environ['AGENT_DELAY']))\n"
-            "if Path(os.environ['QUOTA_FLAG']).exists():\n print('RESOURCE_EXHAUSTED code 429',flush=True);sys.exit(1)\n"
+            "if Path(os.environ['QUOTA_FLAG']).exists():\n print(json.dumps({'type':'turn.failed','error':{'message':'RESOURCE_EXHAUSTED code 429'}}),flush=True);sys.exit(1)\n"
             "prompt=sys.stdin.read()\n"
             "if 'TASK-BUDGET' in prompt:\n"
             " Path('output.txt').write_text('partial')\n"

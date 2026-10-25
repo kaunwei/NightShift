@@ -83,12 +83,16 @@ with open(log, "w", encoding="utf-8") as stream:
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, bufsize=1)
     process.stdin.write(open(sys.stdin.fileno()).read()); process.stdin.close()
-    actions, over_budget = 0, False
+    actions, over_budget, error_messages = 0, False, []
     for line in process.stdout:
         stream.write(line); stream.flush()
         try:
             event = json.loads(line); item = event.get("item", {})
             actions += event.get("type") == "item.completed" and item.get("type") == "command_execution"
+            if event.get("type") in ("error", "turn.failed"):
+                error = event.get("error")
+                message = event.get("message") or (error.get("message") if isinstance(error, dict) else error)
+                if isinstance(message, str): error_messages.append(message)
         except (ValueError, AttributeError): pass
         if actions > int(limit) and process.poll() is None:
             over_budget = True; process.terminate()
@@ -96,11 +100,10 @@ with open(log, "w", encoding="utf-8") as stream:
     except subprocess.TimeoutExpired:
         process.kill(); code = process.wait(); over_budget = True
 if actions > int(limit): over_budget = True
-diagnostic = open(log, encoding="utf-8", errors="replace").read().lower()
-# A successful CLI run may print test fixtures, expected values, or quoted logs
-# containing numbers such as 429. Only classify explicit quota errors after a
-# non-zero process exit.
-quota = code != 0 and any(term in diagnostic for term in (
+diagnostic = "\n".join(error_messages)
+# Tool output and quoted transcripts may contain quota-like strings. Only
+# Codex's own error events can establish a quota failure.
+quota = code != 0 and any(term in diagnostic.lower() for term in (
     "insufficient_quota", "rate limit", "resource_exhausted",
     "http 429", "status code 429", "out of credits"))
 outcome = "quota_exhausted" if quota else "step_budget_exceeded" if over_budget else "complete" if code == 0 else "failure"
@@ -109,20 +112,31 @@ try:
     with open(message, encoding="utf-8") as source: text = source.read()
 except OSError: pass
 try: payload = json.loads(text)
-except ValueError: payload = None
+except ValueError:
+    payload = None
+    try:
+        clean = text.lstrip()
+        candidate, end = json.JSONDecoder().raw_decode(clean)
+        legacy = re.fullmatch(r"\s*Attempts:\s*(\d+)\s*\|\s*Confidence:\s*(HIGH|MED|LOW)\s*",
+                              clean[end:])
+        if isinstance(candidate, dict) and legacy:
+            payload = {**candidate, "attempts": int(legacy.group(1)),
+                       "confidence": legacy.group(2)}
+    except ValueError: pass
 if not isinstance(payload, dict):
     markers = (("SCOPE_BLOCKED", "scope_blocked"), ("BLOCKED", "blocked"),
                ("NEED_GUIDANCE", "guidance"), ("NEED_DECOMPOSITION", "guidance"),
                ("CLOSEOUT_INCOMPLETE", "blocked"), ("CLOSEOUT_REQUIRED", "closeout_required"))
     final_outcome = next((value for marker, value in markers
                           if re.search(r"\[" + marker + r"\]", text)), "failure")
-    payload = {"outcome": final_outcome, "diagnostic": text or "Codex returned no final result"}
+    payload = {"outcome": final_outcome, "diagnostic": text or diagnostic or "Codex returned no final result"}
     if final_outcome == "failure": payload["error_code"] = "invalid_result"
 allowed = {"complete", "no_change", "closeout_required", "blocked", "scope_blocked", "guidance", "failure"}
 if not isinstance(payload.get("outcome"), str) or payload["outcome"] not in allowed:
     payload = {"outcome": "failure", "error_code": "invalid_result",
                "diagnostic": "Codex final JSON requires a supported outcome"}
 payload["actions_used"] = actions
+payload["cli_exit_code"] = code
 if outcome != "complete":
     payload["outcome"] = outcome
 else:
