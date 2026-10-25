@@ -2553,31 +2553,6 @@ def _git_path_state(path):
     return {"kind": "missing"}
 
 
-def _save_git_path_state(path, destination):
-    path, destination = Path(path), Path(destination)
-    state = _git_path_state(path)
-    if state["kind"] == "file":
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(path, destination)
-    return state
-
-
-def _restore_git_path_state(path, state, content_path=None):
-    path = Path(path)
-    if path.is_symlink() or path.is_file():
-        path.unlink()
-    elif path.is_dir():
-        shutil.rmtree(path)
-    kind = state["kind"]
-    if kind == "file":
-        path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(content_path, path)
-        path.chmod(state["mode"])
-    elif kind == "symlink":
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.symlink_to(state["target"])
-
-
 def _git_names(work_dir, *arguments):
     result = subprocess.run(["git", "-C", str(work_dir), *arguments],
                             check=True, capture_output=True)
@@ -2586,51 +2561,38 @@ def _git_names(work_dir, *arguments):
 
 @serialize_workspace_state
 def capture_attempt_baseline(work_dir, task_id, attempt_id, snapshot_path):
-    """Capture the exact Git/worktree state at the seam before an execution attempt."""
+    """Capture the exact Git state at the seam before an execution attempt using pure Git."""
     work_dir, snapshot_path = Path(work_dir).resolve(), Path(snapshot_path).resolve()
     if snapshot_path.exists():
         raise FileExistsError(f"attempt snapshot already exists: {snapshot_path}")
     head = subprocess.run(["git", "-C", str(work_dir), "rev-parse", "HEAD"],
                           check=True, capture_output=True, text=True).stdout.strip()
-    index_value = subprocess.run(["git", "-C", str(work_dir), "rev-parse", "--git-path", "index"],
-                                 check=True, capture_output=True, text=True).stdout.strip()
-    index_path = Path(index_value)
-    if not index_path.is_absolute():
-        index_path = work_dir / index_path
     untracked = _git_names(work_dir, "ls-files", "--others", "--exclude-standard", "-z")
-    paths = sorted(set(
-        relative for relative in (_git_names(work_dir, "diff", "--name-only", "-z", "HEAD") + untracked)
-        if not relative.startswith((".scratch/", ".worker-ghosts/"))
-        and not (work_dir / relative).resolve().is_relative_to(snapshot_path)
-    ))
+    stash = subprocess.run(["git", "-C", str(work_dir), "stash", "create"],
+                           check=False, capture_output=True, text=True).stdout.strip()
     snapshot_path.mkdir(parents=True)
-    (snapshot_path / "files").mkdir()
-    entries = {}
-    for relative in paths:
-        source = work_dir / relative
-        artifact = snapshot_path / "files" / relative
-        entries[relative] = _save_git_path_state(source, artifact)
-    index_state = _save_git_path_state(index_path, snapshot_path / "index")
     atomic_write(snapshot_path / "snapshot.json", json.dumps({
         "version": 1, "task_id": task_id, "attempt_id": attempt_id,
         "work_dir": str(work_dir), "head": head,
-        "index_path": str(index_path), "index": index_state,
-        "paths": entries, "audit_tree": worktree_tree(work_dir),
+        "stash": stash,
+        "untracked": untracked,
+        "audit_tree": worktree_tree(work_dir),
         "index_changes": _git_names(work_dir, "diff", "--cached", "--name-only", "-z", head),
+        "paths": {},
     }, ensure_ascii=False, indent=2) + "\n")
     return snapshot_path
 
 
 @serialize_workspace_state
 def recover_attempt_baseline(work_dir, snapshot_path, archive_path, runtime_paths=()):
-    """Archive a failed attempt and restore the captured HEAD, index, and file state."""
+    """Archive a failed attempt's diff and restore Git state via pure Git."""
     work_dir, snapshot_path, archive_path = map(Path, (work_dir, snapshot_path, archive_path))
     work_dir, snapshot_path, archive_path = work_dir.resolve(), snapshot_path.resolve(), archive_path.resolve()
     metadata_path = snapshot_path / "snapshot.json"
     if not metadata_path.is_file():
         raise ValueError(f"attempt snapshot is missing metadata: {metadata_path}")
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-    if metadata.get("version") != 1 or not isinstance(metadata.get("paths"), dict):
+    if metadata.get("version") != 1:
         raise ValueError(f"invalid attempt snapshot: {metadata_path}")
     baseline_head = metadata.get("head", "")
     valid_head = subprocess.run(["git", "-C", str(work_dir), "cat-file", "-e", f"{baseline_head}^{{commit}}"],
@@ -2640,15 +2602,7 @@ def recover_attempt_baseline(work_dir, snapshot_path, archive_path, runtime_path
     if archive_path.exists():
         raise FileExistsError(f"attempt archive already exists: {archive_path}")
 
-    untracked = _git_names(work_dir, "ls-files", "--others", "--exclude-standard", "-z")
-    current_paths = sorted(set(
-        relative for relative in (_git_names(work_dir, "diff", "--name-only", "-z", baseline_head) + untracked)
-        if not relative.startswith((".scratch/", ".worker-ghosts/"))
-        and not (work_dir / relative).resolve().is_relative_to(snapshot_path)
-        and not (work_dir / relative).resolve().is_relative_to(archive_path)
-    ))
     archive_path.mkdir(parents=True)
-    (archive_path / "failed-files").mkdir()
     diff = subprocess.run(["git", "-C", str(work_dir), "diff", "--binary", baseline_head],
                           check=True, capture_output=True).stdout
     (archive_path / "changes.diff").write_bytes(diff)
@@ -2659,51 +2613,51 @@ def recover_attempt_baseline(work_dir, snapshot_path, archive_path, runtime_path
                               f"{baseline_head}..HEAD"], check=True,
                              capture_output=True, text=True).stdout
     atomic_write(archive_path / "commits.txt", commits)
-    failed_entries = {}
-    for relative in current_paths:
-        failed_entries[relative] = _save_git_path_state(
-            work_dir / relative, archive_path / "failed-files" / relative)
 
+    # In-memory preservation of runtime status files (e.g. tasks.txt, progress.log, status)
     runtime_states = {}
     for raw_path in runtime_paths:
         candidate = Path(raw_path)
         if not candidate.is_absolute():
             candidate = work_dir / candidate
-        runtime_states[str(candidate.resolve())] = _save_git_path_state(candidate,
-                                                                         archive_path / "runtime" / candidate.name)
-    atomic_write(archive_path / "failed-files.json", json.dumps(failed_entries,
-                  ensure_ascii=False, indent=2) + "\n")
+        if candidate.is_file():
+            runtime_states[str(candidate.resolve())] = candidate.read_bytes()
 
+    # Pure Git restore:
+    # 1. Reset all tracked files and index to baseline_head
     reset = subprocess.run(["git", "-C", str(work_dir), "reset", "--hard", baseline_head],
                            check=False, capture_output=True)
     if reset.returncode:
         raise RuntimeError("could not reset failed attempt commits: " +
                            reset.stderr.decode("utf-8", "replace"))
-    baseline_paths = set(metadata["paths"])
+
+    # 2. Clean only newly introduced untracked files (preserving baseline untracked & runtime)
+    baseline_untracked = set(metadata.get("untracked", []))
     runtime_resolved = set(runtime_states)
     for relative in _git_names(work_dir, "ls-files", "--others", "--exclude-standard", "-z"):
-        path = work_dir / relative
-        if (relative in baseline_paths or relative.startswith((".scratch/", ".worker-ghosts/"))
-                or path.resolve().is_relative_to(snapshot_path)
-                or path.resolve().is_relative_to(archive_path)
-                or str(path.resolve()) in runtime_resolved):
+        if relative in baseline_untracked or relative.startswith((".scratch/", ".worker-ghosts/")):
             continue
-        _restore_git_path_state(path, {"kind": "missing"})
-    for relative, state in metadata["paths"].items():
-        content = snapshot_path / "files" / relative
-        _restore_git_path_state(work_dir / relative, state, content)
-    index_state = metadata.get("index", {"kind": "missing"})
-    _restore_git_path_state(metadata["index_path"], index_state, snapshot_path / "index")
-    runtime_meta = {}
-    for raw_path, state in runtime_states.items():
-        candidate = Path(raw_path)
-        content = archive_path / "runtime" / candidate.name
-        _restore_git_path_state(candidate, state, content)
-        runtime_meta[raw_path] = state
+        p = work_dir / relative
+        if str(p.resolve()) in runtime_resolved:
+            continue
+        if p.is_file() or p.is_symlink():
+            p.unlink()
+        elif p.is_dir():
+            shutil.rmtree(p)
+
+    # 3. Apply baseline stash if one was created at attempt start
+    stash = metadata.get("stash", "")
+    if stash:
+        subprocess.run(["git", "-C", str(work_dir), "stash", "apply", "--index", stash],
+                       check=False, capture_output=True)
+
+    # 4. Restore in-memory runtime files
+    for path_str, content in runtime_states.items():
+        Path(path_str).write_bytes(content)
+
     atomic_write(archive_path / "recovery.json", json.dumps({
-        "task_id": metadata["task_id"], "attempt_id": metadata["attempt_id"],
+        "task_id": metadata.get("task_id", ""), "attempt_id": metadata.get("attempt_id", ""),
         "baseline_head": baseline_head, "recovered": True,
-        "runtime_paths": runtime_meta,
     }, ensure_ascii=False, indent=2) + "\n")
     return archive_path
 
@@ -2726,11 +2680,7 @@ def rollback_failed_task(root, work_dir, task_id, runtime_paths, baseline_snapsh
     while backup.exists():
         backup = root / ".scratch" / "failed_tasks" / f"{task_id}_{stamp}_{suffix}"
         suffix += 1
-    untracked = subprocess.run(
-        ["git", "-C", str(work_dir), "ls-files", "--others", "--exclude-standard", "-z"],
-        check=False, capture_output=True,
-    )
-    (backup / "untracked").mkdir(parents=True)
+    backup.mkdir(parents=True)
     print(f"[WORKER] Isolating failed changes to {backup} and resetting clean git tree...",
           file=sys.stderr)
 
@@ -2740,14 +2690,22 @@ def rollback_failed_task(root, work_dir, task_id, runtime_paths, baseline_snapsh
     status = subprocess.run(["git", "-C", str(work_dir), "status", "--porcelain"],
                             check=False, capture_output=True)
     (backup / "status.txt").write_bytes(status.stdout)
-    for raw_path in untracked.stdout.split(b"\0"):
-        if not raw_path:
-            continue
-        relative = Path(os.fsdecode(raw_path))
-        source = work_dir / relative
-        destination = backup / "untracked" / relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(source), str(destination))
+
+    runtime_states = {}
+    for raw_path in runtime_paths:
+        candidate = Path(raw_path)
+        if not candidate.is_absolute():
+            candidate = work_dir / candidate
+        if candidate.is_file():
+            runtime_states[str(candidate.resolve())] = candidate.read_bytes()
+
+    subprocess.run(["git", "-C", str(work_dir), "reset", "--hard", "HEAD"],
+                   check=False, capture_output=True)
+    subprocess.run(["git", "-C", str(work_dir), "clean", "-fd", "-e", ".scratch", "-e", ".worker*"],
+                   check=False, capture_output=True)
+
+    for path_str, content in runtime_states.items():
+        Path(path_str).write_bytes(content)
 
     restore_paths = ["."]
     for runtime_path in runtime_paths:

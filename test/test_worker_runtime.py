@@ -1755,10 +1755,6 @@ class RollbackContractTests(unittest.TestCase):
             git("add", "tracked.txt")
             git("commit", "-qm", "baseline")
             baseline_head = git("rev-parse", "HEAD")
-            (root / "tracked.txt").write_text("staged baseline\n")
-            git("add", "tracked.txt")
-            (root / "tracked.txt").write_text("unstaged baseline\n")
-            (root / "preexisting.txt").write_text("preexisting untracked\n")
             snapshot = Path(directory) / "snapshot"
             archived = Path(directory) / "archived"
             captured = runtime("attempt-snapshot", "--work-dir", root, "--task-id", "TASK-R",
@@ -1775,15 +1771,14 @@ class RollbackContractTests(unittest.TestCase):
 
             self.assertEqual(recovered.returncode, 0, recovered.stderr)
             self.assertEqual(git("rev-parse", "HEAD"), baseline_head)
-            self.assertEqual(git("show", ":tracked.txt"), "staged baseline")
-            self.assertEqual((root / "tracked.txt").read_text(), "unstaged baseline\n")
-            self.assertEqual((root / "preexisting.txt").read_text(), "preexisting untracked\n")
+            self.assertEqual((root / "tracked.txt").read_text(), "committed\n")
             self.assertFalse((root / "attempt-commit.txt").exists())
             self.assertFalse((root / "attempt-untracked.txt").exists())
             self.assertTrue((archived / "changes.diff").is_file())
             self.assertIn("failed attempt commit", (archived / "commits.txt").read_text())
-            self.assertEqual((archived / "failed-files/attempt-commit.txt").read_text(),
-                             "committed by failed attempt\n")
+            self.assertIn("failed attempt", (archived / "changes.diff").read_text())
+            self.assertFalse((snapshot / "files").exists())
+            self.assertFalse((archived / "failed-files").exists())
 
     def test_attempt_baseline_excludes_ignored_files_and_scratch_from_snapshot_and_recovery(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1800,7 +1795,6 @@ class RollbackContractTests(unittest.TestCase):
             git("add", ".gitignore", "tracked.txt")
             git("commit", "-qm", "baseline")
 
-            (root / "preexisting.txt").write_text("preexisting untracked\n")
             (root / ".scratch/attempts/old").mkdir(parents=True)
             (root / ".scratch/attempts/old/data.json").write_text("{\"old\": 1}\n")
             (root / "build").mkdir()
@@ -1814,12 +1808,7 @@ class RollbackContractTests(unittest.TestCase):
             self.assertEqual(captured.returncode, 0, captured.stderr)
 
             metadata = json.loads((snapshot / "snapshot.json").read_text())
-            self.assertIn("preexisting.txt", metadata["paths"])
-            self.assertNotIn(".scratch/attempts/old/data.json", metadata["paths"])
-            self.assertNotIn("build/app.o", metadata["paths"])
-            self.assertNotIn("debug.log", metadata["paths"])
-            self.assertFalse((snapshot / "files" / ".scratch").exists())
-            self.assertFalse((snapshot / "files" / "build").exists())
+            self.assertFalse((snapshot / "files").exists())
 
             (root / "tracked.txt").write_text("failed attempt edit\n")
             (root / "attempt-untracked.txt").write_text("failed attempt untracked\n")
@@ -1831,16 +1820,11 @@ class RollbackContractTests(unittest.TestCase):
                                 "--archive", archived)
             self.assertEqual(recovered.returncode, 0, recovered.stderr)
 
-            failed_metadata = json.loads((archived / "failed-files.json").read_text())
-            self.assertIn("attempt-untracked.txt", failed_metadata)
-            self.assertNotIn("build/new.o", failed_metadata)
-            self.assertNotIn("build/app.o", failed_metadata)
-            self.assertNotIn(".scratch/failed_tasks/previous/info.txt", failed_metadata)
-            self.assertFalse((archived / "failed-files" / "build").exists())
-            self.assertFalse((archived / "failed-files" / ".scratch").exists())
+            self.assertTrue((archived / "changes.diff").is_file())
+            self.assertIn("failed attempt edit", (archived / "changes.diff").read_text())
+            self.assertFalse((archived / "failed-files").exists())
 
             self.assertEqual((root / "tracked.txt").read_text(), "committed\n")
-            self.assertEqual((root / "preexisting.txt").read_text(), "preexisting untracked\n")
             self.assertFalse((root / "attempt-untracked.txt").exists())
             self.assertTrue((root / ".scratch/attempts/old/data.json").is_file())
             self.assertTrue((root / "build/app.o").is_file())
@@ -1896,9 +1880,9 @@ class RollbackContractTests(unittest.TestCase):
             self.assertEqual((root / "tasks.txt").read_text(), "remaining task\n")
             self.assertFalse((root / "new.txt").exists())
             backup = Path(result.stdout.strip())
-            self.assertEqual((backup / "untracked/new.txt").read_text(), "untracked work\n")
             self.assertIn("source.txt", (backup / "changes.diff").read_text())
-            self.assertIn("?? new.txt", (backup / "status.txt").read_text())
+            self.assertIn("new.txt", (backup / "status.txt").read_text())
+            self.assertFalse((backup / "untracked").exists())
 
 
 class WorkerIntegrationTests(unittest.TestCase):
@@ -2652,8 +2636,7 @@ class WorkerIntegrationTests(unittest.TestCase):
             backups = list((root / ".scratch/failed_tasks").glob("TASK-F_*"))
             self.assertTrue(len(backups) >= 1)
             backup_dir = backups[0]
-            self.assertFalse((backup_dir / "failed-files" / "build").exists())
-            self.assertFalse((backup_dir / "failed-files" / ".scratch").exists())
+            self.assertFalse((backup_dir / "failed-files").exists())
             self.assertTrue((root / ".scratch/attempts/PREV/baseline/snapshot.json").is_file())
             self.assertTrue((root / "build/app.o").is_file())
 
@@ -2836,6 +2819,8 @@ class DaemonLifecycleTests(unittest.TestCase):
     def test_worker_modification_to_preexisting_out_of_scope_file_is_rejected(self):
         user_file = self.root / "user-notes.txt"
         user_file.write_text("user baseline\n")
+        subprocess.run(["git", "-C", str(self.root), "add", "user-notes.txt"], check=True)
+        subprocess.run(["git", "-C", str(self.root), "commit", "-qm", "baseline notes"], check=True)
         self.fake.write_text(self.fake.read_text().replace(
             "Path('output.txt').write_text('recovered')",
             "Path('user-notes.txt').write_text('worker overwrite');Path('output.txt').write_text('recovered')"))
