@@ -2739,6 +2739,92 @@ class WorkerIntegrationTests(unittest.TestCase):
             self.assertNotIn("[SENTINEL_COMPLETED]", result.stdout)
             completer.wait(timeout=5)
 
+    def test_sentinel_completes_expected_task_when_queue_has_remaining_tasks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "repo"
+            (root / "scripts").mkdir(parents=True)
+            (root / "queue").mkdir()
+            shutil.copy2(ROOT / "scripts/watch_worker.sh", root / "scripts/watch_worker.sh")
+            (root / "queue/tasks.txt").write_text("TASK-NEXT | LEVEL: 1\n")
+            (root / "queue/tasks.done").write_text("")
+            (root / "queue/progress.log").write_text("")
+            (root / "queue/worker.json").write_text(json.dumps({"state": "RUNNING", "current_task": "TASK-1"}))
+            completion = (
+                "sleep 0.05; "
+                "printf '[2026-01-01] [DONE] TASK-1\\n' >> queue/tasks.done; "
+                "printf '[MECHANICAL_AUDIT] Status: PASS | Task: TASK-1 | Verify_Exit: 0\\n' >> queue/progress.log; "
+                "printf '{\\\"state\\\":\\\"RUNNING\\\", \\\"current_task\\\":\\\"TASK-NEXT\\\"}\\n' > queue/worker.json"
+            )
+            completer = subprocess.Popen(["bash", "-c", completion], cwd=root,
+                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+            result = subprocess.run(
+                ["bash", str(root / "scripts/watch_worker.sh"), "2", "0.01", "TASK-1"],
+                cwd=root, env={**os.environ, "TASKS_FILE": "queue/tasks.txt",
+                               "TASKS_DONE_FILE": "queue/tasks.done",
+                               "STATUS_FILE": "queue/worker.json",
+                               "PROGRESS_FILE": "queue/progress.log"},
+                capture_output=True, text=True, timeout=10,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("[SENTINEL_COMPLETED] Task TASK-1", result.stdout)
+            completer.wait(timeout=5)
+
+    def test_sentinel_reports_agent_no_response(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "repo"
+            (root / "scripts").mkdir(parents=True)
+            (root / "queue").mkdir()
+            shutil.copy2(ROOT / "scripts/watch_worker.sh", root / "scripts/watch_worker.sh")
+            (root / "queue/tasks.txt").write_text("TASK-1 | LEVEL: 1\n")
+            (root / "queue/tasks.done").write_text("")
+            (root / "queue/progress.log").write_text("")
+            (root / "queue/worker.json").write_text(json.dumps({"state": "RUNNING"}))
+            completion = (
+                "sleep 0.05; "
+                "printf '{\\\"state\\\":\\\"AGENT_NO_RESPONSE\\\"}\\n' > queue/worker.json"
+            )
+            completer = subprocess.Popen(["bash", "-c", completion], cwd=root,
+                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+            result = subprocess.run(
+                ["bash", str(root / "scripts/watch_worker.sh"), "2", "0.01"],
+                cwd=root, env={**os.environ, "TASKS_FILE": "queue/tasks.txt",
+                               "TASKS_DONE_FILE": "queue/tasks.done",
+                               "STATUS_FILE": "queue/worker.json",
+                               "PROGRESS_FILE": "queue/progress.log"},
+                capture_output=True, text=True, timeout=10,
+            )
+
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            self.assertIn("[SENTINEL_AGENT_NO_RESPONSE]", result.stdout)
+            completer.wait(timeout=5)
+
+    def test_sentinel_reports_worker_process_died(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "repo"
+            (root / "scripts").mkdir(parents=True)
+            (root / "queue").mkdir()
+            shutil.copy2(ROOT / "scripts/watch_worker.sh", root / "scripts/watch_worker.sh")
+            (root / "queue/tasks.txt").write_text("TASK-1 | LEVEL: 1\n")
+            (root / "queue/tasks.done").write_text("")
+            (root / "queue/progress.log").write_text("")
+            # A PID that definitely doesn't exist
+            (root / "queue/worker.json").write_text(json.dumps({"state": "RUNNING", "pid": 99999999}))
+
+            result = subprocess.run(
+                ["bash", str(root / "scripts/watch_worker.sh"), "2", "0.01"],
+                cwd=root, env={**os.environ, "TASKS_FILE": "queue/tasks.txt",
+                               "TASKS_DONE_FILE": "queue/tasks.done",
+                               "STATUS_FILE": "queue/worker.json",
+                               "PROGRESS_FILE": "queue/progress.log"},
+                capture_output=True, text=True, timeout=10,
+            )
+
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            self.assertIn("[SENTINEL_WORKER_DIED]", result.stdout)
+
     def test_launcher_runs_python_daemon_and_cleans_pid_when_run_once_queue_is_empty(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "repo"

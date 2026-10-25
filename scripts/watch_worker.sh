@@ -32,6 +32,7 @@ if [ -f "$TASKS_DONE_FILE" ]; then
   LAST_DONE_BYTES=$(wc -c < "$TASKS_DONE_FILE" | tr -d '[:space:]')
 fi
 TRACKED_TASKS=""
+AUDITED_DONE_TASKS=""
 
 track_task() {
   local task_id="$1"
@@ -73,9 +74,11 @@ while true; do
 
   STATE="UNKNOWN"
   CURRENT_TASK=""
+  WORKER_PID=""
   if [ -f "$STATUS_FILE" ]; then
     STATE=$(grep -o '"state":[[:space:]]*"[^"]*"' "$STATUS_FILE" 2>/dev/null | cut -d'"' -f4 || true)
     CURRENT_TASK=$(grep -o '"current_task":[[:space:]]*"[^"]*"' "$STATUS_FILE" 2>/dev/null | grep -Eo 'TASK-[[:alnum:]_.-]+' | head -n 1 || true)
+    WORKER_PID=$(grep -o '"pid":[[:space:]]*[0-9]*' "$STATUS_FILE" 2>/dev/null | awk '{print $2}' || true)
     [ -z "$STATE" ] && STATE="UNKNOWN"
   fi
   track_task "$CURRENT_TASK"
@@ -114,14 +117,25 @@ while true; do
         fi
       done <<< "$MATCHING_AUDITS"
       if [ "$FRESH_AUDIT" -eq 1 ]; then
-        if [ "$(grep -v '^[[:space:]]*#' "$TASKS_FILE" 2>/dev/null | grep -v '^[[:space:]]*$' | wc -l | tr -d '[:space:]')" -eq 0 ] \
-          && { [ "$STATE" = "IDLE" ] || [ "$STATE" = "STOPPED" ]; }; then
+        case " $AUDITED_DONE_TASKS " in
+          *" $task_id "*) ;;
+          *) AUDITED_DONE_TASKS="${AUDITED_DONE_TASKS}${AUDITED_DONE_TASKS:+ }$task_id" ;;
+        esac
+        if [ -n "$EXPECTED_TASK_ID" ] && [ "$task_id" = "$EXPECTED_TASK_ID" ]; then
           echo "[SENTINEL_COMPLETED] Task $task_id completed with a task-scoped mechanical audit PASS in ${ELAPSED}s."
           exit 0
         fi
       fi
     fi
   done
+
+  REMAINING_TASKS=$(grep -v '^[[:space:]]*#' "$TASKS_FILE" 2>/dev/null | grep -v '^[[:space:]]*$' | wc -l | tr -d '[:space:]')
+  if [ -z "$EXPECTED_TASK_ID" ] && [ "$REMAINING_TASKS" -eq 0 ] && { [ "$STATE" = "IDLE" ] || [ "$STATE" = "STOPPED" ]; }; then
+    if [ -n "$AUDITED_DONE_TASKS" ]; then
+      echo "[SENTINEL_COMPLETED] Task $AUDITED_DONE_TASKS completed with a task-scoped mechanical audit PASS in ${ELAPSED}s."
+      exit 0
+    fi
+  fi
 
   if [ "$STATE" = "SCOPE_BLOCKED" ]; then
     echo "[SENTINEL_SCOPE_BLOCKED] Worker encountered unannounced downstream scope after ${ELAPSED}s. (No-fault escalation)."
@@ -130,6 +144,21 @@ while true; do
   if [ "$STATE" = "BLOCKED" ] || [ "$STATE" = "AWAITING_GUIDANCE" ]; then
     echo "[SENTINEL_BLOCKED] Worker entered state: $STATE after ${ELAPSED}s."
     exit 1
+  fi
+  if [ "$STATE" = "AGENT_NO_RESPONSE" ]; then
+    echo "[SENTINEL_AGENT_NO_RESPONSE] Worker entered state: $STATE after ${ELAPSED}s."
+    exit 1
+  fi
+  if [ "$STATE" = "PAUSED_FOR_PLANNER" ]; then
+    echo "[SENTINEL_PAUSED_FOR_PLANNER] Worker entered state: $STATE after ${ELAPSED}s."
+    exit 1
+  fi
+
+  if [ -n "$WORKER_PID" ] && [ "$STATE" = "RUNNING" ]; then
+    if ! kill -0 "$WORKER_PID" 2>/dev/null; then
+      echo "[SENTINEL_WORKER_DIED] Worker process $WORKER_PID terminated unexpectedly."
+      exit 1
+    fi
   fi
 
   sleep "$POLL_INTERVAL"
