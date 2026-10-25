@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -1825,6 +1826,37 @@ class MechanicalAuditContractTests(unittest.TestCase):
             self.assertEqual(audit["status"], 6)
             self.assertEqual(audit["verify_exit"], 124)
 
+    def test_research_audit_permits_worker_runtime_internal_state_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            def git(*args):
+                return subprocess.run(["git", "-C", str(root), *args], check=True,
+                                      capture_output=True, text=True).stdout.strip()
+            git("config", "user.name", "Audit Test")
+            git("config", "user.email", "audit@example.invalid")
+            (root / "source.txt").write_text("baseline\n")
+            git("add", "source.txt")
+            git("commit", "-qm", "baseline")
+            base = git("rev-parse", "HEAD")
+
+            report = root / ".reports/research/SUMMARY.md"
+            report.parent.mkdir(parents=True)
+            report.write_text("<!-- REPORT_META: Task=TASK-R1 | Commit=" + base[:7] + " -->\n# Research Summary\n")
+
+            (root / ".worker-ghost-state.default.json").write_text("{}\n")
+            ghosts_dir = root / ".worker-ghosts"
+            ghosts_dir.mkdir()
+            (ghosts_dir / "artifact.txt").write_text("ghost data\n")
+
+            result = runtime("mechanical-audit", "--work-dir", root, "--base", base,
+                             "--target", ".reports/research/SUMMARY.md", "--title", "[RESEARCH] investigate seams",
+                             "--task-id", "TASK-R1")
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            audit = json.loads(result.stdout)
+            self.assertEqual(audit["status"], 0, f"Unexpected audit failure: {audit.get('error')}")
+
 
 class ReportArchiveContractTests(unittest.TestCase):
     def test_research_archive_moves_active_reports_but_keeps_archive(self):
@@ -3160,6 +3192,41 @@ class DaemonLifecycleTests(unittest.TestCase):
         self.assertEqual((self.root / "tasks.done").read_text(), "")
         state = json.loads((self.root / ".worker-agent-state.default.json").read_text())
         self.assertEqual(state["task_exclusions"], {"TASK-TIMEOUT": ["test"]})
+
+    def test_daemon_ignores_sighup_and_remains_alive(self):
+        self.start()
+        self.wait_for(lambda: self.state() == "IDLE")
+        if hasattr(signal, "SIGHUP"):
+            self.process.send_signal(signal.SIGHUP)
+            time.sleep(0.3)
+            self.assertIsNone(self.process.poll(), "Daemon unexpectedly died after SIGHUP")
+            self.assertEqual(self.state(), "IDLE")
+
+    def test_daemon_remains_alive_when_recovery_fails_in_daemon_mode(self):
+        self.fake.write_text(
+            "#!/bin/sh\n"
+            "touch .git/index.lock\n"
+            "exit 1\n"
+        )
+        self.enqueue("TASK-RECOVERY-FAIL")
+        self.start()
+        self.wait_for(lambda: self.state() == "RECOVERY_FAILED")
+        time.sleep(0.3)
+        self.assertIsNone(self.process.poll(), "Daemon unexpectedly exited after recovery failure")
+        (self.root / ".git/index.lock").unlink(missing_ok=True)
+        self.fake.write_text(
+            "#!/usr/bin/env python3\nimport sys,json\nfrom pathlib import Path\n"
+            "Path('output.txt').write_text('recovered')\n"
+            "Path(sys.argv[sys.argv.index('--output-last-message')+1]).write_text("
+            "json.dumps({'outcome':'complete','changed':True,'commit_message':'feat: fixed'}))\n"
+        )
+        (self.root / "tasks.txt").write_text(
+            "TASK-RECOVERED | LEVEL: 1 | TARGET: output.txt | ACTION: fix | VERIFY: test -f output.txt\n"
+        )
+        self.wait_for(lambda: (self.root / "tasks.done").exists() and
+                      "[DONE] TASK-RECOVERED" in (self.root / "tasks.done").read_text())
+        self.wait_for(lambda: self.state() == "IDLE")
+        self.assertIsNone(self.process.poll(), "Daemon unexpectedly exited after recovery")
 
 
 class TrialDemoIntegrationTests(unittest.TestCase):

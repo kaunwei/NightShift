@@ -1220,7 +1220,7 @@ def finalize_structured_adapter_result(args, result):
             untracked = subprocess.run(["git", "-C", args.work_dir, "ls-files", "--others",
                                         "--exclude-standard"], capture_output=True, text=True,
                                        check=False).stdout.splitlines()
-        runtime_file = re.compile(r"(?:^|/)(?:progress\.log|tasks\.txt|tasks\.done|worker\..*\.status|\.worker\..*|\.preview(?:/|$)|\.reports(?:/|$))")
+        runtime_file = re.compile(r"(?:^|/)(?:progress\.log|tasks\.txt|tasks\.done|worker\..*\.status|\.worker.*|\.preview(?:/|$)|\.reports(?:/|$))")
         changes = [name for name in tracked + untracked if not runtime_file.search(name)]
         if changes:
             raise ValueError("no_change result conflicts with workspace changes")
@@ -1608,6 +1608,11 @@ def worker_daemon(root):
         stop_requested.set()
     signal.signal(signal.SIGINT, request_stop)
     signal.signal(signal.SIGTERM, request_stop)
+    if hasattr(signal, "SIGHUP"):
+        try:
+            signal.signal(signal.SIGHUP, signal.SIG_IGN)
+        except (ValueError, OSError):
+            pass
 
     status_lock = _workspace_state_lock
     latest_status = None
@@ -1682,8 +1687,22 @@ def worker_daemon(root):
         run_once = env_bool("RUN_ONCE", "0")
         pending_planner = None
         waiting_for_quota = False
+        recovery_halted_task = ""
 
         while not stop_requested.is_set():
+            if recovery_halted_task and not pause_file.exists():
+                state_title = f"{recovery_halted_task} (recovery halted); awaiting revised queue or intervention"
+                update_status("RECOVERY_FAILED", state_title)
+                stop_requested.wait(poll_interval)
+                head_task = ""
+                if tasks_file.is_file():
+                    lines = [l.strip() for l in tasks_file.read_text(encoding="utf-8").splitlines()
+                             if l.strip() and not l.lstrip().startswith("#")]
+                    head_task = lines[0].split("|", 1)[0].replace(" ", "") if lines else ""
+                if head_task != recovery_halted_task:
+                    recovery_halted_task = ""
+                else:
+                    continue
             if waiting_for_quota and not pause_file.exists():
                 state = read_agent_state(agent_state_path)
                 if all(agent["id"] in state["exhausted"] for agent in agents):
@@ -1955,13 +1974,21 @@ def worker_daemon(root):
                                   current, total, remaining, percent, bar)
                     append_line(progress_file,
                                 f"[RECOVERY_HALTED] {task_id}: execution stop was not confirmed; task requeued without restoring workspace.")
-                    break
+                    if run_once:
+                        break
+                    recovery_halted_task = task_id
+                    stop_requested.wait(poll_interval)
+                    continue
                 elif outcome == "timeout":
                     print(f"[{stamp_now}] [TIMEOUT] Task exceeded {timeout}s limit!")
                     record_task_score("hard_failure", f"timeout after {timeout}s")
                     archive = recover_current_attempt()
                     if archive is None:
-                        break
+                        if run_once:
+                            break
+                        recovery_halted_task = task_id
+                        stop_requested.wait(poll_interval)
+                        continue
                     if archive and Path(archive).is_dir():
                         diag_content = (f"# Failure Diagnostic: {task_id}\n\n"
                                         f"- Time: {stamp_now}\n"
@@ -1985,7 +2012,11 @@ def worker_daemon(root):
                     record_task_score("hard_failure", reason)
                     archive = recover_current_attempt()
                     if archive is None:
-                        break
+                        if run_once:
+                            break
+                        recovery_halted_task = task_id
+                        stop_requested.wait(poll_interval)
+                        continue
                     diagnostic_text = payload.get("diagnostic", "") if isinstance(payload, dict) else ""
                     if archive and Path(archive).is_dir():
                         diag_content = (f"# Failure Diagnostic: {task_id}\n\n"
@@ -2009,7 +2040,11 @@ def worker_daemon(root):
                 elif outcome == "scope":
                     print(f"[{stamp_now}] 🚧 [SCOPE BLOCKED] Worker honestly stopped at unannounced downstream boundaries.")
                     if recover_current_attempt() is None:
-                        break
+                        if run_once:
+                            break
+                        recovery_halted_task = task_id
+                        stop_requested.wait(poll_interval)
+                        continue
                     summary = ("=" * 80 + f"\n[SCOPE_BLOCKED] {task_id}: Downstream Scope Boundary Reached\n"
                                f"Time: {stamp_now} | Status: SCOPE_BLOCKED\nDetails: Compiler errors detected in files outside TARGET whitelist.\n"
                                "Worker honestly stopped without violating boundaries. (No credit deduction).\n"
@@ -2021,7 +2056,11 @@ def worker_daemon(root):
                 elif outcome == "guidance":
                     print(f"[{stamp_now}] ✋ [AWAITING GUIDANCE] Worker honestly requested manager guidance.")
                     if recover_current_attempt() is None:
-                        break
+                        if run_once:
+                            break
+                        recovery_halted_task = task_id
+                        stop_requested.wait(poll_interval)
+                        continue
                     append_line(done_file, f"[{stamp_now}] [GUIDANCE_REQUESTED] {task}")
                     update_status("AWAITING_GUIDANCE", task, duration, current, total,
                                   max(0, remaining - 1), percent, bar)
@@ -2059,9 +2098,17 @@ def worker_daemon(root):
                             final_state = "RECOVERY_FAILED"
                             update_status(final_state, f"{task_id} (baseline missing)", duration,
                                           current, total, remaining, percent, bar)
-                        break
+                        if run_once:
+                            break
+                        recovery_halted_task = task_id
+                        stop_requested.wait(poll_interval)
+                        continue
                     if recover_current_attempt() is None:
-                        break
+                        if run_once:
+                            break
+                        recovery_halted_task = task_id
+                        stop_requested.wait(poll_interval)
+                        continue
                     if cli_exit_code is not None and not failure_reason:
                         failure_reason = ("Codex final result format invalid" if result_error_code == "invalid_result"
                                           else f"Codex CLI exited with code {cli_exit_code}" if cli_exit_code
@@ -2098,7 +2145,11 @@ def worker_daemon(root):
                         pending_planner = (task_id, "GUARD_VIOLATION")
                         print(f"[{stamp()}] 🛑 [GUARD REJECTION] Post-flight validation failed: {guard_error}")
                         if recover_current_attempt() is None:
-                            break
+                            if run_once:
+                                break
+                            recovery_halted_task = task_id
+                            stop_requested.wait(poll_interval)
+                            continue
                         summary = (f"[MECHANICAL_AUDIT] Status: FAIL | Verify_Exit: {audit['verify_exit']} | Whitelist: {guard_status} | Tree: DIRTY\n"
                                    + "=" * 80 + f"\n[BLOCKED] {task_id}: Guard Validation Failed\n"
                                    f"Time: {stamp()} | Status: GUARD_VIOLATION\nFailure Reason: {guard_error}\n"
@@ -2158,7 +2209,7 @@ def git_audit(args):
                               check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout
 
     trees = attempt_audit_trees(args)
-    ignored = re.compile(r"progress\.log|tasks\.txt|tasks\.done|worker\..*\.status|\.preview|\.reports|\.worker-ghosts|\.worker-ghost-state")
+    ignored = re.compile(r"progress\.log|tasks\.txt|tasks\.done|worker\..*\.status|\.preview|\.reports|\.worker.*")
     if trees:
         changed = changed_tree_paths(args.work_dir, *trees)
         dirty = set(changed_tree_paths(args.work_dir, "HEAD", trees[1])).intersection(changed)
@@ -2342,7 +2393,7 @@ def mechanical_audit(args):
         status = subprocess.run(["git", "-C", args.work_dir, "status", "--porcelain"],
                                 check=False, capture_output=True, text=True).stdout
         dirty = [line for line in status.splitlines() if not re.search(
-            r"progress\.log|tasks\.txt|tasks\.done|worker\..*\.status|\.preview|\.worker\..*|\.reports/|\.reports", line)]
+            r"progress\.log|tasks\.txt|tasks\.done|worker\..*\.status|\.preview|\.worker.*|\.reports/|\.reports", line)]
         if dirty:
             guard_status = 12
             reason = "Research Zero-Touch Violation: Uncommitted/modified files detected after research (" + "\n".join(dirty) + ")."
