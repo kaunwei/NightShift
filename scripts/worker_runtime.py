@@ -969,13 +969,14 @@ def execute_registered_agents(args, agents, state_path, rollback):
         state["active_agent_id"] = next_agent["id"]
         atomic_write(state_path, json.dumps(state, ensure_ascii=False, indent=2) + "\n")
 
-        if is_no_response and consecutive_no_response >= 3:
-            print("[WORKER] AGENT_NO_RESPONSE: 3 consecutive switches without agent response; reporting to planner.", file=sys.stderr)
+        max_no_response = len(available)
+        if is_no_response and consecutive_no_response >= max_no_response:
+            print(f"[WORKER] AGENT_NO_RESPONSE: {consecutive_no_response} consecutive switches without agent response; reporting to planner.", file=sys.stderr)
             args.agent_no_response = True
             return 0, True
 
         reason = "no response" if is_no_response else "timed out"
-        print(f"[WORKER] Agent {agent['id']} {reason}; switching to {next_agent['id']} (attempt {consecutive_no_response}/3)...", file=sys.stderr)
+        print(f"[WORKER] Agent {agent['id']} {reason}; switching to {next_agent['id']} (attempt {consecutive_no_response}/{max_no_response})...", file=sys.stderr)
 
 
 def progress_bar(current, total, width=30):
@@ -1704,7 +1705,7 @@ def worker_daemon(root):
                     continue
             if waiting_for_quota and not pause_file.exists():
                 state = read_agent_state(agent_state_path)
-                if state.get("consecutive_no_response", 0) >= 3 or all(agent["id"] in state.get("exhausted", {}) for agent in agents):
+                if state.get("consecutive_no_response", 0) >= len(agents) or all(agent["id"] in state.get("exhausted", {}) for agent in agents):
                     update_status("AGENT_NO_RESPONSE", "Waiting for agent reset")
                     stop_requested.wait(poll_interval)
                     continue
@@ -1932,9 +1933,9 @@ def worker_daemon(root):
                     restore_task_front(tasks_file, raw_task)
                     warning = ("=" * 80 + f"\n[AGENT_NO_RESPONSE] {task_id}: agent no response\n"
                                f"Time: {stamp_now} | Status: AGENT_NO_RESPONSE\n"
-                               f"Task returned to {tasks_file}; 3 consecutive switches without agent response.\n" + "=" * 80)
+                               f"Task returned to {tasks_file}; all registered agents ({len(agents)}) returned no response.\n" + "=" * 80)
                     prepend_progress(progress_file, warning)
-                    print(f"[{stamp_now}] [AGENT_NO_RESPONSE] agent no response; 3 consecutive switches without response.")
+                    print(f"[{stamp_now}] [AGENT_NO_RESPONSE] agent no response; all registered agents ({len(agents)}) returned no response.")
                     update_status("AGENT_NO_RESPONSE", task, duration, current, total,
                                   remaining, percent, bar)
                     if run_once:

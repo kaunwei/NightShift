@@ -248,5 +248,62 @@ sys.exit(1)
         self.assertIn("TASK-FAIL", (self.root / "tasks.txt").read_text())
 
 
+    def test_two_consecutive_no_response_when_two_agents_registered(self):
+        bin_dir = Path(self.tmp.name) / "bin2"
+        bin_dir.mkdir()
+        calls_file = Path(self.tmp.name) / "calls2.log"
+
+        fake_agent = bin_dir / "fake-agent"
+        fake_agent.write_text(f"""#!/usr/bin/env python3
+import os, sys
+with open("{calls_file}", "a") as f:
+    f.write(os.environ.get("AGENT_NAME", "unknown") + "\\n")
+sys.exit(1)
+""")
+        fake_agent.chmod(0o755)
+
+        # Exactly 2 registered agents -> N = 2
+        agents_dict = {
+            "agent-1": {
+                "default": True,
+                "agent": {
+                    "adapter": "codex", "command": str(fake_agent), "args": [],
+                    "env": {"AGENT_NAME": "agent-1"}, "config": {"command": str(fake_agent)}
+                }
+            },
+            "agent-2": {
+                "default": False,
+                "agent": {
+                    "adapter": "codex", "command": str(fake_agent), "args": [],
+                    "env": {"AGENT_NAME": "agent-2"}, "config": {"command": str(fake_agent)}
+                }
+            }
+        }
+        (self.root / "scripts/adapters/agents.json").write_text(json.dumps(agents_dict, indent=2))
+        (self.root / ".worker-agent-state.default.json").unlink(missing_ok=True)
+        (self.root / "tasks.txt").write_text(
+            "TASK-FAIL2 | LEVEL: 1 | TARGET: output.txt | ACTION: [CODE: EXPAND] Write output | VERIFY: test -f output.txt\n"
+        )
+
+        env = {
+            **os.environ,
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "RUN_ONCE": "1",
+            "POLL_INTERVAL": "0"
+        }
+        res = subprocess.run(["bash", str(self.root / "worker.sh")], cwd=self.root, env=env,
+                             capture_output=True, text=True, timeout=30)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+
+        calls = calls_file.read_text().splitlines()
+        # Exactly 2 attempts because N = 2
+        self.assertEqual(calls, ["agent-1", "agent-2"])
+
+        status = json.loads((self.root / "worker.status").read_text())
+        self.assertEqual(status["state"], "AGENT_NO_RESPONSE")
+        state = json.loads((self.root / ".worker-agent-state.default.json").read_text())
+        self.assertEqual(state["consecutive_no_response"], 2)
+
+
 if __name__ == "__main__":
     unittest.main()

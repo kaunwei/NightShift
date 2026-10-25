@@ -2473,7 +2473,7 @@ class WorkerIntegrationTests(unittest.TestCase):
             self.assertIn("AGENT_NO_RESPONSE", result.stdout)
             self.assertEqual(json.loads((root / "worker.status").read_text())["state"], "AGENT_NO_RESPONSE")
             state = json.loads((root / ".worker-agent-state.default.json").read_text())
-            self.assertEqual(state["consecutive_no_response"], 3)
+            self.assertEqual(state["consecutive_no_response"], 2)
 
     def test_worker_does_not_switch_agents_for_non_quota_cli_errors(self):
         with tempfile.TemporaryDirectory() as directory:
