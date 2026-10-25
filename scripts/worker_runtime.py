@@ -1610,7 +1610,7 @@ def worker_daemon(root):
     signal.signal(signal.SIGTERM, request_stop)
     if hasattr(signal, "SIGHUP"):
         try:
-            signal.signal(signal.SIGHUP, signal.SIG_IGN)
+            signal.signal(signal.SIGHUP, request_stop)
         except (ValueError, OSError):
             pass
 

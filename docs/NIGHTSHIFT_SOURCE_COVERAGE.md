@@ -27,10 +27,10 @@ For every later simplification, compare the changed source hashes and each affec
 | [scripts/reorder_queue.sh](../scripts/reorder_queue.sh) | 5cfc56907dafd4b22960199cfff8a413d8542a1251357867d7b5468bee88210a |
 | [scripts/status.sh](../scripts/status.sh) | 2449d0718c5a364e9358947d88e0ab66723b43a4ae866cde9787d636d2f814f2 |
 | [scripts/watch_worker.sh](../scripts/watch_worker.sh) | a073c874ac4c05d9a6e976c682155d19be6ad613e6730575b515f8cce2597c0d |
-| [scripts/worker_runtime.py](../scripts/worker_runtime.py) | 737db3f0049d3aa46e5d6c6cf933ab6fb7bc6df97ddf2014567b0df51b5c3c74 |
+| [scripts/worker_runtime.py](../scripts/worker_runtime.py) | 25609d83f77133e5d295078ddb76d1b6b7137ca6d2312a5f537b3acd9a1ffda7 |
 | [test/README.md](../test/README.md) | d6d42b638942f532b6934c4d755f32fc45c9693b29a6628b3bdf328b85095942 |
 | [test/fixtures/trial-demo/README.md](../test/fixtures/trial-demo/README.md) | 4384b3061cefc038ccc5b01f566f78afaca4984f7204a43e58f20b44d54db63b |
-| [test/test_worker_runtime.py](../test/test_worker_runtime.py) | a584e8742f4bed44efc3b43f383d753608a3633cb3d251aea802980eba3111a0 |
+| [test/test_worker_runtime.py](../test/test_worker_runtime.py) | a48a37f368e57a753dbfcf924d24c9015914db5d4fa421618c487474ccdaf967 |
 | [update.sh](../update.sh) | be34d79ad7d2511c8c5d93033dbb630e976d5c84a8d2bbe92f78ecf343932950 |
 | [worker.sh](../worker.sh) | bf3f2e87e111a62d3fad6e7cbaaa0dae2fdd2385084efd454aa37ef0c652e74c |
 

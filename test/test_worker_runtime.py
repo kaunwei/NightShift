@@ -3193,14 +3193,14 @@ class DaemonLifecycleTests(unittest.TestCase):
         state = json.loads((self.root / ".worker-agent-state.default.json").read_text())
         self.assertEqual(state["task_exclusions"], {"TASK-TIMEOUT": ["test"]})
 
-    def test_daemon_ignores_sighup_and_remains_alive(self):
+    def test_daemon_stops_on_sighup(self):
         self.start()
         self.wait_for(lambda: self.state() == "IDLE")
         if hasattr(signal, "SIGHUP"):
             self.process.send_signal(signal.SIGHUP)
-            time.sleep(0.3)
-            self.assertIsNone(self.process.poll(), "Daemon unexpectedly died after SIGHUP")
-            self.assertEqual(self.state(), "IDLE")
+            self.process.wait(timeout=5)
+            self.assertEqual(self.process.poll(), 0)
+            self.assertEqual(self.state(), "STOPPED")
 
     def test_daemon_remains_alive_when_recovery_fails_in_daemon_mode(self):
         self.fake.write_text(
