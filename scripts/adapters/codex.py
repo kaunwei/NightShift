@@ -93,16 +93,7 @@ with open(log, "w", encoding="utf-8") as stream:
                 error = event.get("error")
                 error_message = event.get("message") or (error.get("message") if isinstance(error, dict) else error)
                 if isinstance(error_message, str): error_messages.append(error_message)
-        except ValueError:
-            # Legacy CLIs may emit a plain fatal diagnostic instead of JSONL.
-            # Accept only a diagnostic at the start of the line, never arbitrary
-            # quoted tool output or numeric substrings from test results.
-            if re.match(r"\s*(?:(?:error|fatal):\s*)?(?:insufficient_quota\b|"
-                        r"resource_exhausted\b|rate limit (?:exceeded|reached)\b|"
-                        r"out of credits\b|(?:http|status code)\s+429\b)",
-                        line, re.IGNORECASE):
-                error_messages.append(line.strip())
-        except AttributeError:
+        except (ValueError, AttributeError):
             pass
         if actions > int(limit) and process.poll() is None:
             over_budget = True; process.terminate()
@@ -111,12 +102,14 @@ with open(log, "w", encoding="utf-8") as stream:
         process.kill(); code = process.wait(); over_budget = True
 if actions > int(limit): over_budget = True
 diagnostic = "\n".join(error_messages)
-# Tool output and quoted transcripts may contain quota-like strings. Only
-# Codex's own error events or anchored plain CLI diagnostics establish quota failures.
-quota = code != 0 and any(term in diagnostic.lower() for term in (
-    "insufficient_quota", "rate limit", "resource_exhausted",
-    "http 429", "status code 429", "out of credits"))
-outcome = "quota_exhausted" if quota else "step_budget_exceeded" if over_budget else "complete" if code == 0 else "failure"
+if over_budget:
+    outcome = "step_budget_exceeded"
+elif code != 0 and actions == 0:
+    outcome = "no_response"
+elif code == 0:
+    outcome = "complete"
+else:
+    outcome = "failure"
 text = ""
 try:
     with open(message, encoding="utf-8") as source: text = source.read()
@@ -139,9 +132,16 @@ if not isinstance(payload, dict):
                ("CLOSEOUT_INCOMPLETE", "blocked"), ("CLOSEOUT_REQUIRED", "closeout_required"))
     final_outcome = next((value for marker, value in markers
                           if re.search(r"\[" + marker + r"\]", text)), "failure")
-    payload = {"outcome": final_outcome, "diagnostic": text or diagnostic or "Codex returned no final result"}
-    if final_outcome == "failure": payload["error_code"] = "invalid_result"
-allowed = {"complete", "no_change", "closeout_required", "blocked", "scope_blocked", "guidance", "failure"}
+    payload = {"outcome": final_outcome, "diagnostic": text or diagnostic or "no response"}
+    if final_outcome == "failure":
+        if code != 0 and actions == 0:
+            outcome = "no_response"
+            payload["outcome"] = "no_response"
+            payload["error_code"] = "no_response"
+            payload["diagnostic"] = text or diagnostic or "no response"
+        else:
+            payload["error_code"] = "invalid_result"
+allowed = {"complete", "no_change", "closeout_required", "blocked", "scope_blocked", "guidance", "failure", "no_response"}
 if not isinstance(payload.get("outcome"), str) or payload["outcome"] not in allowed:
     payload = {"outcome": "failure", "error_code": "invalid_result",
                "diagnostic": "Codex final JSON requires a supported outcome"}
@@ -149,12 +149,13 @@ payload["actions_used"] = actions
 payload["cli_exit_code"] = code
 if outcome != "complete":
     payload["outcome"] = outcome
+    final_status = "failed" if outcome == "failure" else outcome
 else:
     # CLI success only completes execution; the final result decides task success.
-    outcome = "complete" if payload["outcome"] in ("complete", "no_change") else (
-        "closeout_required" if payload["outcome"] == "closeout_required" else "failure")
+    final_status = "complete" if payload["outcome"] in ("complete", "no_change") else (
+        "closeout_required" if payload["outcome"] == "closeout_required" else "failed")
 json.dump(payload, open(result, "w", encoding="utf-8"))
-json.dump({"status": "failed" if outcome == "failure" else outcome, "result_location": result, "exit_code": code}, open(status, "w", encoding="utf-8"))
+json.dump({"status": final_status, "result_location": result, "exit_code": code}, open(status, "w", encoding="utf-8"))
 '''
     child_env = {**request.get("environment", {}),
                  "NIGHTSHIFT_TASK_ID": request.get("task_id", ""),

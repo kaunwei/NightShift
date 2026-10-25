@@ -13,7 +13,7 @@ import uuid
 
 
 OUTCOMES = {"complete", "no_change", "closeout_required", "blocked",
-            "scope_blocked", "guidance", "failure"}
+            "scope_blocked", "guidance", "failure", "no_response"}
 
 
 def emit(value):
@@ -277,11 +277,9 @@ try:
     if stopping:
         state, payload = "cancelled", {"outcome":"failure", "diagnostic":"Aider was cancelled."}
     elif code != 0:
-        quota = any(term in diagnostic.lower() for term in
-            ("ratelimiterror", "insufficient_quota", "resource_exhausted", "http 429", "status code 429"))
-        state = "quota_exhausted" if quota else "failed"
-        payload = {"outcome":"failure", "error_code":"quota_exhausted" if quota else "aider_exit",
-                   "diagnostic":f"Aider exited with status {code}.", "log_tail":diagnostic[-2000:]}
+        state = "no_response"
+        payload = {"outcome":"no_response", "error_code":"no_response",
+                   "diagnostic":"no response", "log_tail":diagnostic[-2000:]}
     else:
         # Import from this adapter file to keep protocol stdout clean and share
         # the same result parser used by contract probes.

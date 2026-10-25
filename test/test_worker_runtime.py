@@ -653,6 +653,29 @@ class BuiltinAdapterContractTests(unittest.TestCase):
             self.assertEqual(json.loads(executed.stdout)["status"], "quota_exhausted")
             self.assertEqual(json.loads((root / "result.json").read_text())["outcome"], "quota_exhausted")
 
+    def test_codex_adapter_recognizes_quota_from_plain_text_usage_limit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fake = root / "fake-codex"
+            fake.write_text(
+                "#!/usr/bin/env python3\nimport sys\n"
+                "print('You’ve hit your usage limit. Upgrade to Pro', flush=True)\n"
+                "sys.exit(1)\n")
+            fake.chmod(0o755)
+            (root / "prompt.txt").write_text("task")
+            request = {"protocol_version": 1, "overrides": {"command": str(fake)},
+                       "task_id": "TASK-CODEX-QUOTA-TEXT", "working_directory": str(root),
+                       "prompt_path": str(root / "prompt.txt"), "output_dir": str(root / "run"),
+                       "result_path": str(root / "result.json"), "limits": {"action_limit": 3}}
+            (root / "request.json").write_text(json.dumps(request))
+            executed = runtime("adapter-exec", "--command", sys.executable,
+                               "--adapter-arg", ROOT / "scripts/adapters/codex.py",
+                               "--request", root / "request.json", "--execution-timeout", "2",
+                               "--callback-timeout", "0.5")
+            self.assertEqual(executed.returncode, 0, executed.stderr)
+            self.assertEqual(json.loads(executed.stdout)["status"], "quota_exhausted")
+            self.assertEqual(json.loads((root / "result.json").read_text())["outcome"], "quota_exhausted")
+
     def test_codex_adapter_preserves_json_result_with_legacy_attempts_line(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -2364,60 +2387,11 @@ class WorkerIntegrationTests(unittest.TestCase):
                                     capture_output=True, text=True, timeout=45)
 
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            self.assertEqual(calls.read_text().splitlines(), ["gpt-6-luna"])
-            self.assertEqual((root / "tasks.txt").read_text().count("TASK-Q"), 1)
-            self.assertEqual((root / "tasks.done").read_text(), "")
-            events = root / ".worker-agent-events.jsonl"
-            self.assertTrue(events.is_file())
-            event = json.loads(events.read_text().splitlines()[-1])
-            self.assertEqual(event["cause"], "main_task_failover")
-            self.assertEqual((event["previous_registration_id"],
-                              event["current_registration_id"]), ("primary", "backup"))
-            gate = root / ".worker-dispatch-gate.json"
-            self.assertTrue(gate.exists())
-
-            watch = runtime("agent-events-watch", "--events", events,
-                            "--cursor", root / ".worker-agent-events.cursor.json",
-                            "--acknowledgements", root / ".worker-agent-events.acks.jsonl",
-                            "--gate", gate, "--handoff", root / "progress.log")
-            self.assertEqual(watch.returncode, 0, watch.stderr)
-            self.assertIn("[PLANNER_REVIEW_REQUIRED]", (root / "progress.log").read_text())
-            ack = runtime("agent-event-ack", "--events", events,
-                          "--acknowledgements", root / ".worker-agent-events.acks.jsonl",
-                          "--event-id", event["event_id"], "--resolution", "revised")
-            self.assertEqual(ack.returncode, 0, ack.stderr)
-            release = runtime("agent-events-watch", "--events", events,
-                              "--cursor", root / ".worker-agent-events.cursor.json",
-                              "--acknowledgements", root / ".worker-agent-events.acks.jsonl",
-                              "--gate", gate, "--handoff", root / "progress.log")
-            self.assertEqual(release.returncode, 0, release.stderr)
-            self.assertFalse(gate.exists())
-
-            resumed = subprocess.run(["bash", str(root / "worker.sh")], cwd=root, env=env,
-                                      capture_output=True, text=True, timeout=45)
-            self.assertEqual(resumed.returncode, 0, resumed.stdout + resumed.stderr)
-            latest_event = json.loads(events.read_text().splitlines()[-1])
-            self.assertEqual(latest_event["previous_registration_id"], "primary")
-            self.assertEqual(calls.read_text().splitlines(), ["gpt-6-luna", "gpt-6-luna"])
-            watch = runtime("agent-events-watch", "--events", events,
-                            "--cursor", root / ".worker-agent-events.cursor.json",
-                            "--acknowledgements", root / ".worker-agent-events.acks.jsonl",
-                            "--gate", gate, "--handoff", root / "progress.log")
-            self.assertEqual(watch.returncode, 0, watch.stderr)
-            ack = runtime("agent-event-ack", "--events", events,
-                          "--acknowledgements", root / ".worker-agent-events.acks.jsonl",
-                          "--event-id", latest_event["event_id"], "--resolution", "revised")
-            self.assertEqual(ack.returncode, 0, ack.stderr)
-            release = runtime("agent-events-watch", "--events", events,
-                              "--cursor", root / ".worker-agent-events.cursor.json",
-                              "--acknowledgements", root / ".worker-agent-events.acks.jsonl",
-                              "--gate", gate, "--handoff", root / "progress.log")
-            self.assertEqual(release.returncode, 0, release.stderr)
-            self.assertEqual([line for line in calls.read_text().splitlines() if line],
-                             ["gpt-6-luna", "gpt-6-luna"])
-            self.assertFalse((root / "tasks.done").read_text())
+            self.assertEqual(calls.read_text().splitlines(), ["gpt-6-luna", "gpt-6.1-sol"])
+            self.assertIn("TASK-Q", (root / "tasks.done").read_text())
             state = json.loads((root / ".worker-agent-state.default.json").read_text())
-            self.assertEqual(state["exhausted"]["primary"]["reason"], "quota")
+            self.assertEqual(state["active_agent_id"], "backup")
+            self.assertEqual(state["consecutive_no_response"], 0)
 
     def test_generic_registry_receives_model_arguments_environment_and_result_contract(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -2496,11 +2470,10 @@ class WorkerIntegrationTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertEqual((root / "tasks.txt").read_text(), task)
             self.assertEqual((root / "tasks.done").read_text(), "")
-            self.assertIn("PLANNER_REVIEW_REQUIRED", result.stdout)
-            self.assertEqual(json.loads((root / "worker.status").read_text())["state"], "PAUSED_FOR_PLANNER")
+            self.assertIn("AGENT_NO_RESPONSE", result.stdout)
+            self.assertEqual(json.loads((root / "worker.status").read_text())["state"], "AGENT_NO_RESPONSE")
             state = json.loads((root / ".worker-agent-state.default.json").read_text())
-            self.assertEqual(set(state["exhausted"]), {"one"})
-            self.assertEqual((root / ".worker-dispatch-gate.json").is_file(), True)
+            self.assertEqual(state["consecutive_no_response"], 3)
 
     def test_worker_does_not_switch_agents_for_non_quota_cli_errors(self):
         with tempfile.TemporaryDirectory() as directory:

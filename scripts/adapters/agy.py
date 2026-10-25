@@ -121,18 +121,10 @@ with open(log, "w", encoding="utf-8") as stream:
                 message_text = event.get("message") or (error.get("message") if isinstance(error, dict) else error)
                 if isinstance(message_text, str):
                     error_messages.append(message_text)
-        except ValueError:
-            # Legacy CLIs may emit a plain fatal diagnostic instead of JSONL.
-            # Accept only a diagnostic at the start of the line, never arbitrary
-            # quoted tool output or numeric substrings from test results.
-            if re.match(r"\s*(?:(?:error|fatal):\s*)?(?:insufficient_quota\b|"
-                        r"resource_exhausted\b|rate limit (?:exceeded|reached)\b|"
-                        r"out of credits\b|(?:http|status code)\s+429\b)",
-                        line, re.IGNORECASE):
-                error_messages.append(line.strip())
-        except AttributeError:
+        except (ValueError, AttributeError):
             pass
-        actions += any(token in line for token in ("[EXEC]", "Tool Call", "edit_file", "write_file", "run_command", "read_file"))
+        if line.strip().startswith("[EXEC]") or ("item.completed" in line and "command_execution" in line):
+            actions += 1
         if actions > int(limit) and process.poll() is None:
             over_budget = True
             process.terminate()
@@ -146,13 +138,17 @@ if actions > int(limit):
     over_budget = True
 full_log = open(log, encoding="utf-8", errors="replace").read()
 diagnostic = "\n".join(error_messages)
-# Tool output and quoted transcripts may contain quota-like strings. Only
-# AgY's own error events or anchored plain CLI diagnostics establish quota failures.
-quota = code != 0 and any(term in diagnostic.lower() for term in (
-    "insufficient_quota", "rate limit", "resource_exhausted",
-    "http 429", "status code 429", "out of credits"))
 timed_out = "print timeout after" in full_log.lower()
-outcome = "quota_exhausted" if quota else "execution_timeout" if timed_out else "step_budget_exceeded" if over_budget else "complete" if code == 0 else "failure"
+if timed_out:
+    outcome = "execution_timeout"
+elif over_budget:
+    outcome = "step_budget_exceeded"
+elif code != 0 and actions == 0:
+    outcome = "no_response"
+elif code == 0:
+    outcome = "complete"
+else:
+    outcome = "failure"
 
 text = ""
 try:
@@ -207,11 +203,17 @@ if not isinstance(payload, dict):
                ("CLOSEOUT_INCOMPLETE", "blocked"), ("CLOSEOUT_REQUIRED", "closeout_required"),
                ("DEAD_END", "blocked"))
     final_outcome = next((val for marker, val in markers if re.search(r"\[" + marker + r"\]", text or full_log)), "failure")
-    payload = {"outcome": final_outcome, "diagnostic": text or diagnostic or "AgY returned no final result"}
+    payload = {"outcome": final_outcome, "diagnostic": text or diagnostic or "no response"}
     if final_outcome == "failure":
-        payload["error_code"] = "invalid_result"
+        if code != 0 and actions == 0:
+            outcome = "no_response"
+            payload["outcome"] = "no_response"
+            payload["error_code"] = "no_response"
+            payload["diagnostic"] = text or diagnostic or "no response"
+        else:
+            payload["error_code"] = "invalid_result"
 
-allowed = {"complete", "no_change", "closeout_required", "blocked", "scope_blocked", "guidance", "failure"}
+allowed = {"complete", "no_change", "closeout_required", "blocked", "scope_blocked", "guidance", "failure", "no_response"}
 if not isinstance(payload.get("outcome"), str) or payload["outcome"] not in allowed:
     payload = {"outcome": "failure", "error_code": "invalid_result",
                "diagnostic": "AgY final JSON requires a supported outcome"}

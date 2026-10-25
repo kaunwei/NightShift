@@ -642,7 +642,7 @@ def load_agent_registry(config_file):
 
 
 ADAPTER_PROTOCOL_VERSION = 1
-ADAPTER_TERMINAL_STATUSES = {"complete", "closeout_required", "quota_exhausted",
+ADAPTER_TERMINAL_STATUSES = {"complete", "closeout_required", "no_response", "quota_exhausted",
                              "step_budget_exceeded", "execution_timeout",
                              "callback_timeout", "cancellation_failed",
                              "failed", "cancelled"}
@@ -819,7 +819,7 @@ def execute_adapter_protocol(command, request, extra_args=(), trace=None,
 
 
 def should_failover_agent(exit_code, result_text):
-    """Only quota and confirmed timeout statuses may select another registration."""
+    """Only no_response and confirmed timeout statuses may select another registration."""
     if isinstance(result_text, dict):
         payload = result_text
     else:
@@ -830,18 +830,23 @@ def should_failover_agent(exit_code, result_text):
     status = payload.get("status", "") if isinstance(payload, dict) else ""
     if status in ("cancellation_failed", "step_budget_exceeded") or exit_code == 125:
         return False
-    return status in ("quota_exhausted", "execution_timeout", "callback_timeout")
+    return status in ("no_response", "quota_exhausted", "execution_timeout", "callback_timeout")
 
 
 def read_agent_state(path):
     path = Path(path)
     if not path.exists():
-        return {"version": 1, "exhausted": {}, "task_exclusions": {}}
-    state = json.loads(path.read_text(encoding="utf-8"))
-    if state.get("version") != 1 or not isinstance(state.get("exhausted"), dict):
-        raise ValueError(f"invalid agent quota state file: {path}")
-    if not isinstance(state.get("task_exclusions", {}), dict):
-        raise ValueError(f"invalid agent task exclusion state file: {path}")
+        return {"version": 1, "active_agent_id": "", "consecutive_no_response": 0, "exhausted": {}, "task_exclusions": {}}
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"version": 1, "active_agent_id": "", "consecutive_no_response": 0, "exhausted": {}, "task_exclusions": {}}
+    if not isinstance(state, dict):
+        state = {}
+    state.setdefault("version", 1)
+    state.setdefault("active_agent_id", "")
+    state.setdefault("consecutive_no_response", 0)
+    state.setdefault("exhausted", {})
     state.setdefault("task_exclusions", {})
     return state
 
@@ -855,25 +860,35 @@ def agent_supports_task(agent, title, constraints=""):
 
 def execute_registered_agents(args, agents, state_path, rollback):
     state = read_agent_state(state_path)
-    task_exclusions = state["task_exclusions"].get(args.task_id, [])
+    task_exclusions = state.get("task_exclusions", {}).get(args.task_id, [])
     task_agents = [agent for agent in agents
                    if agent_supports_task(agent, getattr(args, "title", ""),
                                           getattr(args, "constraints", ""))]
     available = [agent for agent in task_agents
-                 if agent["id"] not in state["exhausted"]
-                 and agent["id"] not in task_exclusions]
+                 if agent["id"] not in task_exclusions]
     if not available:
-        if not task_agents:
-            args.awaiting_agent = True
-            print("[WORKER] AGENT_UNAVAILABLE: no registered agent supports this task.")
-            return 0, False
-        if any(agent["id"] not in state["exhausted"] for agent in task_agents):
-            args.awaiting_agent = True
-            print("[WORKER] AGENT_UNAVAILABLE: all non-exhausted registrations timed out for this task.")
-            return 0, False
-        print("[WORKER] QUOTA_EXHAUSTED: all registered agents are exhausted; task remains queued.")
-        return 0, True
-    for index, agent in enumerate(available):
+        args.awaiting_agent = True
+        print("[WORKER] AGENT_UNAVAILABLE: no registered agent supports this task.")
+        return 0, False
+
+    active_id = state.get("active_agent_id", "")
+    consecutive_no_response = int(state.get("consecutive_no_response", 0))
+
+    start_index = 0
+    if active_id:
+        for idx, a in enumerate(available):
+            if a["id"] == active_id:
+                start_index = idx
+                break
+    else:
+        for idx, a in enumerate(available):
+            if a.get("default", False):
+                start_index = idx
+                break
+
+    current_index = start_index
+    while True:
+        agent = available[current_index]
         attempt = argparse.Namespace(**vars(args))
         attempt.attempt_id = str(uuid.uuid4())
         snapshot_root = Path(getattr(args, "attempt_snapshot_root", "") or
@@ -894,19 +909,19 @@ def execute_registered_agents(args, agents, state_path, rollback):
         attempt.executable = agent["command"]
         attempt.adapter_command = sys.executable
         attempt.adapter_args = [str(Path(__file__).resolve().parent / "adapters" / f"{agent['adapter']}.py")]
-        attempt.timeout = agent["worker"].get("task_timeout_seconds", args.timeout)
-        attempt.model = agent["model"]
-        attempt.extra_args = agent["args"]
-        attempt.agent_env = agent["env"]
+        attempt.timeout = agent.get("worker", {}).get("task_timeout_seconds", args.timeout)
+        attempt.model = agent.get("model", "")
+        attempt.extra_args = agent.get("args", [])
+        attempt.agent_env = agent.get("env", {})
         attempt.agent_id = agent["id"]
         args.executed_agent_id = agent["id"]
         attempt.executed_agent_id = agent["id"]
-        attempt.agent_overrides = agent["overrides"]
+        attempt.agent_overrides = agent.get("overrides", {})
         for output_name in ("output_file", "result_file"):
             output = Path(getattr(attempt, output_name, "") or ".")
             if output.is_file():
                 output.unlink()
-        print(f"[WORKER] Launching registered agent {agent['id']} ({agent['adapter']}, model={agent['model'] or 'default'})...")
+        print(f"[WORKER] Launching registered agent {agent['id']} ({agent['adapter']}, model={agent.get('model') or 'default'})...")
         code = execute_adapter_task(attempt)
         output_path = Path(attempt.output_file)
         result_path = Path(attempt.result_file) if attempt.result_file else output_path
@@ -920,63 +935,47 @@ def execute_registered_agents(args, agents, state_path, rollback):
             parsed_output = json.loads(output_text)
         except (TypeError, json.JSONDecodeError):
             parsed_output = {}
-        quota_exhausted = (
-            isinstance(parsed_output, dict)
-            and parsed_output.get("status") == "quota_exhausted"
-        ) or (
-            isinstance(parsed_result, dict)
-            and parsed_result.get("outcome") == "quota_exhausted"
+
+        status_val = parsed_output.get("status", "") if isinstance(parsed_output, dict) else ""
+        outcome_val = parsed_result.get("outcome", "") if isinstance(parsed_result, dict) else ""
+        error_code_val = parsed_result.get("error_code", "") if isinstance(parsed_result, dict) else ""
+        actions_used = parsed_result.get("actions_used", 0) if isinstance(parsed_result, dict) else 0
+
+        is_no_response = (
+            status_val in ("no_response", "quota_exhausted")
+            or outcome_val in ("no_response", "quota_exhausted")
+            or error_code_val in ("no_response", "quota_exhausted")
+            or (code != 0 and actions_used == 0 and outcome_val in ("", "failure", "invalid_result"))
         )
-        if not quota_exhausted and not should_failover_agent(code, parsed_output):
-            if state["task_exclusions"].pop(args.task_id, None) is not None:
-                atomic_write(state_path, json.dumps(state, ensure_ascii=False, indent=2) + "\n")
-            return code, False
-        if quota_exhausted:
-            state["exhausted"][agent["id"]] = {
-                "adapter": agent["adapter"], "command": agent["command"],
-                "reason": "quota", "detected_at": datetime.now(timezone.utc).isoformat(),
-            }
+
+        if not is_no_response and not should_failover_agent(code, parsed_output):
+            state["consecutive_no_response"] = 0
+            state["active_agent_id"] = agent["id"]
+            if state.get("task_exclusions", {}).pop(args.task_id, None) is not None:
+                pass
             atomic_write(state_path, json.dumps(state, ensure_ascii=False, indent=2) + "\n")
-        reason = "quota exhausted" if quota_exhausted else "timed out"
-        print(f"[WORKER] Agent {agent['id']} {reason}; switching to the next registered agent.", file=sys.stderr)
-        if index + 1 == len(available):
-            if quota_exhausted:
-                rollback(attempt.attempt_baseline, attempt.attempt_id)
-                print("[WORKER] QUOTA_EXHAUSTED: all registered agents are exhausted; task remains queued.")
-                return 0, True
-            rollback(attempt.attempt_baseline, attempt.attempt_id)
-            task_exclusions.append(agent["id"])
-            state["task_exclusions"][args.task_id] = task_exclusions
-            atomic_write(state_path, json.dumps(state, ensure_ascii=False, indent=2) + "\n")
-            args.awaiting_agent = True
-            print("[WORKER] AGENT_UNAVAILABLE: timed-out registrations are excluded for this task.")
             return code, False
+
         rollback(attempt.attempt_baseline, attempt.attempt_id)
-        next_agent = available[index + 1]
-        if not quota_exhausted:
+        if is_no_response:
+            consecutive_no_response += 1
+            state["consecutive_no_response"] = consecutive_no_response
+        else:
             task_exclusions.append(agent["id"])
-            state["task_exclusions"][args.task_id] = task_exclusions
-        events_path = getattr(args, "agent_events_file", "")
-        if events_path:
-            def score_for(registration_id):
-                try:
-                    score_state = read_agent_score_state(
-                        getattr(args, "agent_score_state_file", ""), registration_id)
-                    return score_state["score"]
-                except (OSError, ValueError, TypeError):
-                    return None
-            append_agent_event(events_path, {
-                "event_id": str(uuid.uuid4()), "registration_id": next_agent["id"],
-                "cause": "main_task_failover", "task_id": args.task_id,
-                "previous_registration_id": agent["id"],
-                "current_registration_id": next_agent["id"],
-                "previous_score": score_for(agent["id"]),
-                "current_score": score_for(next_agent["id"]),
-            }, getattr(args, "dispatch_gate_file", ""))
-            atomic_write(state_path, json.dumps(state, ensure_ascii=False, indent=2) + "\n")
-            args.awaiting_planner = True
+            state.setdefault("task_exclusions", {})[args.task_id] = task_exclusions
+
+        current_index = (current_index + 1) % len(available)
+        next_agent = available[current_index]
+        state["active_agent_id"] = next_agent["id"]
+        atomic_write(state_path, json.dumps(state, ensure_ascii=False, indent=2) + "\n")
+
+        if is_no_response and consecutive_no_response >= 3:
+            print("[WORKER] AGENT_NO_RESPONSE: 3 consecutive switches without agent response; reporting to planner.", file=sys.stderr)
+            args.agent_no_response = True
             return 0, True
-    return 0, True
+
+        reason = "no response" if is_no_response else "timed out"
+        print(f"[WORKER] Agent {agent['id']} {reason}; switching to {next_agent['id']} (attempt {consecutive_no_response}/3)...", file=sys.stderr)
 
 
 def progress_bar(current, total, width=30):
@@ -1452,7 +1451,7 @@ def execute_adapter_task(args):
                 result = rescued_result
                 atomic_write(result_path, json.dumps(result, ensure_ascii=False) + "\n")
     else:
-        code = {"quota_exhausted": 124, "step_budget_exceeded": 125,
+        code = {"no_response": 124, "quota_exhausted": 124, "step_budget_exceeded": 125,
                 "closeout_required": 126, "execution_timeout": 124,
                 "callback_timeout": 124, "cancellation_failed": 124}.get(
                     status["status"], 1)
@@ -1705,12 +1704,11 @@ def worker_daemon(root):
                     continue
             if waiting_for_quota and not pause_file.exists():
                 state = read_agent_state(agent_state_path)
-                if all(agent["id"] in state["exhausted"] for agent in agents):
-                    update_status("QUOTA_EXHAUSTED", "Waiting for agent quota state reset")
+                if state.get("consecutive_no_response", 0) >= 3 or all(agent["id"] in state.get("exhausted", {}) for agent in agents):
+                    update_status("AGENT_NO_RESPONSE", "Waiting for agent reset")
                     stop_requested.wait(poll_interval)
                     continue
-                # A task-scoped timeout exclusion is intentionally not persisted as quota
-                # exhaustion. Back off before retrying the requeued task to avoid a hot loop.
+                # Back off before retrying the requeued task to avoid a hot loop.
                 stop_requested.wait(poll_interval)
                 waiting_for_quota = False
             poll_args = argparse.Namespace(tasks=str(tasks_file), done=str(done_file),
@@ -1857,11 +1855,12 @@ def worker_daemon(root):
                 quota_exhausted = False
                 cli_args.awaiting_planner = False
                 cli_args.awaiting_agent = False
+                cli_args.agent_no_response = False
                 cli_args.agent_events_file = str(agent_events_path)
                 cli_args.dispatch_gate_file = str(dispatch_gate_file)
                 execution_error = ""
                 try:
-                    exit_code, quota_exhausted = execute_registered_agents(
+                    exit_code, has_event = execute_registered_agents(
                         cli_args, agents, agent_state_path, recover_before_switch,
                     )
                 except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as error:
@@ -1907,7 +1906,8 @@ def worker_daemon(root):
                 if structured_execution_status == "cancellation_failed":
                     structured_status = "cancel_failed"
 
-                outcome = ("planner_gate" if cli_args.awaiting_planner else
+                outcome = ("agent_no_response" if getattr(cli_args, "agent_no_response", False) else
+                           "planner_gate" if cli_args.awaiting_planner else
                            "agent_unavailable" if cli_args.awaiting_agent else
                            "quota_exhausted" if quota_exhausted else
                            "cancel_failed" if structured_status == "cancel_failed" else
@@ -1926,9 +1926,24 @@ def worker_daemon(root):
                            "guidance" if re.search(r"\[(?:NEED_GUIDANCE|NEED_DECOMPOSITION)\]", result_text) else
                            "success")
                 stamp_now = stamp()
-                if outcome not in ("success", "quota_exhausted", "planner_gate", "agent_unavailable"):
+                if outcome not in ("success", "agent_no_response", "quota_exhausted", "planner_gate", "agent_unavailable"):
                     pending_planner = (task_id, outcome.upper())
-                if outcome == "planner_gate":
+                if outcome == "agent_no_response":
+                    restore_task_front(tasks_file, raw_task)
+                    warning = ("=" * 80 + f"\n[AGENT_NO_RESPONSE] {task_id}: agent no response\n"
+                               f"Time: {stamp_now} | Status: AGENT_NO_RESPONSE\n"
+                               f"Task returned to {tasks_file}; 3 consecutive switches without agent response.\n" + "=" * 80)
+                    prepend_progress(progress_file, warning)
+                    print(f"[{stamp_now}] [AGENT_NO_RESPONSE] agent no response; 3 consecutive switches without response.")
+                    update_status("AGENT_NO_RESPONSE", task, duration, current, total,
+                                  remaining, percent, bar)
+                    if run_once:
+                        final_state = "AGENT_NO_RESPONSE"
+                        break
+                    waiting_for_quota = True
+                    stop_requested.wait(poll_interval)
+                    continue
+                elif outcome == "planner_gate":
                     restore_task_front(tasks_file, raw_task)
                     append_line(progress_file,
                                 f"[PLANNER_REVIEW_REQUIRED] {task_id}: agent failover recorded; replacement waits for Planner acknowledgement.")
