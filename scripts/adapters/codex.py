@@ -96,8 +96,13 @@ with open(log, "w", encoding="utf-8") as stream:
     except subprocess.TimeoutExpired:
         process.kill(); code = process.wait(); over_budget = True
 if actions > int(limit): over_budget = True
-diagnostic = open(log, encoding="utf-8", errors="replace").read()
-quota = any(term in diagnostic.lower() for term in ("insufficient_quota", "rate limit", "resource_exhausted", "429", "out of credits"))
+diagnostic = open(log, encoding="utf-8", errors="replace").read().lower()
+# A successful CLI run may print test fixtures, expected values, or quoted logs
+# containing numbers such as 429. Only classify explicit quota errors after a
+# non-zero process exit.
+quota = code != 0 and any(term in diagnostic for term in (
+    "insufficient_quota", "rate limit", "resource_exhausted",
+    "http 429", "status code 429", "out of credits"))
 outcome = "quota_exhausted" if quota else "step_budget_exceeded" if over_budget else "complete" if code == 0 else "failure"
 text = ""
 try:

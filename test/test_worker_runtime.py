@@ -142,9 +142,9 @@ class WorkerPromptContractTests(unittest.TestCase):
         )
 
         for required in (
-            "src/parser.py", "Action budget: 22", "base 12 + 2 target files × 5",
-            "Timeout is per task invocation", "python3 -m unittest", "TASK-9",
-            "Planner reviews the evidence and records the score",
+            "src/parser.py", "Budget: 22 actions (12+2×5)",
+            "Per-invocation timeout", "python3 -m unittest", "TASK-9",
+            "The Planner owns acceptance and independent review",
             "[EXEC] <brief action>", "closeout_required", "[SCOPE_BLOCKED]", "[DEAD_END]",
             "progress.log",
         ):
@@ -152,13 +152,13 @@ class WorkerPromptContractTests(unittest.TestCase):
                 self.assertIn(required, prompt)
         self.assertIn(str(ROOT / ".skills/universal-build-verify.md"), prompt)
         self.assertIn((ROOT / ".skills/universal-build-verify.md").read_text(), prompt)
-        self.assertIn("Leave them untouched and unstaged", prompt)
+        self.assertIn("Preserve unrelated and pre-existing changes", prompt)
 
     def test_prompt_does_not_request_self_scoring_or_destructive_retry_reset(self):
         prompt = build_task_prompt("task", "TASK-1", "1", "src/a.py", "test",
                                   "", "", 17, 1, 12, 5, "progress.log")
-        self.assertIn("never adjust the shared score yourself", prompt)
-        self.assertIn("do not destructively reset files", prompt.lower())
+        self.assertIn("Do not self-adjust the shared Worker score", prompt)
+        self.assertIn("never clean or reset the checkout", prompt.lower())
         self.assertNotIn("restore the clean tree", prompt)
 
 
@@ -533,6 +533,29 @@ class BuiltinAdapterContractTests(unittest.TestCase):
             invalid=callback("get_config",{"protocol_version":1,"registration_id":"codex-test",
                 "overrides":{"executable":str(executable),"approval_mode":"unknown"}})
             self.assertNotEqual(invalid.returncode,0)
+
+    def test_codex_adapter_does_not_treat_successful_test_output_429_as_quota(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fake = root / "fake-codex"
+            fake.write_text(
+                "#!/usr/bin/env python3\nimport json,sys\n"
+                "open(sys.argv[sys.argv.index('--output-last-message')+1],'w').write('{\"outcome\":\"complete\",\"changed\":false}')\n"
+                "print('expected uint32 value 4294967168 (429 is not an API error)')\n")
+            fake.chmod(0o755)
+            (root / "prompt.txt").write_text("task")
+            request = {"protocol_version": 1, "overrides": {"command": str(fake)},
+                       "task_id": "TASK-429", "working_directory": str(root),
+                       "prompt_path": str(root / "prompt.txt"), "output_dir": str(root / "run"),
+                       "result_path": str(root / "result.json"), "limits": {"action_limit": 3}}
+            (root / "request.json").write_text(json.dumps(request))
+            executed = runtime("adapter-exec", "--command", sys.executable,
+                               "--adapter-arg", ROOT / "scripts/adapters/codex.py",
+                               "--request", root / "request.json", "--execution-timeout", "2",
+                               "--callback-timeout", "0.5")
+            self.assertEqual(executed.returncode, 0, executed.stderr)
+            self.assertEqual(json.loads(executed.stdout)["status"], "complete")
+            self.assertEqual(json.loads((root / "result.json").read_text())["outcome"], "complete")
 
     def test_agy_adapter_probes_fake_cli_and_extracts_structured_result(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1658,7 +1681,8 @@ class ReportArchiveContractTests(unittest.TestCase):
             git("config", "user.email", "archive@example.invalid")
             (root / "src").mkdir()
             (root / "src/a.py").write_text("before\n")
-            git("add", "src/a.py")
+            (root / "src/b.py").write_text("unchanged\n")
+            git("add", "src/a.py", "src/b.py")
             git("commit", "-qm", "baseline")
             base = git("rev-parse", "HEAD")
             (root / "src/a.py").write_text("after\n")
@@ -1666,8 +1690,10 @@ class ReportArchiveContractTests(unittest.TestCase):
             reports = root / ".reports"
             (reports / "related").mkdir(parents=True)
             (reports / "unrelated").mkdir()
-            (reports / "related" / "SUMMARY.md").write_text("Findings in src/a.py")
-            (reports / "unrelated" / "SUMMARY.md").write_text("Findings in src/b.py")
+            (reports / "related" / "SUMMARY.md").write_text(
+                f"<!-- REPORT_META: Task=R1 | Commit={base} -->\nFindings in src/a.py#L1\n")
+            (reports / "unrelated" / "SUMMARY.md").write_text(
+                f"<!-- REPORT_META: Task=R2 | Commit={base} -->\nFindings in src/b.py#L1\n")
 
             result = runtime("archive-overlapping-reports", "--root", root,
                              "--work-dir", root, "--base", base)
@@ -1867,7 +1893,7 @@ class WorkerIntegrationTests(unittest.TestCase):
             self.assertNotIn("[DONE]", (root / "tasks.done").read_text())
             self.assertNotIn("CLOSEOUT_FAILED", (root / "tasks.done").read_text())
             self.assertFalse((root / ".worker-ghost-state.json").exists())
-            self.assertIn("Worker final response contained [BLOCKED]", (root / "progress.log").read_text())
+            self.assertIn("[BLOCKED] reports-not-writable", (root / "progress.log").read_text())
             self.assertEqual(json.loads((root / "worker.status").read_text())["state"], "BLOCKED")
 
     def test_in_place_research_task_keeps_its_new_report_artifacts(self):
@@ -1902,7 +1928,7 @@ class WorkerIntegrationTests(unittest.TestCase):
                 "  shift\n"
                 "done\n"
                 "mkdir -p .reports/fake\n"
-                "printf '# Fresh summary\\n' > .reports/fake/SUMMARY.md\n"
+                "printf '# Fresh summary\\n\\nEvidence: scripts/worker_runtime.py#L1\\n' > .reports/fake/SUMMARY.md\n"
                 "printf '# Fresh details\\n' > .reports/fake/03-micro.md\n"
                 "printf '{\"outcome\":\"complete\",\"changed\":true,\"commit_message\":\"docs: add fake report\"}\\n' > \"$result\"\n"
             )
@@ -1925,7 +1951,7 @@ class WorkerIntegrationTests(unittest.TestCase):
             self.assertFalse((root / ".worker-tree").exists())
             self.assertTrue(list((root / ".reports/.archive").iterdir()))
 
-    def test_worker_switches_to_next_registered_agent_after_quota_error(self):
+    def test_worker_rechecks_quota_agent_after_restart(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "repo"
             root.mkdir()
@@ -2003,11 +2029,26 @@ class WorkerIntegrationTests(unittest.TestCase):
             resumed = subprocess.run(["bash", str(root / "worker.sh")], cwd=root, env=env,
                                       capture_output=True, text=True, timeout=45)
             self.assertEqual(resumed.returncode, 0, resumed.stdout + resumed.stderr)
+            latest_event = json.loads(events.read_text().splitlines()[-1])
+            self.assertEqual(latest_event["previous_registration_id"], "primary")
+            self.assertEqual(calls.read_text().splitlines(), ["gpt-6-luna", "gpt-6-luna"])
+            watch = runtime("agent-events-watch", "--events", events,
+                            "--cursor", root / ".worker-agent-events.cursor.json",
+                            "--acknowledgements", root / ".worker-agent-events.acks.jsonl",
+                            "--gate", gate, "--handoff", root / "progress.log")
+            self.assertEqual(watch.returncode, 0, watch.stderr)
+            ack = runtime("agent-event-ack", "--events", events,
+                          "--acknowledgements", root / ".worker-agent-events.acks.jsonl",
+                          "--event-id", latest_event["event_id"], "--resolution", "revised")
+            self.assertEqual(ack.returncode, 0, ack.stderr)
+            release = runtime("agent-events-watch", "--events", events,
+                              "--cursor", root / ".worker-agent-events.cursor.json",
+                              "--acknowledgements", root / ".worker-agent-events.acks.jsonl",
+                              "--gate", gate, "--handoff", root / "progress.log")
+            self.assertEqual(release.returncode, 0, release.stderr)
             self.assertEqual([line for line in calls.read_text().splitlines() if line],
-                             ["gpt-6-luna", "gpt-6.1-sol"])
-            self.assertIn("[DONE]", (root / "tasks.done").read_text(),
-                          (root / "progress.log").read_text())
-            self.assertEqual((root / "output.txt").read_text(), "hello\n")
+                             ["gpt-6-luna", "gpt-6-luna"])
+            self.assertFalse((root / "tasks.done").read_text())
             state = json.loads((root / ".worker-agent-state.default.json").read_text())
             self.assertEqual(state["exhausted"]["primary"]["reason"], "quota")
 
@@ -2739,6 +2780,18 @@ class DaemonLifecycleTests(unittest.TestCase):
         self.wait_for(lambda: "[DONE] TASK-QUOTA" in (self.root / "tasks.done").read_text())
         self.wait_for(lambda: self.state() == "IDLE")
 
+    def test_worker_restart_rechecks_previously_exhausted_agent(self):
+        self.flag.touch()
+        self.enqueue("TASK-RECHECK")
+        self.start()
+        self.wait_for(lambda: self.state() == "QUOTA_EXHAUSTED")
+        self.process.terminate()
+        self.process.wait(timeout=5)
+        (self.root / ".worker.pid").unlink(missing_ok=True)
+        self.flag.unlink()
+        self.start()
+        self.wait_for(lambda: "[DONE] TASK-RECHECK" in (self.root / "tasks.done").read_text())
+
     def test_last_timed_out_registration_requeues_task_without_marking_failure(self):
         wrapper = Path(self.directory.name) / "slow-wrapper.py"
         wrapper.write_text(
@@ -2873,7 +2926,7 @@ class InstallerIntegrationTests(unittest.TestCase):
             planner_skill = (target / ".agents/skills/nightshift/planner/SKILL.md").read_text()
             worker_contract = (target / ".skills/universal-build-verify.md").read_text()
             self.assertNotIn("OPERATIONS.md", planner_skill + worker_contract)
-            self.assertIn("full discovered graph", planner_skill)
+            self.assertIn("entire graph without repeated approval", planner_skill)
             migrated_registry = json.loads(agent_registry.read_text())
             self.assertEqual(migrated_registry["custom"], {
                 "default": True,

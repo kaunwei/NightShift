@@ -1511,6 +1511,14 @@ def worker_daemon(root):
     safe_worker_id = re.sub(r"[^A-Za-z0-9_.-]", "_", worker_id)
     agent_state_path = resolve(
         "AI_AGENT_STATE_FILE", f".worker-agent-state.{safe_worker_id}.json")
+    # Quota can recover while the worker is stopped. Treat persisted exhaustion
+    # as an observation from the previous process and probe registrations again
+    # on every daemon start; task-scoped timeout exclusions remain durable.
+    persisted_agent_state = read_agent_state(agent_state_path)
+    if persisted_agent_state["exhausted"]:
+        persisted_agent_state["exhausted"] = {}
+        atomic_write(agent_state_path, json.dumps(persisted_agent_state,
+                                                   ensure_ascii=False, indent=2) + "\n")
     ghost_state_path = resolve(
         "WORKER_GHOST_STATE_FILE", f".worker-ghost-state.{safe_worker_id}.json")
     ghost_artifact_root = resolve("WORKER_GHOST_ARTIFACT_DIR", ".worker-ghosts")
