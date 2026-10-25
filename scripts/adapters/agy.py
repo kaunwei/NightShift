@@ -121,7 +121,16 @@ with open(log, "w", encoding="utf-8") as stream:
                 message_text = event.get("message") or (error.get("message") if isinstance(error, dict) else error)
                 if isinstance(message_text, str):
                     error_messages.append(message_text)
-        except (ValueError, AttributeError):
+        except ValueError:
+            # Legacy CLIs may emit a plain fatal diagnostic instead of JSONL.
+            # Accept only a diagnostic at the start of the line, never arbitrary
+            # quoted tool output or numeric substrings from test results.
+            if re.match(r"\s*(?:(?:error|fatal):\s*)?(?:insufficient_quota\b|"
+                        r"resource_exhausted\b|rate limit (?:exceeded|reached)\b|"
+                        r"out of credits\b|(?:http|status code)\s+429\b)",
+                        line, re.IGNORECASE):
+                error_messages.append(line.strip())
+        except AttributeError:
             pass
         actions += any(token in line for token in ("[EXEC]", "Tool Call", "edit_file", "write_file", "run_command", "read_file"))
         if actions > int(limit) and process.poll() is None:
@@ -138,7 +147,7 @@ if actions > int(limit):
 full_log = open(log, encoding="utf-8", errors="replace").read()
 diagnostic = "\n".join(error_messages)
 # Tool output and quoted transcripts may contain quota-like strings. Only
-# AgY's own error events can establish a quota failure.
+# AgY's own error events or anchored plain CLI diagnostics establish quota failures.
 quota = code != 0 and any(term in diagnostic.lower() for term in (
     "insufficient_quota", "rate limit", "resource_exhausted",
     "http 429", "status code 429", "out of credits"))

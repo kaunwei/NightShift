@@ -91,9 +91,19 @@ with open(log, "w", encoding="utf-8") as stream:
             actions += event.get("type") == "item.completed" and item.get("type") == "command_execution"
             if event.get("type") in ("error", "turn.failed"):
                 error = event.get("error")
-                message = event.get("message") or (error.get("message") if isinstance(error, dict) else error)
-                if isinstance(message, str): error_messages.append(message)
-        except (ValueError, AttributeError): pass
+                error_message = event.get("message") or (error.get("message") if isinstance(error, dict) else error)
+                if isinstance(error_message, str): error_messages.append(error_message)
+        except ValueError:
+            # Legacy CLIs may emit a plain fatal diagnostic instead of JSONL.
+            # Accept only a diagnostic at the start of the line, never arbitrary
+            # quoted tool output or numeric substrings from test results.
+            if re.match(r"\s*(?:(?:error|fatal):\s*)?(?:insufficient_quota\b|"
+                        r"resource_exhausted\b|rate limit (?:exceeded|reached)\b|"
+                        r"out of credits\b|(?:http|status code)\s+429\b)",
+                        line, re.IGNORECASE):
+                error_messages.append(line.strip())
+        except AttributeError:
+            pass
         if actions > int(limit) and process.poll() is None:
             over_budget = True; process.terminate()
     try: code = process.wait(timeout=1)
@@ -102,7 +112,7 @@ with open(log, "w", encoding="utf-8") as stream:
 if actions > int(limit): over_budget = True
 diagnostic = "\n".join(error_messages)
 # Tool output and quoted transcripts may contain quota-like strings. Only
-# Codex's own error events can establish a quota failure.
+# Codex's own error events or anchored plain CLI diagnostics establish quota failures.
 quota = code != 0 and any(term in diagnostic.lower() for term in (
     "insufficient_quota", "rate limit", "resource_exhausted",
     "http 429", "status code 429", "out of credits"))

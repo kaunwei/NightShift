@@ -1540,7 +1540,7 @@ class CliContractTests(unittest.TestCase):
             executable.write_text(
                 "#!/bin/sh\n"
                 "while [ \"$#\" -gt 0 ]; do\n"
-                "  if [ \"$1\" = --output-last-message ]; then shift; printf '{\\\"outcome\\\":\\\"complete\\\",\\\"changed\\\":true,\\\"commit_message\\\":\\\"fix: update output\\\"}' > \"$1\"; fi\n"
+                "  if [ \"$1\" = --output-last-message ]; then shift; printf '%s' '{\"outcome\":\"complete\",\"changed\":true,\"commit_message\":\"fix: update output\"}' > \"$1\"; fi\n"
                 "  shift\n"
                 "done\n"
                 "printf 'finished\\n'\n"
@@ -1592,7 +1592,7 @@ class CliContractTests(unittest.TestCase):
                 "printf '%s %s\\n' \"$MAX_STEPS\" \"$*\" >> \"$CALLS_LOG\"\n"
                 "printf '[EXEC] step\\n'\n"
                 "printf 'after\\n' > output.txt\n"
-                "case \"$*\" in *'for original task TASK-2'*) printf '{\\\"outcome\\\":\\\"complete\\\",\\\"changed\\\":false,\\\"commit_message\\\":\\\"fix: complete TASK-2\\\"}\\n' ;; *) printf '{\\\"outcome\\\":\\\"closeout_required\\\",\\\"changed\\\":true}\\n' ;; esac\n"
+                "case \"$*\" in *'for original task TASK-2'*) printf '%s\\n' '{\"outcome\":\"complete\",\"changed\":false,\"commit_message\":\"fix: complete TASK-2\"}' ;; *) printf '%s\\n' '{\"outcome\":\"closeout_required\",\"changed\":true}' ;; esac\n"
             )
             executable.chmod(0o755)
             env = os.environ.copy()
