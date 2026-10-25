@@ -59,6 +59,10 @@ Explore supplies read-only, evidence-based knowledge of code ownership, callers,
 43. As a human, I want conflicts explained with the actual pause command and confirmation procedure, so I can decide when to pause development.
 44. As a human, I want trial tasks to leave pausing to me, so asking for a build does not silently stop the queue.
 45. As an operator, I want upgrades to preserve registrations, historical work, and previous trial deliveries, so maintenance does not discard local data.
+46. As a Planner resuming work, I want successful audits with pending review to be visible in the execution journal, so I can review completed work without reconstructing prior context.
+47. As a Planner, I want each review tied to its task and audit identity, so a later audit of the same task remains independently reviewable.
+48. As a project owner, I want repeated recording of the same review decision to avoid duplicate score credit and conflicting decisions to fail visibly, so recovery cannot distort score history.
+49. As a project owner, I want older audits without review state to remain unconfirmed, so the runtime does not invent acceptance or retroactive credit.
 
 ## Implementation Decisions
 
@@ -71,6 +75,7 @@ Explore supplies read-only, evidence-based knowledge of code ownership, callers,
 - Runtime enforces callback and execution deadlines; adapters define and enforce their action units and expose defaults through configuration discovery. Preserve task sizing from `base + target_file_count × per_file`; different adapters need not count equivalent actions. Tool-specific event or marker parsing belongs in adapters.
 - Each original task ID has at most one private ghost invocation, including retries, failover, and restart. Missing structured commit messages and verification gaps may use it. Ghost may verify and complete results, but cannot edit implementation or commit. Script performs verified Git finalization. Legal no-change outcomes need neither ghost nor commit.
 - Completion requires the ticket verification and runtime mechanical audit, followed by Planner acceptance. A successful process exit or commit alone is not acceptance.
+- Each new successful mechanical audit starts with `Planner_Review: pending` in the existing execution journal. The existing score-record operation can update the matching task and audit to `accept`, `reject`, or `no_fault`; repeating the same decision is idempotent, conflicting decisions fail, and older records without the field require confirmation. The Planner checks pending audits on resumption and records its decision through that operation.
 - Reports are reusable only while referenced source paths remain unchanged. Failed work is retained for inspection while runtime recovery restores the task baseline. Worker tasks execute in the project directory; legacy isolation settings are ignored and existing worktree/preview data is preserved during upgrades.
 - Human controls include model choice, manual score correction, pause/steer/reject, and clarification. Planner continues automatically when scope is clear and ready work exists.
 - Measure total tokens per accepted task alongside quality and cycle time; include both roles, context loading, retries, review, and verification.
@@ -232,11 +237,13 @@ The following records what scripts actually do, including differences from the s
 25. Atomic state writes replace sibling temporary files and preserve permissions. Queue, score and event locks have bounded waits. Launcher defaults and its exported environment configure runtime; helpers take their own defaults/launch-environment overrides and do not execute launcher code. Agent config belongs to the shared named registry. Worker IDs namespace process/status/quota files but do not isolate source or turn the historical shared score into the per-agent planning score.
 
 26. End-to-end startup/helpers require Bash/Git and shell tools; process-control branches alone do not establish native Windows deployment. Research product-read-only and ghost no-edit checks are not OS sandboxes. Planner/Explore remain agent skills, not executable schedulers. Some existing skill text still references shared scores or reading the removed worker env file for trial pause resolution; those instructions are stale and must follow the per-registration and launch-configuration contracts above. Source inspection is not proof that all acceptance scenarios have passed.
+27. Successful audit records include a pending Planner review field. Review recording identifies the exact task and audit timestamp, updates only that record, and uses the configured progress-log path. Progress prepends and review writes share a bounded lock so concurrent journal updates preserve unrelated history. A repeated identical review does not record score feedback again; a different result against an already reviewed audit is an explicit conflict. An older audit without the field is left unchanged and is not automatically scored.
 
 ## Testing Decisions
 
 - Test each NightShift role at its highest stable CLI/state contract. Assert observable dispatch, report freshness/artifacts, persisted state, process outcome, audit, or handoff; avoid private helpers, prompt wording, and chain-of-thought. Planner/Explore CLI/state seams describe role-level verification, not a claim that separate executable schedulers already exist.
 - Planner tests cover queue selection/dependencies, score-to-level mapping, feedback, evidence-based acceptance, stop/continue and recovery after a Worker exits.
+- Planner review tests exercise the existing score-record CLI and persisted journal/score state: pending-to-reviewed transitions, duplicate and conflicting decisions, independent audits for one task, legacy records, and preservation of unrelated journal entries. Use deterministic local fixtures without model calls.
 - Worker tests cover fresh invocation, model/effort, timeout/budget propagation, target/archetype enforcement, verification, progress/commit, hard-failure classification, and restricted closeout attribution.
 - Explore tests cover read-only behavior, report metadata and pointer validation, invalidation/archive, bounded report artifacts, and seam-digest output.
 - Cross-role tests pass a Planner-created ticket to a fresh Worker, audit its result, expose compact evidence, and select the next eligible ticket without losing dependency or score state.
