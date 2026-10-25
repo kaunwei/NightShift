@@ -10,8 +10,8 @@
       "args": [],
       "env": {},
       "config": {
-        "model": "gpt-6-luna",
-        "effort": "none",
+        "model": "minicpm-codex-40k",
+        "effort": "medium",
         "approval_mode": "auto",
         "sandbox": "workspace-write",
         "ephemeral": "1"

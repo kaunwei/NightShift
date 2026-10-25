@@ -736,8 +736,8 @@ class AdapterGhostCloseoutContractTests(unittest.TestCase):
             self.assertNotEqual(ghost_request["prompt_path"], main_request["prompt_path"])
             self.assertNotEqual(ghost_request["result_path"], main_request["result_path"])
             ghost_prompt = Path(ghost_request["prompt_path"]).read_text()
-            self.assertIn("CLOSEOUT ONLY for original task TASK-GHOST", ghost_prompt)
-            self.assertIn("MUST NOT modify source code", ghost_prompt)
+            self.assertIn("for original task TASK-GHOST", ghost_prompt)
+            self.assertIn("Never modify, create, or delete source", ghost_prompt)
             self.assertIn('"commit_message"', ghost_prompt)
             self.assertIn('"outcome"', ghost_prompt)
             self.assertNotIn("[CLOSEOUT_VERIFIED]", ghost_prompt)
@@ -1012,9 +1012,9 @@ class WorkerScoreTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             text = prompt.read_text()
             self.assertIn("TASK-7", text)
-            self.assertIn("MUST NOT modify", text)
+            self.assertIn("Never modify, create, or delete source", text)
             self.assertIn("python3 -m unittest", text)
-            self.assertIn("they do not block verification", text)
+            self.assertIn("their changes do not block closeout", text)
 
     def test_codex_jsonl_command_execution_events_are_counted_against_budget(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1343,7 +1343,7 @@ class CliContractTests(unittest.TestCase):
                 "printf '%s %s\\n' \"$MAX_STEPS\" \"$*\" >> \"$CALLS_LOG\"\n"
                 "printf '[EXEC] step\\n'\n"
                 "printf 'after\\n' > output.txt\n"
-                "case \"$*\" in *'CLOSEOUT ONLY for original task TASK-2'*) printf '{\\\"outcome\\\":\\\"complete\\\",\\\"changed\\\":false,\\\"commit_message\\\":\\\"fix: complete TASK-2\\\"}\\n' ;; *) printf '{\\\"outcome\\\":\\\"closeout_required\\\",\\\"changed\\\":true}\\n' ;; esac\n"
+                "case \"$*\" in *'for original task TASK-2'*) printf '{\\\"outcome\\\":\\\"complete\\\",\\\"changed\\\":false,\\\"commit_message\\\":\\\"fix: complete TASK-2\\\"}\\n' ;; *) printf '{\\\"outcome\\\":\\\"closeout_required\\\",\\\"changed\\\":true}\\n' ;; esac\n"
             )
             executable.chmod(0o755)
             env = os.environ.copy()
@@ -1359,12 +1359,12 @@ class CliContractTests(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0, result.stderr)
             call_lines = [line for line in calls.read_text().splitlines()
-                          if line.startswith(("2 -p", "1 -p"))]
+                          if line.startswith(("2 -p", "25 -p"))]
             self.assertEqual(len(call_lines), 2)
             self.assertTrue(call_lines[0].startswith("2 "))
-            self.assertTrue(call_lines[1].startswith("1 "))
-            self.assertIn("CLOSEOUT ONLY for original task TASK-2", calls.read_text())
-            self.assertIn("MUST NOT modify source code", calls.read_text())
+            self.assertTrue(call_lines[1].startswith("25 "))
+            self.assertIn("for original task TASK-2", calls.read_text())
+            self.assertIn("Never modify, create, or delete source", calls.read_text())
             self.assertEqual(json.loads(output.read_text())["status"], "complete")
 
     def test_task_cli_converts_provider_print_timeout_to_timeout_exit(self):

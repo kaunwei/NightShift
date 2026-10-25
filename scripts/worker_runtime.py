@@ -364,7 +364,8 @@ def build_ghost_closeout_prompt(task_id, verify, progress_file, host_git=False):
 - Return exactly ONE JSON object to the adapter result file (not prose; CLI exit status alone is not proof):
   Verified changes: {{"outcome":"complete","changed":true,"commit_message":"type(scope): summary","verification_evidence":"actual command and result"}}
   Verified no changes: {{"outcome":"no_change","changed":false,"no_change_reason":"specific reason","verification_evidence":"actual command and result"}}
-  Unfinished/failed: {{"outcome":"blocked","diagnostic":"concrete blocker"}} (or scope_blocked/guidance when applicable).
+  Unfinished/failed: {{"outcome":"blocked","diagnostic":"concrete blocker: cause=<root cause>, verify_output=<failed error>, next_action=<planner suggestion>"}} (or scope_blocked/guidance when applicable).
+- On failure/blocker, provide concise ASCII diagnosis for Planner: state exact failing command, error line, and recommended ticket breakdown or target expansion.
 - A commit_message is required only for finished, verified changes. Runtime audits file changes and attributes this result to {task_id}.
 """
 
@@ -1200,9 +1201,11 @@ def run_adapter_ghost(args, main_request, main_status, main_result):
     if not claim_ghost_allowance(state_path, task_id, registration_id):
         print(f"[WORKER] Ghost allowance already used for {task_id}.", file=sys.stderr)
         return 126, {}, None
-    remaining_budget = max(0, args.step_budget - int(main_result.get("actions_used", 0)))
-    remaining_deadline = max(0, args.timeout - float(main_status.get("elapsed_seconds", 0)))
-    if remaining_budget <= 0 or remaining_deadline <= 0:
+    ghost_budget = int(getattr(args, "ghost_step_budget", 0) or
+                       os.environ.get("WORKER_GHOST_STEP_BUDGET", "25"))
+    remaining_deadline = max(float(os.environ.get("WORKER_GHOST_TIMEOUT", "180")),
+                             args.timeout - float(main_status.get("elapsed_seconds", 0)))
+    if ghost_budget <= 0 or remaining_deadline <= 0:
         return 126, {}, None
     output_root = Path(getattr(args, "ghost_artifact_root", "") or
                        (Path(args.work_dir) / ".worker-ghosts")) / re.sub(
@@ -1223,7 +1226,7 @@ def run_adapter_ghost(args, main_request, main_status, main_result):
         "output_dir": str(ghost_dir.resolve()),
         "result_path": str(ghost_result.resolve()),
         "limits": {**main_request["limits"],
-                   "action_limit": remaining_budget,
+                   "action_limit": ghost_budget,
                    "execution_timeout_seconds": remaining_deadline,
                    "closeout_deadline_seconds": remaining_deadline},
     }
@@ -1836,10 +1839,20 @@ def worker_daemon(root):
                 elif outcome == "timeout":
                     print(f"[{stamp_now}] [TIMEOUT] Task exceeded {timeout}s limit!")
                     record_task_score("hard_failure", f"timeout after {timeout}s")
-                    if recover_current_attempt() is None:
+                    archive = recover_current_attempt()
+                    if archive is None:
                         break
+                    if archive and Path(archive).is_dir():
+                        diag_content = (f"# Failure Diagnostic: {task_id}\n\n"
+                                        f"- Time: {stamp_now}\n"
+                                        f"- Status: TIMEOUT\n"
+                                        f"- Timeout Limit: {timeout}s\n"
+                                        "- Suggestion: Task may be too complex or model got stuck in large context/compaction. Split into smaller tickets.\n")
+                        atomic_write(Path(archive) / "DIAGNOSTIC.md", diag_content)
+                    archive_note = f"Report: {Path(archive).name}/DIAGNOSTIC.md\n" if archive else ""
                     summary = ("=" * 80 + f"\n[BLOCKED] {task_id}: Timeout Exceeded ({timeout}s)\n"
                                f"Time: {stamp_now} | Status: TIMEOUT\nFailure Reason: Task execution timed out after {timeout} seconds.\n"
+                               + archive_note +
                                "Action Needed for Human: Task may be too complex. Split into smaller atomic tasks.\n" + "=" * 80)
                     prepend_progress(progress_file, summary)
                     append_line(done_file, f"[{stamp_now}] [FAILED] {task} [TIMEOUT]")
@@ -1850,10 +1863,24 @@ def worker_daemon(root):
                               else "Restricted ghost closeout failed or attempted implementation")
                     print(f"[{stamp_now}] [HARD FAILURE] {task_id}: {reason}")
                     record_task_score("hard_failure", reason)
-                    if recover_current_attempt() is None:
+                    archive = recover_current_attempt()
+                    if archive is None:
                         break
+                    diagnostic_text = payload.get("diagnostic", "") if isinstance(payload, dict) else ""
+                    if archive and Path(archive).is_dir():
+                        diag_content = (f"# Failure Diagnostic: {task_id}\n\n"
+                                        f"- Time: {stamp_now}\n"
+                                        f"- Outcome: {outcome}\n"
+                                        f"- Reason: {reason}\n")
+                        if diagnostic_text:
+                            diag_content += f"- Diagnostic:\n{diagnostic_text}\n"
+                        if isinstance(payload, dict) and payload.get("verification_evidence"):
+                            diag_content += f"- Verification Evidence: {payload.get('verification_evidence')}\n"
+                        atomic_write(Path(archive) / "DIAGNOSTIC.md", diag_content)
+                    short_diag = f" | Diagnostic: {diagnostic_text[:120]}" if diagnostic_text else ""
+                    archive_note = f"\n  Archive: {Path(archive).name}/DIAGNOSTIC.md" if archive else ""
                     prepend_progress(progress_file,
-                                     f"[HARD_FAILURE] {task_id}: {reason}; score now {read_score_state(score_state_path)['score']}/5\n"
+                                     f"[HARD_FAILURE] {task_id}: {reason}{short_diag}; score now {read_score_state(score_state_path)['score']}/5{archive_note}\n"
                                      f"{'[NEED_DECOMPOSITION]' if outcome == 'step_budget' else '[PLANNER_REQUIRED]'} {task_id}: "
                                      "Review the failed-task snapshot and return a bounded ticket through tasks.txt; daemon remains alive.")
                     append_line(done_file, f"[{stamp_now}] [FAILED] {task} [{outcome.upper()}]")
@@ -1880,12 +1907,22 @@ def worker_daemon(root):
                                   max(0, remaining - 1), percent, bar)
                 elif outcome == "blocked":
                     print(f"[{stamp_now}] 🚧 [WORKER BLOCKED] Worker reported [BLOCKED]; rejecting task success.")
-                    if recover_current_attempt() is None:
+                    archive = recover_current_attempt()
+                    if archive is None:
                         break
+                    diagnostic_text = payload.get("diagnostic", "") if isinstance(payload, dict) else ""
+                    if archive and Path(archive).is_dir():
+                        diag_content = (f"# Failure Diagnostic: {task_id}\n\n"
+                                        f"- Time: {stamp_now}\n"
+                                        f"- Status: BLOCKED\n"
+                                        f"- Blocker: {diagnostic_text or 'Worker reported [BLOCKED]'}\n")
+                        atomic_write(Path(archive) / "DIAGNOSTIC.md", diag_content)
+                    archive_note = f"Report: {Path(archive).name}/DIAGNOSTIC.md\n" if archive else ""
                     summary = ("=" * 80 + f"\n[BLOCKED] {task_id}: Worker Reported Blocked\n"
                                f"Time: {stamp_now} | Status: BLOCKED\n"
-                               "Failure Reason: Worker final response contained [BLOCKED].\n"
-                               "Action Needed for Human: Inspect the worker response and resolve its blocker.\n"
+                               f"Failure Reason: {diagnostic_text or 'Worker final response contained [BLOCKED].'}\n"
+                               + archive_note
+                               + "Action Needed for Human: Inspect the worker response and resolve its blocker.\n"
                                + "=" * 80)
                     prepend_progress(progress_file, summary)
                     append_line(done_file, f"[{stamp_now}] [FAILED] {task} [WORKER_BLOCKED]")

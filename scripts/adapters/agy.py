@@ -3,6 +3,7 @@
 import json
 import os
 from pathlib import Path
+import shutil
 import signal
 import subprocess
 import sys
@@ -18,6 +19,19 @@ def read_request():
     if value.get("protocol_version") != 1:
         raise ValueError("protocol_version 1 is required")
     return value
+
+
+def resolve_executable(executable):
+    if os.path.isabs(executable) or os.path.dirname(executable):
+        return executable
+    resolved = shutil.which(executable)
+    if resolved:
+        return resolved
+    for candidate_dir in (Path.home() / ".local/bin", Path("/opt/homebrew/bin"), Path("/usr/local/bin")):
+        candidate = candidate_dir / executable
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    return executable
 
 
 def config(request):
@@ -46,16 +60,18 @@ def start(request):
     log_path = output / "agy.log"
     message_path = output / "agy-message.json"
     prompt = Path(request["prompt_path"]).read_text(encoding="utf-8")
-    argv = [cfg["executable"], "-p", prompt, "--dangerously-skip-permissions"]
-    if str(cfg["sandbox"]).lower() in ("1", "true"):
+    executable = resolve_executable(cfg["executable"])
+    argv = [executable, "-p", prompt, "--dangerously-skip-permissions"]
+    if str(cfg.get("sandbox", "0")).lower() in ("1", "true"):
         argv.append("--sandbox")
-    if cfg["mode"]:
+    if cfg.get("mode"):
         argv += ["--mode", cfg["mode"]]
-    if cfg["model"]:
+    if cfg.get("model"):
         argv += ["--model", cfg["model"]]
-    if cfg["effort"]:
+    if cfg.get("effort"):
         argv += ["--effort", cfg["effort"]]
-    argv += ["--print-timeout", f"{request.get('limits', {}).get('execution_timeout_seconds', cfg.get('execution_timeout_seconds', 1800))}s"]
+    timeout = request.get("limits", {}).get("execution_timeout_seconds", cfg.get("execution_timeout_seconds", 1800))
+    argv += ["--print-timeout", f"{timeout}s"]
     for directory in str(cfg.get("additional_dirs", "")).split(","):
         directory = directory.strip()
         if directory and Path(directory).is_dir():
@@ -68,50 +84,141 @@ def start(request):
     if not isinstance(agent_args, list) or not all(isinstance(arg, str) for arg in agent_args):
         raise ValueError("AgY agent args must be a string array")
     argv.extend(agent_args)
+    limit = int(request.get("limits", {}).get("action_limit", cfg.get("action_limit", 12)))
     try:
-        help_text = subprocess.run([cfg["executable"], "--help"], cwd=request["working_directory"],
+        help_text = subprocess.run([executable, "--help"], cwd=request["working_directory"],
                                    capture_output=True, text=True, timeout=10).stdout
         if "--max-turns" in help_text:
-            argv += ["--max-turns", str(request.get("limits", {}).get("action_limit", 12))]
+            argv += ["--max-turns", str(limit)]
         elif "--max-steps" in help_text:
-            argv += ["--max-steps", str(request.get("limits", {}).get("action_limit", 12))]
+            argv += ["--max-steps", str(limit)]
     except (OSError, subprocess.TimeoutExpired):
         pass
-    limit = int(request.get("limits", {}).get("action_limit", cfg.get("action_limit", 12)))
-    runner = r'''import json, subprocess, sys
+    runner = r'''import json, os, re, signal, subprocess, sys
 argv, cwd, env, log, message, result, status, limit = sys.argv[1:]
 argv, env = json.loads(argv), json.loads(env)
 with open(log, "w", encoding="utf-8") as stream:
-    code = subprocess.run(argv, cwd=cwd, env={**__import__('os').environ, **env}, input=open(sys.stdin.fileno()).read(), text=True, stdout=stream, stderr=subprocess.STDOUT, check=False).returncode
-actions = 0
-for line in open(log, encoding="utf-8", errors="replace"):
+    process = subprocess.Popen(argv, cwd=cwd, env={**os.environ, **env},
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, bufsize=1)
     try:
-        event = json.loads(line); item = event.get("item", {})
-        actions += event.get("type") == "item.completed" and item.get("type") == "command_execution"
-    except (ValueError, AttributeError):
+        input_data = open(sys.stdin.fileno(), encoding="utf-8").read()
+        if input_data:
+            process.stdin.write(input_data)
+        process.stdin.close()
+    except (BrokenPipeError, OSError):
+        pass
+    actions, over_budget = 0, False
+    for line in process.stdout:
+        stream.write(line)
+        stream.flush()
+        try:
+            event = json.loads(line)
+            item = event.get("item", {})
+            actions += event.get("type") == "item.completed" and item.get("type") == "command_execution"
+        except (ValueError, AttributeError):
+            pass
         actions += any(token in line for token in ("[EXEC]", "Tool Call", "edit_file", "write_file", "run_command", "read_file"))
+        if actions > int(limit) and process.poll() is None:
+            over_budget = True
+            process.terminate()
+    try:
+        code = process.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        code = process.wait()
+        over_budget = True
+if actions > int(limit):
+    over_budget = True
 diagnostic = open(log, encoding="utf-8", errors="replace").read()
 quota = any(term in diagnostic.lower() for term in ("insufficient_quota", "rate limit", "resource_exhausted", "429", "out of credits"))
 timed_out = "print timeout after" in diagnostic.lower()
-outcome = "quota_exhausted" if quota else "execution_timeout" if timed_out else "step_budget_exceeded" if actions > int(limit) else "complete" if code == 0 else "failure"
-payload = {}
-try: payload = json.load(open(message, encoding="utf-8"))
-except (OSError, ValueError):
-    try: payload = json.loads(diagnostic.strip().splitlines()[-1])
-    except (ValueError, IndexError): pass
-if outcome == "complete" and not isinstance(payload, dict): outcome = "closeout_required"
-if isinstance(payload, dict): payload.setdefault("actions_used", actions)
-else: payload = {"outcome": "closeout_required", "actions_used": actions}
-payload.setdefault("outcome", outcome)
-if outcome != "complete": payload["outcome"] = outcome
+outcome = "quota_exhausted" if quota else "execution_timeout" if timed_out else "step_budget_exceeded" if over_budget else "complete" if code == 0 else "failure"
+
+text = ""
+try:
+    with open(message, encoding="utf-8") as source:
+        text = source.read().strip()
+except OSError:
+    pass
+
+payload = None
+if text:
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, dict):
+            payload = parsed
+    except ValueError:
+        pass
+
+if payload is None:
+    for line in reversed(diagnostic.strip().splitlines()):
+        line = line.strip()
+        if line.startswith("{") and line.endswith("}"):
+            try:
+                parsed = json.loads(line)
+                if isinstance(parsed, dict) and "outcome" in parsed:
+                    payload = parsed
+                    break
+            except ValueError:
+                pass
+
+if payload is None:
+    matches = re.findall(r"```(?:json)?\s*(\{.*?\})\s*```", diagnostic, re.DOTALL)
+    for m in reversed(matches):
+        try:
+            parsed = json.loads(m.strip())
+            if isinstance(parsed, dict) and "outcome" in parsed:
+                payload = parsed
+                break
+        except ValueError:
+            pass
+
+if payload is None:
+    try:
+        parsed = json.loads(diagnostic.strip().splitlines()[-1])
+        if isinstance(parsed, dict):
+            payload = parsed
+    except (ValueError, IndexError):
+        pass
+
+if not isinstance(payload, dict):
+    markers = (("SCOPE_BLOCKED", "scope_blocked"), ("BLOCKED", "blocked"),
+               ("NEED_GUIDANCE", "guidance"), ("NEED_DECOMPOSITION", "guidance"),
+               ("CLOSEOUT_INCOMPLETE", "blocked"), ("CLOSEOUT_REQUIRED", "closeout_required"),
+               ("DEAD_END", "blocked"))
+    final_outcome = next((val for marker, val in markers if re.search(r"\[" + marker + r"\]", text or diagnostic)), "failure")
+    payload = {"outcome": final_outcome, "diagnostic": text or diagnostic or "AgY returned no final result"}
+    if final_outcome == "failure":
+        payload["error_code"] = "invalid_result"
+
+allowed = {"complete", "no_change", "closeout_required", "blocked", "scope_blocked", "guidance", "failure"}
+if not isinstance(payload.get("outcome"), str) or payload["outcome"] not in allowed:
+    payload = {"outcome": "failure", "error_code": "invalid_result",
+               "diagnostic": "AgY final JSON requires a supported outcome"}
+
+payload["actions_used"] = actions
+if outcome != "complete":
+    payload["outcome"] = outcome
+    final_status = "failed" if outcome == "failure" else outcome
+else:
+    if payload.get("outcome") in ("complete", "no_change", "closeout_required"):
+        final_status = "complete"
+    else:
+        final_status = "failed"
+
 json.dump(payload, open(result, "w", encoding="utf-8"))
-json.dump({"status": outcome, "result_location": result, "exit_code": code}, open(status, "w", encoding="utf-8"))
+json.dump({"status": final_status, "result_location": result, "exit_code": code}, open(status, "w", encoding="utf-8"))
 '''
+    extra_path = str(Path.home() / ".local/bin")
+    current_path = os.environ.get("PATH", "")
+    child_path = f"{extra_path}:{current_path}" if extra_path not in current_path else current_path
     child_env = {**request.get("environment", {}),
+                 "PATH": child_path,
                  "NIGHTSHIFT_TASK_ID": request.get("task_id", ""),
                  "NIGHTSHIFT_EXECUTION_KIND": request.get("kind", "main"),
-                 "MAX_STEPS": str(request.get("limits", {}).get("action_limit", 12)),
-                 "AGY_MAX_STEPS": str(request.get("limits", {}).get("action_limit", 12)),
+                 "MAX_STEPS": str(limit),
+                 "AGY_MAX_STEPS": str(limit),
                  "PORT": request.get("environment", {}).get("PORT", "3001"),
                  "TEST_PORT": request.get("environment", {}).get("TEST_PORT", "3001")}
     proc = subprocess.Popen([sys.executable, "-c", runner, json.dumps(argv),
@@ -120,7 +227,8 @@ json.dump({"status": outcome, "result_location": result, "exit_code": code}, ope
                              str(status_path), str(limit)], stdin=subprocess.PIPE,
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                             start_new_session=(os.name == "posix"))
-    proc.stdin.write(prompt.encode("utf-8")); proc.stdin.close()
+    proc.stdin.write(prompt.encode("utf-8"))
+    proc.stdin.close()
     response({"execution_id": str(proc.pid), "status_location": str(status_path)})
 
 
@@ -137,16 +245,19 @@ def cancel(request):
     try:
         os.killpg(pid, signal.SIGTERM) if os.name == "posix" else os.kill(pid, signal.SIGTERM)
     except ProcessLookupError:
-        response({"stopped": True}); return
+        response({"stopped": True})
+        return
     deadline = time.monotonic() + float(request.get("stop_timeout_seconds", 2))
     while time.monotonic() < deadline:
         try:
             os.kill(pid, 0)
             stat = Path(f"/proc/{pid}/stat")
             if stat.exists() and stat.read_text().split()[2] == "Z":
-                response({"stopped": True}); return
+                response({"stopped": True})
+                return
         except ProcessLookupError:
-            response({"stopped": True}); return
+            response({"stopped": True})
+            return
         time.sleep(0.05)
     response({"stopped": False})
 
@@ -154,7 +265,6 @@ def cancel(request):
 def closeout(request):
     request["kind"] = "closeout"
     request.setdefault("limits", {})["action_limit"] = request["limits"].get("action_limit", 1)
-    # Closeout uses a distinct, private Codex execution with the same local status contract.
     start(request)
 
 
@@ -170,5 +280,5 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as error:
-        print(f"codex adapter: {error}", file=sys.stderr)
+        print(f"agy adapter: {error}", file=sys.stderr)
         sys.exit(1)
