@@ -67,8 +67,60 @@ def atomic_write(path, content):
 
 
 def prepend_progress(path, entry):
-    history = Path(path).read_text(encoding="utf-8") if Path(path).exists() else ""
-    atomic_write(path, f"{entry}\n{history}")
+    path = Path(path)
+    lock = Path(f"{path}.lock")
+    for _ in range(100):
+        try:
+            lock.mkdir()
+            break
+        except FileExistsError:
+            time.sleep(0.05)
+    else:
+        raise TimeoutError(f"progress lock remains held: {lock}")
+    try:
+        history = path.read_text(encoding="utf-8") if path.exists() else ""
+        atomic_write(path, f"{entry}\n{history}")
+    finally:
+        lock.rmdir()
+
+
+def update_planner_review(progress_path, task_id, audit_ns, result):
+    if result not in ("accept", "reject", "no_fault"):
+        raise ValueError(f"unsupported Planner review result: {result}")
+    path = Path(progress_path)
+    lock = Path(f"{path}.lock")
+    for _ in range(100):
+        try:
+            lock.mkdir()
+            break
+        except FileExistsError:
+            time.sleep(0.05)
+    else:
+        raise TimeoutError(f"progress lock remains held: {lock}")
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+        prefix = "[MECHANICAL_AUDIT] Status: PASS |"
+        matches = [index for index, line in enumerate(lines)
+                   if line.startswith(prefix) and f"Task: {task_id} |" in line
+                   and f"Audit_NS: {audit_ns}" in line]
+        if len(matches) != 1:
+            raise ValueError(f"expected one matching audit record, found {len(matches)}")
+        index = matches[0]
+        line = lines[index]
+        if "Planner_Review:" not in line:
+            raise ValueError("legacy audit requires confirmation before review")
+        current = re.search(r"Planner_Review: ([a-z_]+)", line)
+        if not current:
+            raise ValueError("invalid Planner_Review field")
+        if current.group(1) == result:
+            return False
+        if current.group(1) != "pending":
+            raise ValueError(f"Planner review conflict: already {current.group(1)}")
+        lines[index] = re.sub(r"Planner_Review: pending", f"Planner_Review: {result}", line, count=1)
+        atomic_write(path, "".join(lines))
+        return True
+    finally:
+        lock.rmdir()
 
 
 def read_score_state(path):
@@ -336,7 +388,7 @@ def _record_score_result(path, task_id, result, evidence=""):
     return {**score_summary(state), "task_id": task_id, "result": result}
 
 
-def record_score_result(path, task_id, result, evidence=""):
+def record_score_result(path, task_id, result, evidence="", progress_path="", audit_ns=""):
     path = Path(path)
     lock = Path(f"{path}.lock")
     for _ in range(100):
@@ -348,6 +400,10 @@ def record_score_result(path, task_id, result, evidence=""):
     else:
         raise TimeoutError(f"score state lock remains held: {lock}")
     try:
+        if progress_path and audit_ns:
+            if not update_planner_review(progress_path, task_id, audit_ns, result):
+                return {**score_summary(read_score_state(path)), "task_id": task_id,
+                        "result": result, "duplicate": True}
         return _record_score_result(path, task_id, result, evidence)
     finally:
         lock.rmdir()
@@ -1988,7 +2044,7 @@ def worker_daemon(root):
                         diff = subprocess.run(["git", "-C", str(work_dir), "diff", "--stat", base, "HEAD"],
                                                capture_output=True, text=True, check=False).stdout.splitlines()
                         diff_stat = diff[-1].strip() if diff else "0 files changed"
-                        prepend_progress(progress_file, f"[MECHANICAL_AUDIT] Status: PASS | Task: {task_id} | Verify_Exit: 0 | Tests_Run: >=1 | Whitelist: PASS | Tree: CLEAN | Diff: {diff_stat} | Attempts: {attempts} | Audit_NS: {time.time_ns()}")
+                        prepend_progress(progress_file, f"[MECHANICAL_AUDIT] Status: PASS | Task: {task_id} | Verify_Exit: 0 | Tests_Run: >=1 | Whitelist: PASS | Tree: CLEAN | Diff: {diff_stat} | Attempts: {attempts} | Audit_NS: {time.time_ns()} | Planner_Review: pending")
                         # Audit passed: retire agent-marked reports, then validate remaining evidence.
                         settle_invalid_reports(root, work_dir, accepted=True)
                         refresh_active_reports(root, work_dir)
@@ -2656,6 +2712,8 @@ def main(argv=None):
     score_record.add_argument("--task-id", required=True)
     score_record.add_argument("--result", choices=("accept", "reject", "no_fault", "hard_failure", "success"), required=True)
     score_record.add_argument("--evidence", default="")
+    score_record.add_argument("--progress-file", default="")
+    score_record.add_argument("--audit-ns", default="")
     score_record.add_argument("--agent-id", default="")
     score_record.add_argument("--events", default="")
     score_record.add_argument("--mid-batch", action="store_true")
@@ -2798,7 +2856,8 @@ def main(argv=None):
                                                event_path, args.mid_batch,
                                                args.dispatch_gate)
         else:
-            result = record_score_result(args.state, args.task_id, args.result, args.evidence)
+            result = record_score_result(args.state, args.task_id, args.result, args.evidence,
+                                         args.progress_file, args.audit_ns)
         print(json.dumps(result, ensure_ascii=False))
     elif args.command == "agent-events-watch":
         for line in watch_agent_events(args.events, args.cursor, args.acknowledgements,

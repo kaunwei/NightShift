@@ -40,6 +40,8 @@ Fast-track a first-attempt `HIGH` result with a passing audit; fast-forward inte
 
 ## 3. Exceptions, recovery, and score
 
+- On resumption, inspect PASS audit records with `Planner_Review: pending` in the configured progress log.
+- After review, record the result with `score-record` and the matching `--task-id`, `--audit-ns`, and `--progress-file` values; retain the acceptance gates above.
 - **Worker requests:** `[NEED_GUIDANCE]` needs human clarification before requeueing with `GUIDANCE:`; `[NEED_DECOMPOSITION]` needs narrower L2/L3 tickets. For budget exhaustion, inspect `.scratch/failed_tasks/` and rewrite the affected `tasks.txt` entries. `[BLOCKED]` requires a concrete unblock decision. After three blocked attempts, inspect the *exception* logs, retain only reusable quirks in `.worker.notes.md`, and narrow scope; never compensate by raising score.
 - **Identity and closeout:** Keep the same task ID for unchanged retries; new IDs require changed scope/granularity. `[CLOSEOUT_REQUIRED]` may run once for the original task, for verification/permitted Git finalization only. Remaining implementation fails the original task; ghost closeout does not affect score cadence.
 - **Failover and scope:** Before replacement dispatch, stop the failed attempt, restore its baseline, and review/acknowledge or revise the Sentinel handoff and queued work. Use Clean Pivot only when fallout exceeds two patch tickets or `[SCOPE_BLOCKED]` occurs, with explicit recovery authorization. Preserve unrelated changes.

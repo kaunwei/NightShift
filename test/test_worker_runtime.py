@@ -935,6 +935,60 @@ class PollContractTests(unittest.TestCase):
 
 
 class WorkerScoreTests(unittest.TestCase):
+    def test_planner_review_updates_only_matching_audit_and_preserves_history(self):
+        with tempfile.TemporaryDirectory() as directory:
+            progress = Path(directory) / "progress.log"
+            progress.write_text(
+                "[MECHANICAL_AUDIT] Status: PASS | Task: T | Audit_NS: 11 | Planner_Review: pending\n"
+                "[MECHANICAL_AUDIT] Status: PASS | Task: T | Audit_NS: 12 | Planner_Review: pending\n"
+                "unrelated history\n", encoding="utf-8")
+            result = runtime("score-record", "--state", Path(directory) / "score.json",
+                             "--task-id", "T", "--result", "accept",
+                             "--progress-file", progress, "--audit-ns", "11")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            content = progress.read_text(encoding="utf-8")
+            self.assertIn("Audit_NS: 11 | Planner_Review: accept", content)
+            self.assertIn("Audit_NS: 12 | Planner_Review: pending", content)
+            self.assertTrue(content.endswith("unrelated history\n"))
+
+    def test_planner_review_rejects_legacy_and_conflicting_records(self):
+        with tempfile.TemporaryDirectory() as directory:
+            progress = Path(directory) / "progress.log"
+            progress.write_text("[MECHANICAL_AUDIT] Status: PASS | Task: T | Audit_NS: 11\n")
+            legacy = runtime("score-record", "--state", Path(directory) / "score.json",
+                             "--task-id", "T", "--result", "accept",
+                             "--progress-file", progress, "--audit-ns", "11")
+            self.assertNotEqual(legacy.returncode, 0)
+            self.assertIn("confirmation", legacy.stderr)
+            progress.write_text("[MECHANICAL_AUDIT] Status: PASS | Task: T | Audit_NS: 11 | Planner_Review: reject\n")
+            conflict = runtime("score-record", "--state", Path(directory) / "score.json",
+                               "--task-id", "T", "--result", "accept",
+                               "--progress-file", progress, "--audit-ns", "11")
+            self.assertNotEqual(conflict.returncode, 0)
+            self.assertIn("conflict", conflict.stderr)
+
+    def test_score_record_reviews_one_audit_once_and_leaves_another_pending(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            progress, state = root / "progress.log", root / "score.json"
+            progress.write_text(
+                "[MECHANICAL_AUDIT] Status: PASS | Task: T | Audit_NS: 11 | Planner_Review: pending\n"
+                "[MECHANICAL_AUDIT] Status: PASS | Task: T | Audit_NS: 12 | Planner_Review: pending\n",
+                encoding="utf-8")
+            state.write_text(json.dumps({"version": 1, "score": 3,
+                                         "success_window": ["A", "B", "C", "D"],
+                                         "failures": {}, "feedback": []}), encoding="utf-8")
+            args = ("score-record", "--state", state, "--task-id", "T", "--result", "accept",
+                    "--progress-file", progress, "--audit-ns", "11")
+            first = runtime(*args)
+            duplicate = runtime(*args)
+            self.assertEqual(json.loads(first.stdout)["score"], 4)
+            self.assertTrue(json.loads(duplicate.stdout)["duplicate"])
+            self.assertEqual(json.loads(state.read_text())["score"], 4)
+            content = progress.read_text(encoding="utf-8")
+            self.assertIn("Audit_NS: 11 | Planner_Review: accept", content)
+            self.assertIn("Audit_NS: 12 | Planner_Review: pending", content)
+
     def test_new_worker_starts_at_five_and_maps_to_coarsest_task_level(self):
         with tempfile.TemporaryDirectory() as directory:
             state = Path(directory) / "score.json"
