@@ -2390,9 +2390,16 @@ def mechanical_audit(args):
                 reason = "False Red-Light Detected: Repro failed on compilation/syntax error instead of test assertion."
     elif research:
         messages.append("[WORKER_GUARD] 🔍 Executing Mechanical Audit ([RESEARCH])...")
-        status = subprocess.run(["git", "-C", args.work_dir, "status", "--porcelain"],
-                                check=False, capture_output=True, text=True).stdout
-        dirty = [line for line in status.splitlines() if not re.search(
+        trees = attempt_audit_trees(args)
+        if trees:
+            # Use the same captured baseline as git_audit: existing user work is
+            # not a research edit, while a new product commit still is one.
+            changed = changed_tree_paths(args.work_dir, *trees)
+        else:
+            status = subprocess.run(["git", "-C", args.work_dir, "status", "--porcelain"],
+                                    check=False, capture_output=True, text=True).stdout
+            changed = status.splitlines()
+        dirty = [line for line in changed if not re.search(
             r"progress\.log|tasks\.txt|tasks\.done|worker\..*\.status|\.preview|\.worker.*|\.reports/|\.reports", line)]
         if dirty:
             guard_status = 12

@@ -1725,6 +1725,60 @@ class GitAuditContractTests(unittest.TestCase):
 
 
 class MechanicalAuditContractTests(unittest.TestCase):
+    def test_research_audit_preserves_dirty_user_baseline_but_rejects_product_delta(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "project"
+            root.mkdir()
+
+            def git(*args):
+                return subprocess.run(["git", "-C", str(root), *args], check=True,
+                                      capture_output=True, text=True).stdout.strip()
+
+            git("init", "-q")
+            git("config", "user.name", "Research Audit Test")
+            git("config", "user.email", "research@example.invalid")
+            (root / ".gitignore").write_text(".reports/\n")
+            (root / "source.py").write_text("committed source\n")
+            git("add", ".gitignore", "source.py")
+            git("commit", "-qm", "baseline")
+            base = git("rev-parse", "HEAD")
+            (root / "source.py").write_text("pre-existing user source\n")
+            (root / "user-notes.txt").write_text("pre-existing untracked notes\n")
+            snapshot = Path(directory) / "baseline"
+            captured = runtime("attempt-snapshot", "--work-dir", root,
+                               "--task-id", "TASK-RESEARCH", "--attempt-id", "attempt-A",
+                               "--snapshot", snapshot)
+            self.assertEqual(captured.returncode, 0, captured.stderr)
+            report = root / ".reports/current/SUMMARY.md"
+            report.parent.mkdir(parents=True)
+            report.write_text("# Findings\nSource pointer: source.py#L1\n")
+
+            def audit():
+                result = runtime("mechanical-audit", "--work-dir", root, "--base", base,
+                                 "--baseline-snapshot", snapshot,
+                                 "--target", ".reports/current/SUMMARY.md",
+                                 "--title", "[RESEARCH] inspect", "--task-id", "TASK-RESEARCH",
+                                 "--verify", "REPORT_ONLY")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                return json.loads(result.stdout)
+
+            accepted = audit()
+            self.assertEqual(accepted["status"], 0, accepted)
+            self.assertEqual((root / "source.py").read_text(), "pre-existing user source\n")
+            self.assertEqual((root / "user-notes.txt").read_text(),
+                             "pre-existing untracked notes\n")
+            self.assertEqual(git("diff", "--cached", "--name-only"), "")
+            self.assertIn("Task=TASK-RESEARCH", report.read_text().splitlines()[0])
+
+            (root / "source.py").write_text("research changed product code\n")
+            self.assertNotEqual(audit()["status"], 0)
+            # A source commit must not evade the report-only invariant either.
+            git("add", "source.py")
+            git("commit", "-qm", "unexpected research source change")
+            rejected = audit()
+            self.assertEqual(rejected["status"], 12, rejected)
+            self.assertIn("source.py", rejected["error"])
+
     def test_research_audit_adds_metadata_and_rejects_invalid_pointers(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
