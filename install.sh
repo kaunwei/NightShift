@@ -70,7 +70,7 @@ mkdir -p "$TARGET_DIR/scripts"
 cp -f "$SCRIPT_DIR/scripts/worker_runtime.py" "$TARGET_DIR/scripts/worker_runtime.py"
 echo "  ✓ Deployed scripts/worker_runtime.py"
 mkdir -p "$TARGET_DIR/scripts/adapters"
-for adapter in codex.py agy.py generic.py; do
+for adapter in codex.py agy.py generic.py aider.py aider_explore.py explore_evidence.py; do
   cp -f "$SCRIPT_DIR/scripts/adapters/$adapter" "$TARGET_DIR/scripts/adapters/$adapter"
   chmod +x "$TARGET_DIR/scripts/adapters/$adapter"
 done
@@ -78,6 +78,7 @@ mkdir -p "$TARGET_DIR/docs"
 cp -f "$SCRIPT_DIR/docs/PORTING_GUIDE.md" "$TARGET_DIR/docs/PORTING_GUIDE.md"
 mkdir -p "$TARGET_DIR/test/nightshift_worker"
 cp -f "$SCRIPT_DIR/test/test_worker_runtime.py" "$TARGET_DIR/test/nightshift_worker/test_worker_runtime.py"
+cp -f "$SCRIPT_DIR/test/test_explore_evidence.py" "$TARGET_DIR/test/nightshift_worker/test_explore_evidence.py"
 cp -f "$SCRIPT_DIR/test/README.md" "$TARGET_DIR/test/nightshift_worker/README.md"
 touch "$TARGET_DIR/test/nightshift_worker/__init__.py"
 chmod +x "$TARGET_DIR/worker.sh"

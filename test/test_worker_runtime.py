@@ -1748,6 +1748,66 @@ class RollbackContractTests(unittest.TestCase):
             self.assertEqual((archived / "failed-files/attempt-commit.txt").read_text(),
                              "committed by failed attempt\n")
 
+    def test_attempt_baseline_excludes_ignored_files_and_scratch_from_snapshot_and_recovery(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "repo"
+            root.mkdir()
+            def git(*args):
+                return subprocess.run(["git", "-C", str(root), *args], check=True,
+                                      capture_output=True, text=True).stdout.strip()
+            git("init", "-q")
+            git("config", "user.name", "Recovery Test")
+            git("config", "user.email", "recovery@example.invalid")
+            (root / ".gitignore").write_text(".scratch/\nbuild/\n*.log\n")
+            (root / "tracked.txt").write_text("committed\n")
+            git("add", ".gitignore", "tracked.txt")
+            git("commit", "-qm", "baseline")
+
+            (root / "preexisting.txt").write_text("preexisting untracked\n")
+            (root / ".scratch/attempts/old").mkdir(parents=True)
+            (root / ".scratch/attempts/old/data.json").write_text("{\"old\": 1}\n")
+            (root / "build").mkdir()
+            (root / "build/app.o").write_text("binary blob\n")
+            (root / "debug.log").write_text("log line\n")
+
+            snapshot = Path(directory) / "snapshot"
+            archived = Path(directory) / "archived"
+            captured = runtime("attempt-snapshot", "--work-dir", root, "--task-id", "TASK-R",
+                               "--attempt-id", "attempt-A", "--snapshot", snapshot)
+            self.assertEqual(captured.returncode, 0, captured.stderr)
+
+            metadata = json.loads((snapshot / "snapshot.json").read_text())
+            self.assertIn("preexisting.txt", metadata["paths"])
+            self.assertNotIn(".scratch/attempts/old/data.json", metadata["paths"])
+            self.assertNotIn("build/app.o", metadata["paths"])
+            self.assertNotIn("debug.log", metadata["paths"])
+            self.assertFalse((snapshot / "files" / ".scratch").exists())
+            self.assertFalse((snapshot / "files" / "build").exists())
+
+            (root / "tracked.txt").write_text("failed attempt edit\n")
+            (root / "attempt-untracked.txt").write_text("failed attempt untracked\n")
+            (root / "build/new.o").write_text("new binary\n")
+            (root / ".scratch/failed_tasks/previous").mkdir(parents=True)
+            (root / ".scratch/failed_tasks/previous/info.txt").write_text("fail\n")
+
+            recovered = runtime("attempt-recover", "--work-dir", root, "--snapshot", snapshot,
+                                "--archive", archived)
+            self.assertEqual(recovered.returncode, 0, recovered.stderr)
+
+            failed_metadata = json.loads((archived / "failed-files.json").read_text())
+            self.assertIn("attempt-untracked.txt", failed_metadata)
+            self.assertNotIn("build/new.o", failed_metadata)
+            self.assertNotIn("build/app.o", failed_metadata)
+            self.assertNotIn(".scratch/failed_tasks/previous/info.txt", failed_metadata)
+            self.assertFalse((archived / "failed-files" / "build").exists())
+            self.assertFalse((archived / "failed-files" / ".scratch").exists())
+
+            self.assertEqual((root / "tracked.txt").read_text(), "committed\n")
+            self.assertEqual((root / "preexisting.txt").read_text(), "preexisting untracked\n")
+            self.assertFalse((root / "attempt-untracked.txt").exists())
+            self.assertTrue((root / ".scratch/attempts/old/data.json").is_file())
+            self.assertTrue((root / "build/app.o").is_file())
+
     def test_invalid_attempt_baseline_stops_recovery_without_resetting_workspace(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "repo"
@@ -2499,6 +2559,67 @@ class WorkerIntegrationTests(unittest.TestCase):
             self.assertNotIn("TASK-T", score["failures"])
             self.assertEqual(score["score"], 5)
 
+    def test_worker_task_failure_with_ignored_scratch_and_build_files_avoids_recursive_backup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "repo"
+            root.mkdir()
+            for name in ("worker.sh", ".gitignore"):
+                shutil.copy2(ROOT / name, root / name)
+            with open(root / ".gitignore", "a") as f:
+                f.write("build/\n")
+            (root / "scripts").mkdir()
+            copy_runtime_fixture(root / "scripts/worker_runtime.py")
+            (root / "output.txt").write_text("baseline\n")
+            (root / "tasks.txt").write_text(
+                "TASK-F | LEVEL: 1 | TARGET: output.txt | ACTION: [CODE: FIX] Failure test | VERIFY: true\n"
+            )
+            (root / ".scratch/attempts/PREV/baseline").mkdir(parents=True)
+            (root / ".scratch/attempts/PREV/baseline/snapshot.json").write_text('{"paths":{}}\n')
+            (root / "build").mkdir()
+            (root / "build/app.o").write_text("binary blob\n")
+
+            bin_dir = Path(directory) / "bin"
+            bin_dir.mkdir()
+            fake = bin_dir / "codex"
+            fake.write_text(
+                "#!/bin/sh\n"
+                "printf 'failed partial\\n' > output.txt\n"
+                "mkdir -p build\n"
+                "printf 'new build artifact\\n' > build/failed.o\n"
+                "exit 1\n"
+            )
+            fake.chmod(0o755)
+            (root / ".worker.env").write_text(
+                "WORKER_ISOLATION=0\nRUN_ONCE=1\nPOLL_INTERVAL=0\nTASK_TIMEOUT=5\n"
+                "WORKER_SCORE_FILE=.worker-score-test.json\nAI_AGENTS_JSON='" +
+                json.dumps([codex_registration("failagent", fake)]) + "'\n")
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            subprocess.run(["git", "-C", str(root), "config", "user.name", "Worker Test"], check=True)
+            subprocess.run(["git", "-C", str(root), "config", "user.email", "worker@example.invalid"], check=True)
+            subprocess.run(["git", "-C", str(root), "add", "worker.sh", "scripts", ".gitignore", "output.txt", "tasks.txt"], check=True)
+            subprocess.run(["git", "-C", str(root), "commit", "-qm", "fixture"], check=True)
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
+
+            result = subprocess.run(["bash", str(root / "worker.sh")], cwd=root,
+                                    env=env, capture_output=True, text=True, timeout=20)
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual((root / "output.txt").read_text(), "baseline\n")
+            snapshots = list((root / ".scratch/attempts/TASK-F").glob("*/baseline/snapshot.json"))
+            self.assertEqual(len(snapshots), 1)
+            snapshot_meta = json.loads(snapshots[0].read_text())
+            for path_key in snapshot_meta.get("paths", {}):
+                self.assertFalse(path_key.startswith(".scratch/"), f"Unexpected .scratch path in snapshot: {path_key}")
+                self.assertFalse(path_key.startswith("build/"), f"Unexpected build path in snapshot: {path_key}")
+            backups = list((root / ".scratch/failed_tasks").glob("TASK-F_*"))
+            self.assertTrue(len(backups) >= 1)
+            backup_dir = backups[0]
+            self.assertFalse((backup_dir / "failed-files" / "build").exists())
+            self.assertFalse((backup_dir / "failed-files" / ".scratch").exists())
+            self.assertTrue((root / ".scratch/attempts/PREV/baseline/snapshot.json").is_file())
+            self.assertTrue((root / "build/app.o").is_file())
+
     def test_codex_task_keeps_queue_status_commit_and_guard_contract(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "repo"
@@ -2880,7 +3001,8 @@ class InstallerIntegrationTests(unittest.TestCase):
             self.assertEqual((target / "update.sh").read_bytes(), (ROOT / "update.sh").read_bytes())
             deployed_runtime = target / "scripts/worker_runtime.py"
             self.assertEqual(deployed_runtime.read_bytes(), (ROOT / "scripts/worker_runtime.py").read_bytes())
-            for adapter in ("codex.py", "agy.py", "generic.py"):
+            for adapter in ("codex.py", "agy.py", "generic.py", "aider.py",
+                            "aider_explore.py", "explore_evidence.py"):
                 self.assertEqual((target / "scripts/adapters" / adapter).read_bytes(),
                                  (ROOT / "scripts/adapters" / adapter).read_bytes())
             self.assertEqual((target / "docs/PORTING_GUIDE.md").read_bytes(),
@@ -2891,6 +3013,7 @@ class InstallerIntegrationTests(unittest.TestCase):
             operations.write_text("stale planner instructions\n")
             self.assertFalse((target / "worker_runtime.py").exists())
             self.assertTrue((target / "test/nightshift_worker/test_worker_runtime.py").is_file())
+            self.assertTrue((target / "test/nightshift_worker/test_explore_evidence.py").is_file())
             self.assertTrue((target / "test/nightshift_worker/README.md").is_file())
             self.assertFalse((target / ".worker.env").exists())
             self.assertTrue((target / "scripts/adapters/agents.json").is_file())

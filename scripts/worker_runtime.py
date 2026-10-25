@@ -813,14 +813,28 @@ def read_agent_state(path):
     return state
 
 
+def agent_supports_task(agent, title, constraints=""):
+    """Apply an optional registration task-scope filter before timeout/quota routing."""
+    if not agent.get("overrides", {}).get("research_only", False):
+        return True
+    return bool(re.search(r"\[RESEARCH\]", f"{title} {constraints}", re.I))
+
+
 def execute_registered_agents(args, agents, state_path, rollback):
     state = read_agent_state(state_path)
     task_exclusions = state["task_exclusions"].get(args.task_id, [])
-    available = [agent for agent in agents
+    task_agents = [agent for agent in agents
+                   if agent_supports_task(agent, getattr(args, "title", ""),
+                                          getattr(args, "constraints", ""))]
+    available = [agent for agent in task_agents
                  if agent["id"] not in state["exhausted"]
                  and agent["id"] not in task_exclusions]
     if not available:
-        if any(agent["id"] not in state["exhausted"] for agent in agents):
+        if not task_agents:
+            args.awaiting_agent = True
+            print("[WORKER] AGENT_UNAVAILABLE: no registered agent supports this task.")
+            return 0, False
+        if any(agent["id"] not in state["exhausted"] for agent in task_agents):
             args.awaiting_agent = True
             print("[WORKER] AGENT_UNAVAILABLE: all non-exhausted registrations timed out for this task.")
             return 0, False
@@ -1357,6 +1371,9 @@ def execute_adapter_task(args):
         "registration_id": getattr(args, "agent_id", "") or args.adapter,
         "overrides": overrides,
         "task_id": args.task_id,
+        "title": getattr(args, "title", ""),
+        "target": getattr(args, "target", ""),
+        "verify": getattr(args, "verify", ""),
         "task_version": getattr(args, "task_version", hashlib.sha256(
             (getattr(args, "title", "") or args.task_id).encode("utf-8")).hexdigest()[:16]),
         "attempt_id": attempt_id,
@@ -2547,8 +2564,12 @@ def capture_attempt_baseline(work_dir, task_id, attempt_id, snapshot_path):
     index_path = Path(index_value)
     if not index_path.is_absolute():
         index_path = work_dir / index_path
-    paths = sorted(set(_git_names(work_dir, "diff", "--name-only", "-z", "HEAD")
-                       + _git_names(work_dir, "ls-files", "--others", "-z")))
+    untracked = _git_names(work_dir, "ls-files", "--others", "--exclude-standard", "-z")
+    paths = sorted(set(
+        relative for relative in (_git_names(work_dir, "diff", "--name-only", "-z", "HEAD") + untracked)
+        if not relative.startswith((".scratch/", ".worker-ghosts/"))
+        and not (work_dir / relative).resolve().is_relative_to(snapshot_path)
+    ))
     snapshot_path.mkdir(parents=True)
     (snapshot_path / "files").mkdir()
     entries = {}
@@ -2586,9 +2607,13 @@ def recover_attempt_baseline(work_dir, snapshot_path, archive_path, runtime_path
     if archive_path.exists():
         raise FileExistsError(f"attempt archive already exists: {archive_path}")
 
+    untracked = _git_names(work_dir, "ls-files", "--others", "--exclude-standard", "-z")
     current_paths = sorted(set(
-        _git_names(work_dir, "diff", "--name-only", "-z", baseline_head)
-        + _git_names(work_dir, "ls-files", "--others", "-z")))
+        relative for relative in (_git_names(work_dir, "diff", "--name-only", "-z", baseline_head) + untracked)
+        if not relative.startswith((".scratch/", ".worker-ghosts/"))
+        and not (work_dir / relative).resolve().is_relative_to(snapshot_path)
+        and not (work_dir / relative).resolve().is_relative_to(archive_path)
+    ))
     archive_path.mkdir(parents=True)
     (archive_path / "failed-files").mkdir()
     diff = subprocess.run(["git", "-C", str(work_dir), "diff", "--binary", baseline_head],
@@ -2623,7 +2648,7 @@ def recover_attempt_baseline(work_dir, snapshot_path, archive_path, runtime_path
                            reset.stderr.decode("utf-8", "replace"))
     baseline_paths = set(metadata["paths"])
     runtime_resolved = set(runtime_states)
-    for relative in _git_names(work_dir, "ls-files", "--others", "-z"):
+    for relative in _git_names(work_dir, "ls-files", "--others", "--exclude-standard", "-z"):
         path = work_dir / relative
         if (relative in baseline_paths or relative.startswith((".scratch/", ".worker-ghosts/"))
                 or path.resolve().is_relative_to(snapshot_path)

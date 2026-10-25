@@ -1,6 +1,6 @@
 # NightShift source coverage index
 
-Baseline: 2026-10-25, updated for external adapters, per-registration scores, env-file-free configuration, in-place execution and on-demand trials. Companion to [NIGHTSHIFT_SPEC.md](NIGHTSHIFT_SPEC.md). This index records every NightShift-owned skill/reference, launcher, runtime, helper and installer/update entry. Matt skills are references only.
+Baseline: 2026-10-25, updated for external adapters, the Aider RepoMap/Ollama Explore path, per-registration scores, env-file-free configuration, in-place execution and on-demand trials. Companion to [NIGHTSHIFT_SPEC.md](NIGHTSHIFT_SPEC.md). This index records every NightShift-owned skill/reference, launcher, runtime, helper and installer/update entry. Matt skills are references only.
 
 ## Preservation rule
 
@@ -10,93 +10,107 @@ For every later simplification, compare the changed source hashes and each affec
 
 | Source | SHA-256 |
 | --- | --- |
-| [.agents/skills/nightshift/explore/SKILL.md](../.agents/skills/nightshift/explore/SKILL.md) | 20acb1a3011c4b8babaab8bde25f1f775ff73507bff087529aab19e796191ef8 |
-| [.agents/skills/nightshift/planner/SKILL.md](../.agents/skills/nightshift/planner/SKILL.md) | c474f96c1471344a45fa4e19cf7212d6c70e80802428b5cc5a8450d6ed9e5109 |
-| [.gitignore](../.gitignore) | 6bcb06e87cf8ae73bc3d29f56d420ce9112db6693f8a002b59e6d7426354405c |
+| [.agents/skills/nightshift/explore/SKILL.md](../.agents/skills/nightshift/explore/SKILL.md) | 7f721810ae7d94164ae50a90f434657df34c06987ebccbe822d9ebb89551b391 |
+| [.agents/skills/nightshift/planner/SKILL.md](../.agents/skills/nightshift/planner/SKILL.md) | f55fdf5fb66f5fea19da8fcd83673936d8c76082a73d53bfe9e6f8bd89951138 |
+| [.gitignore](../.gitignore) | 70e4b4166a26ad333e6d637c5548202756c86d766a75f885862b1f49874b753b |
 | [.skills/universal-build-verify.md](../.skills/universal-build-verify.md) | e65a72134c609d22936a9943b5edbdd4be350300ec57880da1e11031ae6157ef |
-| [README.md](../README.md) | 72c08ee5176bfa0c9a9b50eb9b389e1f8f933717e389711d971a4c8940c1c5d4 |
-| [scripts/adapters/agents.json](../scripts/adapters/agents.json) | e5a63b68ec13521239e0a762c7daad710207767ff91c37a95ec0943520a6b07b |
+| [README.md](../README.md) | 2184cdf0f0eb91b8c004b73f3b7df821a91312dd9f49c3bd32f2207a9fb3cb93 |
+| [scripts/adapters/agents.json](../scripts/adapters/agents.json) | 71efea4a203a9eb9a6678a83cb2e5db4409fd74ece9e5da4bb8e9e2d34129959 |
 | [install.sh](../install.sh) | be34d79ad7d2511c8c5d93033dbb630e976d5c84a8d2bbe92f78ecf343932950 |
-| [scripts/adapters/agy.py](../scripts/adapters/agy.py) | 89f36d39014490b32c883df9ec1d0c4f6df37f6bee1302e1e2f77a863e1dff35 |
-| [scripts/adapters/codex.py](../scripts/adapters/codex.py) | af91815a4e5c5ca9eec4d65b121c0b5157b72018ddc92ce5d9b415f25afd2b2f |
+| [scripts/adapters/agy.py](../scripts/adapters/agy.py) | 4e48a4f8afaf3f2b4d086a7c0dfaf0376edc8adb0087964f352a19d074ad52d0 |
+| [scripts/adapters/aider.py](../scripts/adapters/aider.py) | d9446c5eaa87452caa23edf31f592a81161f349a8e6bfb623b6a9f00db71cbc2 |
+| [scripts/adapters/aider_explore.py](../scripts/adapters/aider_explore.py) | 13ca9c1a7daef513a9c95549c2b8e48b591e6c401e428e6fea6230a51c491b39 |
+| [scripts/adapters/codex.py](../scripts/adapters/codex.py) | 1ca11f13f347d7c58dbc2f2a5429abb569273528411c04a3a7ab219bd78d1814 |
 | [scripts/adapters/generic.py](../scripts/adapters/generic.py) | fa8626610244c5d1bb6c037a6e6e6a8490a2b04c3c571108ed9b915d99b348e4 |
 | [scripts/extract_skeleton.sh](../scripts/extract_skeleton.sh) | 1ed2a93cee0194d1828336a50298ce3d7d8b981875dfaf36bd1adea469e5db01 |
 | [scripts/probe_line.sh](../scripts/probe_line.sh) | 6b56db490c2b82dc864617a88c82c49b75d0f759c3ace06dece014b2c2d87cd3 |
 | [scripts/reorder_queue.sh](../scripts/reorder_queue.sh) | 5cfc56907dafd4b22960199cfff8a413d8542a1251357867d7b5468bee88210a |
 | [scripts/status.sh](../scripts/status.sh) | 2449d0718c5a364e9358947d88e0ab66723b43a4ae866cde9787d636d2f814f2 |
 | [scripts/watch_worker.sh](../scripts/watch_worker.sh) | a073c874ac4c05d9a6e976c682155d19be6ad613e6730575b515f8cce2597c0d |
-| [scripts/worker_runtime.py](../scripts/worker_runtime.py) | 9677b727768368249f15b3ed9b630e65af82cf4ef629834260d94260b80b9edc |
+| [scripts/worker_runtime.py](../scripts/worker_runtime.py) | d141b4711d7ba76fb0d7267b389d77bad78f0682a4999f0d49e248dd0720b75a |
 | [test/README.md](../test/README.md) | d6d42b638942f532b6934c4d755f32fc45c9693b29a6628b3bdf328b85095942 |
 | [test/fixtures/trial-demo/README.md](../test/fixtures/trial-demo/README.md) | 4384b3061cefc038ccc5b01f566f78afaca4984f7204a43e58f20b44d54db63b |
-| [test/test_worker_runtime.py](../test/test_worker_runtime.py) | 63672d53f3c173c4ed2a772e5c119acc94e45710b9756957ce7fab14bd16e977 |
+| [test/test_worker_runtime.py](../test/test_worker_runtime.py) | 2e466dce9f0a4c81db44f2a7ae73dd4d9128218ebc61b570e926b2142172b134 |
 | [update.sh](../update.sh) | be34d79ad7d2511c8c5d93033dbb630e976d5c84a8d2bbe92f78ecf343932950 |
-| [worker.sh](../worker.sh) | 27617d89c2701c47e5b01c82cb2218589cb682f4653b9580e17df86ac284b28f |
+| [worker.sh](../worker.sh) | bf3f2e87e111a62d3fad6e7cbaaa0dae2fdd2385084efd454aa37ef0c652e74c |
 
 ## Runtime function coverage
 
-All 59 top-level runtime functions are mapped below to numbered clauses in the spec's As-built behavior and limits section; nested closures are covered by their owning function. Function anchors and hashes were refreshed by static inventory; this is not a regression-test result.
+All 71 top-level runtime functions are mapped below to numbered clauses in the spec's As-built behavior and limits section; nested closures are covered by their owning function. Function anchors and hashes were refreshed by static inventory; this is not a regression-test result.
 
 | Function | As-built clause |
 | --- | --- |
-| [atomic_write](../scripts/worker_runtime.py#L34) | 25 |
-| [prepend_progress](../scripts/worker_runtime.py#L54) | 25 |
-| [read_score_state](../scripts/worker_runtime.py#L59) | 12 |
-| [score_task_level](../scripts/worker_runtime.py#L75) | 12 |
-| [score_summary](../scripts/worker_runtime.py#L79) | 12 |
-| [registered_agent_score_path](../scripts/worker_runtime.py#L84) | 12 |
-| [initialize_agent_score](../scripts/worker_runtime.py#L90) | 12 |
-| [read_agent_score_state](../scripts/worker_runtime.py#L119) | 12 |
-| [append_agent_event](../scripts/worker_runtime.py#L129) | 12 |
-| [_read_json_lines](../scripts/worker_runtime.py#L167) | 12 |
-| [_watch_agent_events_locked](../scripts/worker_runtime.py#L185) | 12 |
-| [watch_agent_events](../scripts/worker_runtime.py#L225) | 12 |
-| [acknowledge_agent_event](../scripts/worker_runtime.py#L245) | 12 |
-| [record_agent_score_result](../scripts/worker_runtime.py#L275) | 12 |
-| [_record_score_result](../scripts/worker_runtime.py#L294) | 12 |
-| [record_score_result](../scripts/worker_runtime.py#L324) | 12 |
-| [build_ghost_closeout_prompt](../scripts/worker_runtime.py#L341) | 10 |
-| [workspace_snapshot](../scripts/worker_runtime.py#L354) | 10 |
-| [pop_task](../scripts/worker_runtime.py#L374) | 1–2 |
-| [restore_task_front](../scripts/worker_runtime.py#L399) | 1–2 |
-| [insert_task_front](../scripts/worker_runtime.py#L421) | 1–2, 20 |
-| [parse_agent_registry](../scripts/worker_runtime.py#L453) | 11, 25 |
-| [load_agent_registry](../scripts/worker_runtime.py#L500) | 11, 25 |
-| [adapter_callback](../scripts/worker_runtime.py#L541) | 6–11 |
-| [execute_adapter_protocol](../scripts/worker_runtime.py#L590) | 6–11 |
-| [should_failover_agent](../scripts/worker_runtime.py#L678) | 11, 19 |
-| [read_agent_state](../scripts/worker_runtime.py#L693) | 11 |
-| [execute_registered_agents](../scripts/worker_runtime.py#L706) | 11–12, 19 |
-| [progress_bar](../scripts/worker_runtime.py#L822) | 1–2 |
-| [poll_next](../scripts/worker_runtime.py#L829) | 1–2 |
-| [task_field](../scripts/worker_runtime.py#L867) | 1–2 |
-| [write_status](../scripts/worker_runtime.py#L879) | 5 |
-| [display_status](../scripts/worker_runtime.py#L906) | 5 |
-| [run_with_timeout](../scripts/worker_runtime.py#L924) | 9 |
-| [finalize_task_git](../scripts/worker_runtime.py#L959) | 6, 10 |
-| [finalize_structured_adapter_result](../scripts/worker_runtime.py#L985) | 6, 10 |
-| [claim_ghost_allowance](../scripts/worker_runtime.py#L1030) | 10 |
-| [run_adapter_ghost](../scripts/worker_runtime.py#L1058) | 10 |
-| [execute_adapter_task](../scripts/worker_runtime.py#L1122) | 10 |
-| [build_task_prompt](../scripts/worker_runtime.py#L1207) | 6, 25 |
-| [env_bool](../scripts/worker_runtime.py#L1240) | 25–26 |
-| [acquire_worker_lock](../scripts/worker_runtime.py#L1244) | 3–5 |
-| [worker_daemon](../scripts/worker_runtime.py#L1277) | 3–5, 11–12, 17, 19, 25 |
-| [git_audit](../scripts/worker_runtime.py#L1789) | 13–16 |
-| [run_verify](../scripts/worker_runtime.py#L1853) | 13–16 |
-| [first_report](../scripts/worker_runtime.py#L1889) | 13–16 |
-| [publish_research_reports](../scripts/worker_runtime.py#L1909) | 13–16 |
-| [mechanical_audit](../scripts/worker_runtime.py#L1945) | 13–16 |
-| [report_archive_path](../scripts/worker_runtime.py#L2037) | 18 |
-| [archive_active_reports](../scripts/worker_runtime.py#L2043) | 18 |
-| [archive_overlapping_reports](../scripts/worker_runtime.py#L2053) | 18 |
-| [_git_path_state](../scripts/worker_runtime.py#L2078) | 19 |
-| [_save_git_path_state](../scripts/worker_runtime.py#L2088) | 19 |
-| [_restore_git_path_state](../scripts/worker_runtime.py#L2097) | 19 |
-| [_git_names](../scripts/worker_runtime.py#L2113) | 19 |
-| [capture_attempt_baseline](../scripts/worker_runtime.py#L2119) | 19 |
-| [recover_attempt_baseline](../scripts/worker_runtime.py#L2150) | 19 |
-| [rollback_failed_task](../scripts/worker_runtime.py#L2232) | 19 |
-| [main](../scripts/worker_runtime.py#L2291) | CLI inventory |
+| [serialize_workspace_state](../scripts/worker_runtime.py#L40) | 5, 25 |
+| [atomic_write](../scripts/worker_runtime.py#L49) | 25 |
+| [prepend_progress](../scripts/worker_runtime.py#L69) | 25 |
+| [update_planner_review](../scripts/worker_runtime.py#L87) | 12 |
+| [read_score_state](../scripts/worker_runtime.py#L126) | 12 |
+| [score_task_level](../scripts/worker_runtime.py#L142) | 12 |
+| [score_summary](../scripts/worker_runtime.py#L146) | 12 |
+| [registered_agent_score_path](../scripts/worker_runtime.py#L151) | 12 |
+| [initialize_agent_score](../scripts/worker_runtime.py#L157) | 12 |
+| [read_agent_score_state](../scripts/worker_runtime.py#L186) | 12 |
+| [append_agent_event](../scripts/worker_runtime.py#L196) | 12 |
+| [_read_json_lines](../scripts/worker_runtime.py#L234) | 12 |
+| [_watch_agent_events_locked](../scripts/worker_runtime.py#L252) | 12 |
+| [watch_agent_events](../scripts/worker_runtime.py#L292) | 12 |
+| [acknowledge_agent_event](../scripts/worker_runtime.py#L312) | 12 |
+| [record_agent_score_result](../scripts/worker_runtime.py#L342) | 12 |
+| [_record_score_result](../scripts/worker_runtime.py#L361) | 12 |
+| [record_score_result](../scripts/worker_runtime.py#L391) | 12 |
+| [build_ghost_closeout_prompt](../scripts/worker_runtime.py#L412) | 10 |
+| [workspace_snapshot](../scripts/worker_runtime.py#L430) | 10 |
+| [pop_task](../scripts/worker_runtime.py#L450) | 1–2 |
+| [restore_task_front](../scripts/worker_runtime.py#L475) | 1–2 |
+| [insert_task_front](../scripts/worker_runtime.py#L497) | 1–2, 20 |
+| [parse_agent_registry](../scripts/worker_runtime.py#L529) | 11, 25 |
+| [load_agent_registry](../scripts/worker_runtime.py#L576) | 11, 25 |
+| [adapter_callback](../scripts/worker_runtime.py#L651) | 6–11 |
+| [execute_adapter_protocol](../scripts/worker_runtime.py#L700) | 6–11 |
+| [should_failover_agent](../scripts/worker_runtime.py#L788) | 11, 19 |
+| [read_agent_state](../scripts/worker_runtime.py#L803) | 11 |
+| [agent_supports_task](../scripts/worker_runtime.py#L816) | 11, 19 |
+| [execute_registered_agents](../scripts/worker_runtime.py#L823) | 11–12, 19 |
+| [progress_bar](../scripts/worker_runtime.py#L949) | 1–2 |
+| [poll_next](../scripts/worker_runtime.py#L956) | 1–2 |
+| [task_field](../scripts/worker_runtime.py#L994) | 1–2 |
+| [write_status](../scripts/worker_runtime.py#L1007) | 5 |
+| [display_status](../scripts/worker_runtime.py#L1034) | 5 |
+| [run_with_timeout](../scripts/worker_runtime.py#L1052) | 9 |
+| [temporary_git_index](../scripts/worker_runtime.py#L1088) | 10 |
+| [worktree_tree](../scripts/worker_runtime.py#L1100) | 19 |
+| [attempt_audit_trees](../scripts/worker_runtime.py#L1106) | 10, 13 |
+| [changed_tree_paths](../scripts/worker_runtime.py#L1118) | 10, 13, 19 |
+| [finalize_task_git](../scripts/worker_runtime.py#L1122) | 6, 10 |
+| [finalize_structured_adapter_result](../scripts/worker_runtime.py#L1174) | 6, 10 |
+| [claim_ghost_allowance](../scripts/worker_runtime.py#L1238) | 10 |
+| [run_adapter_ghost](../scripts/worker_runtime.py#L1266) | 10 |
+| [execute_adapter_task](../scripts/worker_runtime.py#L1335) | 10 |
+| [build_task_prompt](../scripts/worker_runtime.py#L1435) | 6, 25 |
+| [env_bool](../scripts/worker_runtime.py#L1465) | 25–26 |
+| [acquire_worker_lock](../scripts/worker_runtime.py#L1469) | 3–5 |
+| [worker_daemon](../scripts/worker_runtime.py#L1502) | 3–5, 11–12, 17, 19, 25 |
+| [git_audit](../scripts/worker_runtime.py#L2095) | 13–16 |
+| [run_verify](../scripts/worker_runtime.py#L2168) | 13–16 |
+| [first_report](../scripts/worker_runtime.py#L2204) | 13–16 |
+| [publish_research_reports](../scripts/worker_runtime.py#L2224) | 13–16 |
+| [mechanical_audit](../scripts/worker_runtime.py#L2260) | 13–16 |
+| [report_archive_path](../scripts/worker_runtime.py#L2352) | 18 |
+| [cleanup_invalid_reports](../scripts/worker_runtime.py#L2363) | 18 |
+| [settle_invalid_reports](../scripts/worker_runtime.py#L2380) | 18 |
+| [report_source_paths](../scripts/worker_runtime.py#L2414) | 18 |
+| [report_staleness](../scripts/worker_runtime.py#L2434) | 18 |
+| [refresh_active_reports](../scripts/worker_runtime.py#L2469) | 18 |
+| [archive_active_reports](../scripts/worker_runtime.py#L2487) | 18 |
+| [archive_overlapping_reports](../scripts/worker_runtime.py#L2500) | 18 |
+| [_git_path_state](../scripts/worker_runtime.py#L2505) | 19 |
+| [_save_git_path_state](../scripts/worker_runtime.py#L2515) | 19 |
+| [_restore_git_path_state](../scripts/worker_runtime.py#L2524) | 19 |
+| [_git_names](../scripts/worker_runtime.py#L2540) | 19 |
+| [capture_attempt_baseline](../scripts/worker_runtime.py#L2547) | 19 |
+| [recover_attempt_baseline](../scripts/worker_runtime.py#L2580) | 19 |
+| [rollback_failed_task](../scripts/worker_runtime.py#L2662) | 19 |
+| [main](../scripts/worker_runtime.py#L2721) | CLI inventory |
 
 ## Complete public CLI inventory
 
