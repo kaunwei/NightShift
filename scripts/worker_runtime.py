@@ -340,14 +340,18 @@ def record_score_result(path, task_id, result, evidence=""):
 
 
 def build_ghost_closeout_prompt(task_id, verify, progress_file, host_git=False):
-    git_policy = ("The host runtime owns all Git writes. Do not stage or commit. After verification succeeds, report [CLOSEOUT_VERIFIED]."
+    git_policy = ("The host runtime owns all Git writes. Do not stage or commit."
                   if host_git else "If verification passes, commit only the existing changes; never alter file contents.")
     return f"""CLOSEOUT ONLY for original task {task_id}. You are a verification and Git-finalization helper, not an implementation worker.
 
-You MUST NOT modify source code, tests, documentation, configuration, or any other implementation files. Do not fix, refactor, create, delete, or rewrite files. Do not issue commands that alter project contents. If anything still requires implementation, stop immediately and report [CLOSEOUT_INCOMPLETE] with the reason; do not try a workaround.
+You MUST NOT modify source code, tests, documentation, configuration, or any other implementation files. Do not fix, refactor, create, delete, or rewrite files. Do not issue commands that alter project contents. If anything still requires implementation, stop immediately and return outcome "blocked" with the reason; do not try a workaround.
 
 Allowed: inspect git status/diff/log, run the required verification command ({verify or 'the task verification command'}), and perform only the Git closeout explicitly allowed by the task. {git_policy} Do not commit if verification fails or if a code change would be needed. Report a concise evidence-based result for {task_id}. Do not create or count a separate task. The script attributes your outcome to {task_id} and enforces file-change checks.
-Runtime-owned changes to progress.log and tasks.done are expected. Leave them untouched and unstaged; they do not block verification or committing the declared task artifacts. Only unexpected implementation changes require [CLOSEOUT_INCOMPLETE].
+Runtime-owned changes to progress.log and tasks.done are expected. Leave them untouched and unstaged; they do not block verification or committing the declared task artifacts. Unexpected implementation changes require outcome "blocked".
+Return one JSON object through the adapter result file, using the same result contract as the main task:
+{{"outcome":"complete", "changed":true, "commit_message":"type(scope): concise task summary", "verification_evidence":"actual command and result"}}
+Provide a nonempty commit_message only for finished, verified work. If the task genuinely needs no changes, return {{"outcome":"no_change", "changed":false, "no_change_reason":"specific reason", "verification_evidence":"actual command and result"}}.
+If verification cannot finish or implementation remains, return {{"outcome":"blocked", "diagnostic":"concrete blocker"}}; scope and guidance outcomes are also valid. Do not return prose-only success or infer success from CLI exit status.
 Progress log: {progress_file}
 """
 
@@ -1144,17 +1148,20 @@ def run_adapter_ghost(args, main_request, main_status, main_result):
               + details,
               file=sys.stderr)
         return 126, {}, ghost_dir
-    if status.get("status") != "complete" or not status.get("result_location"):
+    if status.get("status") not in ("complete", "failed") or not status.get("result_location"):
         return 126, {}, ghost_dir
     source = Path(status["result_location"])
     if not source.is_file():
         raise ValueError(f"ghost result file does not exist: {source}")
     result = json.loads(source.read_text(encoding="utf-8"))
-    if not isinstance(result, dict) or result.get("outcome") != "complete":
+    if not isinstance(result, dict):
         return 126, {}, ghost_dir
     if not ghost_result.exists():
         shutil.copy2(source, ghost_result)
-    return finalize_structured_adapter_result(args, result), result, ghost_dir
+    if status.get("status") == "failed" and result.get("outcome") not in ("blocked", "scope_blocked", "guidance", "failure"):
+        return 126, result, ghost_dir
+    code = finalize_structured_adapter_result(args, result)
+    return code, result, ghost_dir
 
 
 def execute_adapter_task(args):
@@ -1218,7 +1225,11 @@ def execute_adapter_task(args):
             shutil.copy2(result_path, destination)
     result_path = Path(args.result_file or output.with_name("adapter-result.json"))
     result = json.loads(result_path.read_text(encoding="utf-8")) if result_path.exists() else {}
-    if status.get("status") in ("complete", "closeout_required"):
+    terminal_failure = (isinstance(result, dict) and result.get("outcome") in
+                        ("blocked", "scope_blocked", "guidance", "failure"))
+    if terminal_failure and status.get("status") in ("complete", "closeout_required", "failed"):
+        code = finalize_structured_adapter_result(args, result)
+    elif status.get("status") in ("complete", "closeout_required"):
         if not isinstance(result, dict):
             raise ValueError("adapter result must be a JSON object")
         code = (finalize_structured_adapter_result(args, result)
@@ -1227,9 +1238,9 @@ def execute_adapter_task(args):
                             or (result.get("outcome") == "complete"
                                 and not str(result.get("commit_message", "")).strip())):
             code, rescued_result, ghost_dir = run_adapter_ghost(args, request, status, result)
-            if code == 0:
+            if rescued_result:
                 result = rescued_result
-                shutil.copy2(ghost_dir / "result.json", result_path)
+                atomic_write(result_path, json.dumps(result, ensure_ascii=False) + "\n")
     else:
         code = {"quota_exhausted": 124, "step_budget_exceeded": 125,
                 "closeout_required": 126, "execution_timeout": 124,

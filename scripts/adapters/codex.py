@@ -75,7 +75,7 @@ def start(request):
         raise ValueError("Codex agent args must be a string array")
     argv.extend(agent_args)
     limit = int(request.get("limits", {}).get("action_limit", 12))
-    runner = r'''import json, os, signal, subprocess, sys
+    runner = r'''import json, os, re, signal, subprocess, sys
 argv, cwd, env, log, message, result, status, limit = sys.argv[1:]
 argv, env = json.loads(argv), json.loads(env)
 with open(log, "w", encoding="utf-8") as stream:
@@ -99,16 +99,33 @@ if actions > int(limit): over_budget = True
 diagnostic = open(log, encoding="utf-8", errors="replace").read()
 quota = any(term in diagnostic.lower() for term in ("insufficient_quota", "rate limit", "resource_exhausted", "429", "out of credits"))
 outcome = "quota_exhausted" if quota else "step_budget_exceeded" if over_budget else "complete" if code == 0 else "failure"
-payload = {}
-try: payload = json.load(open(message, encoding="utf-8"))
-except (OSError, ValueError): pass
-if outcome == "complete" and not isinstance(payload, dict): outcome = "closeout_required"
-if isinstance(payload, dict): payload.setdefault("actions_used", actions)
-else: payload = {"outcome": "closeout_required", "actions_used": actions}
-payload.setdefault("outcome", outcome)
-if outcome != "complete": payload["outcome"] = outcome
+text = ""
+try:
+    with open(message, encoding="utf-8") as source: text = source.read()
+except OSError: pass
+try: payload = json.loads(text)
+except ValueError: payload = None
+if not isinstance(payload, dict):
+    markers = (("SCOPE_BLOCKED", "scope_blocked"), ("BLOCKED", "blocked"),
+               ("NEED_GUIDANCE", "guidance"), ("NEED_DECOMPOSITION", "guidance"),
+               ("CLOSEOUT_INCOMPLETE", "blocked"), ("CLOSEOUT_REQUIRED", "closeout_required"))
+    final_outcome = next((value for marker, value in markers
+                          if re.search(r"\[" + marker + r"\]", text)), "failure")
+    payload = {"outcome": final_outcome, "diagnostic": text or "Codex returned no final result"}
+    if final_outcome == "failure": payload["error_code"] = "invalid_result"
+allowed = {"complete", "no_change", "closeout_required", "blocked", "scope_blocked", "guidance", "failure"}
+if not isinstance(payload.get("outcome"), str) or payload["outcome"] not in allowed:
+    payload = {"outcome": "failure", "error_code": "invalid_result",
+               "diagnostic": "Codex final JSON requires a supported outcome"}
+payload["actions_used"] = actions
+if outcome != "complete":
+    payload["outcome"] = outcome
+else:
+    # CLI success only completes execution; the final result decides task success.
+    outcome = "complete" if payload["outcome"] in ("complete", "no_change") else (
+        "closeout_required" if payload["outcome"] == "closeout_required" else "failure")
 json.dump(payload, open(result, "w", encoding="utf-8"))
-json.dump({"status": outcome, "result_location": result, "exit_code": code}, open(status, "w", encoding="utf-8"))
+json.dump({"status": "failed" if outcome == "failure" else outcome, "result_location": result, "exit_code": code}, open(status, "w", encoding="utf-8"))
 '''
     child_env = {**request.get("environment", {}),
                  "NIGHTSHIFT_TASK_ID": request.get("task_id", ""),

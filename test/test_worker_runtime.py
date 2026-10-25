@@ -450,6 +450,40 @@ class BuiltinAdapterContractTests(unittest.TestCase):
             self.assertEqual(json.loads(result.read_text())["no_change_reason"],
                              "adapter contract check")
 
+    def test_codex_adapter_uses_final_outcome_instead_of_zero_exit(self):
+        cases = (("[BLOCKED] unavailable", "blocked", "failed"),
+                 ("[SCOPE_BLOCKED] need target", "scope_blocked", "failed"),
+                 ("[NEED_GUIDANCE] clarify", "guidance", "failed"),
+                 ("", "failure", "failed"),
+                 ("Done.", "failure", "failed"),
+                 ('{"changed":true}', "failure", "failed"),
+                 ('{"outcome":[]}', "failure", "failed"),
+                 ('{"outcome":{}}', "failure", "failed"),
+                 ('{"outcome":"complete","commit_message":"docs: finish"}', "complete", "complete"))
+        for reply, outcome, status in cases:
+            with self.subTest(reply=reply), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                fake = root / "codex"
+                fake.write_text(
+                    "#!/usr/bin/env python3\nimport os,sys\nfrom pathlib import Path\n"
+                    "Path(sys.argv[sys.argv.index('--output-last-message')+1]).write_text(os.environ['FINAL_REPLY'])\n"
+                    "print('tool output quoted [BLOCKED]; not the final reply')\n")
+                fake.chmod(0o755)
+                (root / "prompt.txt").write_text("task")
+                request = {"protocol_version":1,"registration_id":"codex-test",
+                           "overrides":{"command":str(fake),"effort":"none"},
+                           "task_id":"TASK-RESULT","working_directory":str(root),
+                           "prompt_path":str(root/"prompt.txt"),"output_dir":str(root/"run"),
+                           "result_path":str(root/"result.json"),
+                           "environment":{"FINAL_REPLY":reply},"limits":{"action_limit":3}}
+                (root / "request.json").write_text(json.dumps(request))
+                executed = runtime("adapter-exec", "--command", sys.executable,
+                                   "--adapter-arg", ROOT/"scripts/adapters/codex.py",
+                                   "--request", root/"request.json", "--execution-timeout", "2", "--callback-timeout", "0.5")
+                self.assertEqual(executed.returncode, 0, executed.stderr)
+                self.assertEqual(json.loads(executed.stdout)["status"], status)
+                self.assertEqual(json.loads((root/"result.json").read_text())["outcome"], outcome)
+
     def test_codex_adapter_runs_fake_cli_and_returns_structured_result(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -704,6 +738,9 @@ class AdapterGhostCloseoutContractTests(unittest.TestCase):
             ghost_prompt = Path(ghost_request["prompt_path"]).read_text()
             self.assertIn("CLOSEOUT ONLY for original task TASK-GHOST", ghost_prompt)
             self.assertIn("MUST NOT modify source code", ghost_prompt)
+            self.assertIn('"commit_message"', ghost_prompt)
+            self.assertIn('"outcome"', ghost_prompt)
+            self.assertNotIn("[CLOSEOUT_VERIFIED]", ghost_prompt)
             self.assertTrue(Path(ghost_request["output_dir"]).is_dir())
             self.assertEqual(json.loads(Path(ghost_request["result_path"]).read_text())["commit_message"],
                              "fix(parser): close out task")
@@ -1038,13 +1075,15 @@ class WorkerScoreTests(unittest.TestCase):
                 "'changed':False,'commit_message':'fix: complete TASK-CLOSE'}\n"
                 "else:\n"
                 " payload={'outcome':os.environ.get('INITIAL_OUTCOME','closeout_required'),'changed':True}\n"
+                "if kind=='closeout' and os.environ.get('MISSING_CLOSEOUT_MESSAGE')=='1': payload.pop('commit_message',None)\n"
                 "json.dump(payload,open(result,'w'))\n"
                 "print(json.dumps({'type':'item.completed','item':{'type':'command_execution'}}))\n")
             executable.chmod(0o755)
 
-            def invoke(initial="closeout_required", closeout="complete", mode="auto"):
+            def invoke(initial="closeout_required", closeout="complete", mode="auto", missing_message=False):
                 env={**os.environ,"INITIAL_OUTCOME":initial,"CLOSEOUT_OUTCOME":closeout,
-                     "KIND_LOG":str(Path(directory)/"kind.log")}
+                     "KIND_LOG":str(Path(directory)/"kind.log"),
+                     "MISSING_CLOSEOUT_MESSAGE":"1" if missing_message else "0"}
                 return runtime("task-cli",*task_cli_adapter("codex",executable,model="gpt-6-luna",
                     effort="none",approval_mode=mode),
                     "--work-dir",root,"--prompt-file",prompt,"--output-file",output,
@@ -1070,11 +1109,21 @@ class WorkerScoreTests(unittest.TestCase):
                     self.assertEqual(completed.returncode,0,completed.stdout+completed.stderr+(Path(directory)/"kind.log").read_text())
                     self.assertEqual(git("show","HEAD:output.txt"),"after")
                     self.assertEqual(git("status","--porcelain"),"")
+            reset_task_state()
+            (Path(directory)/"kind.log").write_text("")
+            rejected = invoke(missing_message=True)
+            self.assertEqual(rejected.returncode, 126)
+            self.assertEqual(git("rev-parse", "HEAD"), base)
+            self.assertEqual((Path(directory)/"kind.log").read_text().splitlines(), ["main", "closeout"])
+            rejected_again = invoke(missing_message=True)
+            self.assertEqual(rejected_again.returncode, 126)
+            self.assertEqual((Path(directory)/"kind.log").read_text().splitlines(), ["main", "closeout", "main"])
             for outcome in ("blocked","scope_blocked","guidance","failure"):
                 with self.subTest(outcome=outcome):
                     reset_task_state()
                     completed=invoke("closeout_required",outcome)
                     self.assertNotEqual(completed.returncode,0,completed.stdout+completed.stderr+(Path(directory)/"kind.log").read_text())
+                    self.assertEqual(json.loads(result_path.read_text())["outcome"], outcome)
                     self.assertEqual(git("rev-parse","HEAD"),base,
                                      "an incomplete ghost must never commit")
 
@@ -1749,7 +1798,7 @@ class WorkerIntegrationTests(unittest.TestCase):
                 "  if [ \"$1\" = --output-last-message ]; then shift; result=$1; fi\n"
                 "  shift\n"
                 "done\n"
-                "printf '{\"outcome\":\"blocked\",\"changed\":false,\"diagnostic\":\"reports-not-writable\"}\\n' > \"$result\"\n"
+                "printf '[BLOCKED] reports-not-writable\\n' > \"$result\"\n"
             )
             fake.chmod(0o755)
             (root / ".worker.env").write_text(
@@ -1763,6 +1812,8 @@ class WorkerIntegrationTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("[WORKER_BLOCKED]", (root / "tasks.done").read_text())
             self.assertNotIn("[DONE]", (root / "tasks.done").read_text())
+            self.assertNotIn("CLOSEOUT_FAILED", (root / "tasks.done").read_text())
+            self.assertFalse((root / ".worker-ghost-state.json").exists())
             self.assertIn("Worker final response contained [BLOCKED]", (root / "progress.log").read_text())
             self.assertEqual(json.loads((root / "worker.status").read_text())["state"], "BLOCKED")
 
