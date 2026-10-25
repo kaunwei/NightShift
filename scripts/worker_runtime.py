@@ -756,6 +756,31 @@ def execute_adapter_protocol(command, request, extra_args=(), trace=None,
             return {"status": "cancellation_failed", "execution_id": execution_id,
                     "stopped": False, "diagnostic": str(error)}
 
+    log_file = None
+    log_offset = 0
+    status_dir = Path(status_location).parent
+    last_heartbeat = started
+    last_log_activity = started
+
+    def stream_adapter_output():
+        nonlocal log_file, log_offset, last_log_activity
+        if log_file is None:
+            candidates = sorted(status_dir.glob("*.log"))
+            if candidates:
+                log_file = candidates[0]
+        if log_file and log_file.is_file():
+            try:
+                with log_file.open("r", encoding="utf-8", errors="replace") as stream:
+                    stream.seek(log_offset)
+                    chunk = stream.read()
+                    if chunk:
+                        log_offset = stream.tell()
+                        last_log_activity = time.monotonic()
+                        sys.stderr.write(chunk)
+                        sys.stderr.flush()
+            except OSError:
+                pass
+
     while True:
         elapsed = time.monotonic() - started
         if elapsed >= execution_timeout:
@@ -768,8 +793,16 @@ def execute_adapter_protocol(command, request, extra_args=(), trace=None,
             }, extra_args, timeout=callback_timeout)
         except subprocess.TimeoutExpired:
             return cancel("callback_timeout")
+        stream_adapter_output()
+        now = time.monotonic()
+        if now - last_log_activity >= 15 and now - last_heartbeat >= 15:
+            agent_label = base.get("registration_id") or base.get("adapter", "adapter")
+            print(f"[WORKER] {agent_label} is still executing ({int(now - started)}s elapsed)...",
+                  file=sys.stderr, flush=True)
+            last_heartbeat = now
         current = status.get("status")
         if current in ADAPTER_TERMINAL_STATUSES:
+            stream_adapter_output()
             if current == "complete" and not status.get("result_location"):
                 raise ValueError("completed adapter status requires result_location")
             return {**status, "execution_id": execution_id,

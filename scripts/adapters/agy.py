@@ -215,6 +215,7 @@ json.dump({"status": final_status, "result_location": result, "exit_code": code}
     child_path = f"{extra_path}:{current_path}" if extra_path not in current_path else current_path
     child_env = {**request.get("environment", {}),
                  "PATH": child_path,
+                 "PYTHONUNBUFFERED": "1",
                  "NIGHTSHIFT_TASK_ID": request.get("task_id", ""),
                  "NIGHTSHIFT_EXECUTION_KIND": request.get("kind", "main"),
                  "MAX_STEPS": str(limit),

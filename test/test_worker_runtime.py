@@ -450,6 +450,43 @@ class BuiltinAdapterContractTests(unittest.TestCase):
             self.assertEqual(json.loads(result.read_text())["no_change_reason"],
                              "adapter contract check")
 
+    def test_execute_adapter_protocol_streams_live_logs_to_stderr(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "project"
+            root.mkdir()
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            subprocess.run(["git", "-C", str(root), "config", "user.name", "Adapter Test"], check=True)
+            subprocess.run(["git", "-C", str(root), "config", "user.email", "adapter@example.invalid"], check=True)
+            (root / "baseline.txt").write_text("baseline\n")
+            subprocess.run(["git", "-C", str(root), "add", "baseline.txt"], check=True)
+            subprocess.run(["git", "-C", str(root), "commit", "-qm", "baseline"], check=True)
+            executable = Path(directory) / "stream_adapter.py"
+            executable.write_text(
+                "import json, pathlib, sys\n"
+                "request = json.load(sys.stdin); op = sys.argv[1]\n"
+                "if op == 'get_config':\n"
+                "    response = {'protocol_version': 1, 'initial_score': 5, 'limits': {'poll_interval_seconds': 0.05}}\n"
+                "elif op == 'start':\n"
+                "    p = pathlib.Path(request['output_dir'])\n"
+                "    p.mkdir(parents=True, exist_ok=True)\n"
+                "    (p / 'adapter.log').write_text('[STREAM_OUTPUT] Step 1: reading file\\n[STREAM_OUTPUT] Step 2: compiling\\n')\n"
+                "    pathlib.Path(request['result_path']).write_text(json.dumps({'outcome': 'no_change', 'changed': False, 'no_change_reason': 'already done'}))\n"
+                "    (p / 'status.json').write_text(json.dumps({'status': 'complete', 'result_location': request['result_path']}))\n"
+                "    response = {'execution_id': 'stream-test', 'status_location': str(p / 'status.json')}\n"
+                "else:\n"
+                "    response = json.loads(pathlib.Path(request['status_location']).read_text())\n"
+                "print(json.dumps(response))\n"
+            )
+            prompt, output, result = Path(directory) / "prompt.txt", Path(directory) / "runtime.log", Path(directory) / "result.json"
+            prompt.write_text("task prompt")
+            completed = runtime("task-cli", "--adapter", "custom", "--executable", sys.executable,
+                                "--extra-arg", executable, "--work-dir", root,
+                                "--prompt-file", prompt, "--output-file", output,
+                                "--result-file", result, "--task-id", "TASK-STREAM", "--base", "HEAD")
+            self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+            self.assertIn("[STREAM_OUTPUT] Step 1: reading file", completed.stderr)
+            self.assertIn("[STREAM_OUTPUT] Step 2: compiling", completed.stderr)
+
     def test_codex_adapter_uses_final_outcome_instead_of_zero_exit(self):
         cases = (("[BLOCKED] unavailable", "blocked", "failed"),
                  ("[SCOPE_BLOCKED] need target", "scope_blocked", "failed"),
