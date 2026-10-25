@@ -354,19 +354,18 @@ def record_score_result(path, task_id, result, evidence=""):
 
 
 def build_ghost_closeout_prompt(task_id, verify, progress_file, host_git=False):
-    git_policy = ("The host runtime owns all Git writes. Do not stage or commit."
-                  if host_git else "If verification passes, commit only the existing changes; never alter file contents.")
-    return f"""CLOSEOUT ONLY for original task {task_id}. You are a verification and Git-finalization helper, not an implementation worker.
+    git_policy = ("Runtime owns Git writes: do not stage or commit."
+                  if host_git else "After passing verification, commit only existing task changes; never edit their contents.")
+    return f"""GHOST CLOSEOUT for original task {task_id} only. Verify/finalize existing work; do not implement or create another task.
 
-You MUST NOT modify source code, tests, documentation, configuration, or any other implementation files. Do not fix, refactor, create, delete, or rewrite files. Do not issue commands that alter project contents. If anything still requires implementation, stop immediately and return outcome "blocked" with the reason; do not try a workaround.
-
-Allowed: inspect git status/diff/log, run the required verification command ({verify or 'the task verification command'}), and perform only the Git closeout explicitly allowed by the task. {git_policy} Do not commit if verification fails or if a code change would be needed. Report a concise evidence-based result for {task_id}. Do not create or count a separate task. The script attributes your outcome to {task_id} and enforces file-change checks.
-Runtime-owned changes to progress.log and tasks.done are expected. Leave them untouched and unstaged; they do not block verification or committing the declared task artifacts. Unexpected implementation changes require outcome "blocked".
-Return one JSON object through the adapter result file, using the same result contract as the main task:
-{{"outcome":"complete", "changed":true, "commit_message":"type(scope): concise task summary", "verification_evidence":"actual command and result"}}
-Provide a nonempty commit_message only for finished, verified work. If the task genuinely needs no changes, return {{"outcome":"no_change", "changed":false, "no_change_reason":"specific reason", "verification_evidence":"actual command and result"}}.
-If verification cannot finish or implementation remains, return {{"outcome":"blocked", "diagnostic":"concrete blocker"}}; scope and guidance outcomes are also valid. Do not return prose-only success or infer success from CLI exit status.
-Progress log: {progress_file}
+- Inspect Git status/diff/log and run verification: {verify or 'the task verification command'}.
+- Never modify, create, or delete source, tests, docs, config, or other implementation files. No fixes, workarounds, or other project-changing commands; if implementation is needed or unexpected changes exist, return blocked.
+- {git_policy} Never commit unverified or failed work. Leave runtime-owned {progress_file} and tasks.done untouched and unstaged; their changes do not block closeout.
+- Return exactly ONE JSON object to the adapter result file (not prose; CLI exit status alone is not proof):
+  Verified changes: {{"outcome":"complete","changed":true,"commit_message":"type(scope): summary","verification_evidence":"actual command and result"}}
+  Verified no changes: {{"outcome":"no_change","changed":false,"no_change_reason":"specific reason","verification_evidence":"actual command and result"}}
+  Unfinished/failed: {{"outcome":"blocked","diagnostic":"concrete blocker"}} (or scope_blocked/guidance when applicable).
+- A commit_message is required only for finished, verified changes. Runtime audits file changes and attributes this result to {task_id}.
 """
 
 
@@ -1361,32 +1360,29 @@ def build_task_prompt(task, task_id, level, target, verify, forbidden, constrain
                       max_steps, target_file_count, step_base, step_per_file, progress_file):
     contract = Path(__file__).resolve().parent.parent / ".skills/universal-build-verify.md"
     contract_text = contract.read_text(encoding="utf-8") if contract.is_file() else ""
-    return f"""Execute one unattended NightShift task. Read {contract} and .worker.notes.md first; follow the applicable skill:
-- [CODE]: .agents/skills/engineering/tdd/SKILL.md; consult .agents/skills/engineering/codebase-design/SKILL.md when changing an interface.
-- [DIAGNOSTIC]: .agents/skills/engineering/diagnosing-bugs/SKILL.md.
-- [RESEARCH]: .agents/skills/engineering/research/SKILL.md and .agents/skills/nightshift/explore/SKILL.md.
+    authority = (f"LAUNCHER CONTRACT ({contract}):\n{contract_text}"
+                 if contract_text else f"Read launcher contract: {contract}")
+    return f"""Execute one NightShift ticket unattended. The ticket and launcher contract govern.
 
-AUTHORITATIVE WORKER CONTRACT ({contract}):
-{contract_text}
-Use this launcher-provided contract over any older copy in the isolated checkout.
-
-TASK:
+TASK_ID: {task_id} | LEVEL: {level or '1'}
 {task}
-TASK_ID: {task_id}
-Runtime-owned changes to progress.log and tasks.done may already exist. Leave them untouched and unstaged; continue verification and commit only declared task artifacts.
 
-LIMITS
-- Action budget: {max_steps} (base {step_base} + {target_file_count} target files × {step_per_file}). Keep the final 3 actions for verification and Git closeout. The runtime enforces this limit; do not evade it by combining actions.
-- Timeout is per task invocation. Work only in TARGET ({target or 'the declared target paths'}); report [SCOPE_BLOCKED] with the missing path and line if more scope is required.
-- At level {level or '1'}, deletion ceilings are L3 40 lines, L2 150 lines, and L1 TARGET-bounded. [CODE: FIX] keeps tests unchanged; [CODE: REFACTOR] may change declared tests but cannot reduce assertions. [DIAGNOSTIC] may add a compile-clean repro test, never product code. [RESEARCH] reads product code only and writes the requested report.
-- Honor FORBIDDEN_SHORTCUTS ({forbidden or 'none specified'}) and CONSTRAINTS ({constraints or 'none specified'}). Never weaken assertions, hide errors, use dummy behavior, or use thread sleeps to mask a race. Do not run sudo or host package managers.
+START
+- Read .worker.notes.md. Applicable skills under .agents/skills/: [CODE] engineering/tdd/SKILL.md (+ engineering/codebase-design/SKILL.md for interfaces); [DIAGNOSTIC] engineering/diagnosing-bugs/SKILL.md; [RESEARCH] engineering/research/SKILL.md + nightshift/explore/SKILL.md.
+- Report-first: runtime filters active `.reports/<slug>/SUMMARY.md` against source revisions. Read only relevant active reports and `03-micro.md` before exploring code; reuse verified `path#Lline` and investigate only gaps. Never use `.archive/` or `.invalid/`. If you prove a report stale, you MAY move its directory to `.reports/.invalid/<slug>`; only the runtime deletes it after audited success or restores it after rollback if still valid. Do not delete/archive reports yourself or move unrelated files. Reports never override current code or the ticket.
 
-WORK
-- Keep each action independent. Emit one `[EXEC] <brief action>` line before actions where the runtime uses that marker for accounting. Do not dictate command formatting, bundle actions, or fabricate markers to evade the budget.
-- Run {verify or 'the task verification'} and report only checks actually completed. A [DEAD_END] claim needs an isolated passing test or runtime evidence that the suspected module is healthy while the symptom remains.
-- Make at most 3 implementation attempts. If blocked, report [BLOCKED] and the cause; the runtime preserves failed work and restores the task baseline. Do not destructively reset files. Do not edit {progress_file}; the runtime records the task and performs mechanical audits.
-- Do not stage or commit. Return one JSON object through the adapter result file: {{"outcome":"complete|closeout_required|blocked|scope_blocked|guidance|failure|no_change","changed":true|false,"no_change_reason":"...","verification_evidence":"...","commit_message":"..."}}. Use `complete` only for finished work and `no_change` only when the task required no edits, with a reason. Use `closeout_required` when verification or a commit message remains. Never infer a missing message from logs. End diagnostic text with Attempts: <N> | Confidence: <HIGH|MED|LOW>. The Planner reviews the evidence and records the score; never adjust the shared score yourself.
-- The runtime runs declared verification, audits scope, and commits only the structured `commit_message`. Do not change the assignment to fit an adapter.
+RULES
+- Budget: {max_steps} actions ({step_base}+{target_file_count}×{step_per_file}); reserve 3 for verify/closeout. Per-invocation timeout. Emit `[EXEC] <action>` when required; no fabricated markers, bundled actions, or budget evasion.
+- Writes only in TARGET ({target or 'declared paths'}), except moving a proven-stale report into `.reports/.invalid/`. Honor FORBIDDEN_SHORTCUTS/CONSTRAINTS; wider code scope requires [SCOPE_BLOCKED] with `path#Lline`.
+- Deletion caps: L3 40 lines, L2 150, L1 TARGET only. [CODE: FIX] must not change tests; [CODE: REFACTOR] must not reduce assertions. [DIAGNOSTIC] may add only a compile-clean repro test; [RESEARCH] reads source and writes reports only.
+- Never weaken tests, hide errors, fake behavior, mask races with sleeps, use sudo/host package managers, or destructively reset. Do not edit {progress_file}; runtime owns `progress.log`/`tasks.done` (leave unstaged).
+
+CLOSEOUT
+- Run {verify or 'task verification'} and state actual results. [DEAD_END] requires isolated passing proof. At most 3 implementation attempts; on blocker, return [BLOCKED] with cause.
+- Never stage/commit or change Worker score. Runtime verifies, audits and commits using your message; Planner accepts. Do not adjust scope for the adapter.
+- Return ONE JSON object to the adapter result file: `outcome`=complete|closeout_required|blocked|scope_blocked|guidance|failure|no_change; `changed`=boolean; `verification_evidence`; `commit_message`; `no_change_reason` when relevant. `complete`=finished/verified; `no_change`=no edits needed; `closeout_required`=verification/message pending. Never invent evidence/messages from logs. End diagnostic text: `Attempts: <N> | Confidence: <HIGH|MED|LOW>`.
+
+{authority}
 """
 
 
@@ -1639,10 +1635,10 @@ def worker_daemon(root):
             started = time.time()
             is_research = bool(re.search(r"\[RESEARCH\]", f"{task} {constraints}", re.I))
             is_diagnostic = bool(re.search(r"\[DIAGNOSTIC\]", f"{task} {constraints}", re.I))
-            if is_research:
-                archive_active_reports(root)
-                if work_dir.resolve() != root.resolve():
-                    archive_active_reports(work_dir)
+            # Script owns report freshness and retirement, including before research.
+            refresh_active_reports(root, work_dir)
+            if root.resolve() != work_dir.resolve():
+                refresh_active_reports(work_dir, work_dir)
             print(f"\n{'=' * 78}\n[{stamp()}] >>> [Task {current} of {total} (In Progress) | Completed: {done_count}/{total} ({fields[6]}%)]")
             print(f">>> Progress: {bar}\n>>> Task: {task}")
             print(f">>> Step Budget: {max_steps} steps (Base: {step_base} + {target_file_count} files * {step_per_file})\n{'=' * 78}")
@@ -1692,7 +1688,7 @@ def worker_daemon(root):
                         adapter_dir = Path(getattr(cli_args, "adapter_artifact_dir", ""))
                         adapter_artifacts = (sorted(path for path in adapter_dir.rglob("*") if path.is_file())
                                              if adapter_dir.is_dir() else [])
-                        return rollback_failed_task(
+                        recovered = rollback_failed_task(
                             root, work_dir, task_id,
                             (tasks_file, done_file, progress_file, log_file, status_file, agent_state_path,
                              ghost_state_path, ghost_artifact_root, score_state_path,
@@ -1700,6 +1696,11 @@ def worker_daemon(root):
                             snapshot if snapshot is not None else cli_args.attempt_baseline,
                             attempt_id or cli_args.attempt_id,
                         )
+                        # A failed attempt cannot permanently retire a report.
+                        settle_invalid_reports(root, work_dir, accepted=False)
+                        if root.resolve() != work_dir.resolve():
+                            settle_invalid_reports(work_dir, work_dir, accepted=False)
+                        return recovered
                     except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as error:
                         cli_args.recovery_failed = True
                         print(f"[WORKER] Attempt recovery failed; stopping before another execution: {error}",
@@ -1943,7 +1944,6 @@ def worker_daemon(root):
                         update_status("BLOCKED", f"{task} (GUARD VIOLATION)", duration,
                                       current, total, max(0, remaining - 1), percent, bar)
                     else:
-                        record_task_score("success")
                         attempts_match = re.search(r"Attempts:\s*(\d+)", result_text)
                         if not attempts_match and progress_file.exists():
                             attempts_match = re.search(r"Attempts:\s*(\d+)", progress_file.read_text(encoding="utf-8", errors="replace"))
@@ -1952,8 +1952,13 @@ def worker_daemon(root):
                                                capture_output=True, text=True, check=False).stdout.splitlines()
                         diff_stat = diff[-1].strip() if diff else "0 files changed"
                         prepend_progress(progress_file, f"[MECHANICAL_AUDIT] Status: PASS | Task: {task_id} | Verify_Exit: 0 | Tests_Run: >=1 | Whitelist: PASS | Tree: CLEAN | Diff: {diff_stat} | Attempts: {attempts} | Audit_NS: {time.time_ns()}")
-                        if not (is_research or is_diagnostic):
-                            archive_overlapping_reports(root, work_dir, base)
+                        # Audit passed: retire agent-marked reports, then validate remaining evidence.
+                        settle_invalid_reports(root, work_dir, accepted=True)
+                        refresh_active_reports(root, work_dir)
+                        if root.resolve() != work_dir.resolve():
+                            settle_invalid_reports(work_dir, work_dir, accepted=True)
+                            refresh_active_reports(work_dir, work_dir)
+                        record_task_score("success")
                         new_done = done_count + 1
                         final_bar = progress_bar(new_done, total)
                         print(f"[{stamp()}] [SUCCESS] Task completed in {duration}s | {final_bar}")
@@ -2029,7 +2034,8 @@ def git_audit(args):
     deleted_lines = 0
     for line in numstat.splitlines():
         parts = line.split("\t")
-        if len(parts) >= 2 and parts[1].isdigit():
+        if (len(parts) >= 3 and parts[1].isdigit()
+                and not parts[2].startswith(".reports/")):
             deleted_lines += int(parts[1])
     if not re.search(r"large deletion approved|unrestricted", args.constraints, re.I):
         limit = {2: 150, 3: 40}.get(args.level)
@@ -2236,42 +2242,154 @@ def mechanical_audit(args):
 def report_archive_path(root, timestamp, name):
     archive = Path(root) / ".reports" / ".archive"
     archive.mkdir(parents=True, exist_ok=True)
-    return archive / f"{timestamp}-{name}"
+    candidate = archive / f"{timestamp}-{name}"
+    suffix = 1
+    while candidate.exists():
+        candidate = archive / f"{timestamp}-{name}-{suffix}"
+        suffix += 1
+    return candidate
 
 
-def archive_active_reports(root):
+def cleanup_invalid_reports(root):
+    """Delete only entries explicitly quarantined under the runtime-owned .invalid/.
+
+    Agents may move stale report directories here but must not delete them. Never
+    follow symlinks (including a symlink substituted for the quarantine root).
+    """
+    invalid = Path(root) / ".reports" / ".invalid"
+    if invalid.is_symlink():
+        raise ValueError(f"report quarantine may not be a symlink: {invalid}")
+    invalid.mkdir(parents=True, exist_ok=True)
+    for entry in invalid.iterdir():
+        if entry.is_symlink() or not entry.is_dir():
+            entry.unlink()
+        else:
+            shutil.rmtree(entry)
+
+
+def settle_invalid_reports(root, work_dir, accepted):
+    """Settle agent quarantine only at a safe task boundary.
+
+    Successful audited tasks confirm deletion. Failed attempts first restore their
+    code baseline; return still-current reports to active, retire stale reports,
+    and never overwrite a conflicting active report.
+    """
+    root = Path(root)
+    invalid = root / ".reports" / ".invalid"
+    if invalid.is_symlink():
+        raise ValueError(f"report quarantine may not be a symlink: {invalid}")
+    if not invalid.exists():
+        return
+    if accepted:
+        cleanup_invalid_reports(root)
+        return
+    for entry in sorted(invalid.iterdir()):
+        if entry.is_symlink() or not entry.is_dir():
+            # Discard only the entry itself, never follow a symlink.
+            entry.unlink()
+            continue
+        destination = root / ".reports" / entry.name
+        reason = report_staleness(entry, work_dir)
+        if reason or destination.exists() or destination.is_symlink():
+            timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            archived = report_archive_path(root, timestamp, entry.name)
+            shutil.move(str(entry), str(archived))
+            print(f"[WORKER] Archived quarantined report '{entry.name}': "
+                  f"{reason or 'active report name already exists'}")
+        else:
+            shutil.move(str(entry), str(destination))
+            print(f"[WORKER] Restored valid report '{entry.name}' after rollback")
+
+
+def report_source_paths(report):
+    """Read source citations written by research agents, excluding report files."""
+    files = [report / "SUMMARY.md"] if report.is_dir() else [report]
+    if report.is_dir():
+        files.extend(path for path in report.rglob("*.md")
+                     if path.name != "SUMMARY.md" and not path.is_symlink()
+                     and not any(part.startswith(".") for part in path.relative_to(report).parts))
+    paths = set()
+    for document in files:
+        if not document.is_file() or document.is_symlink():
+            continue
+        body = document.read_text(encoding="utf-8", errors="replace")
+        for raw in re.findall(r"(?<![\w./-])([A-Za-z0-9_./+-]+\.[A-Za-z0-9]+)#L[0-9]+", body):
+            path = Path(raw)
+            if (not path.is_absolute() and ".." not in path.parts
+                    and path.parts[0] != ".reports"):
+                paths.add(path.as_posix())
+    return sorted(paths)
+
+
+def report_staleness(report, work_dir):
+    """Return a reason for stale/unverifiable reports, or None when sources match.
+
+    Freshness is checked from each report's own REPORT_META commit, not merely
+    the previous worker task's diff. Local staged/unstaged changes count.
+    """
+    summary = report / "SUMMARY.md" if report.is_dir() else report
+    if not summary.is_file() or summary.is_symlink():
+        return "missing SUMMARY.md"
+    with summary.open(encoding="utf-8", errors="replace") as stream:
+        first_line = stream.readline()
+    match = re.search(r"REPORT_META:.*?\bCommit=([0-9a-fA-F]{7,40})\b", first_line)
+    if not match:
+        return "missing valid REPORT_META commit"
+    commit = match.group(1)
+    paths = report_source_paths(report)
+    if not paths:
+        return "no verifiable source path#Lline citations"
+
+    def git(*args):
+        return subprocess.run(["git", "-C", str(work_dir), *args],
+                              check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    if git("cat-file", "-e", f"{commit}^{{commit}}").returncode:
+        return f"unknown source commit {commit}"
+    if git("merge-base", "--is-ancestor", commit, "HEAD").returncode:
+        return f"source commit {commit} not in current history"
+    tracked = set(git("ls-files", "--cached", "--", *paths).stdout.decode("utf-8", "replace").splitlines())
+    if len(tracked) != len(paths) or any(not (Path(work_dir) / path).is_file() for path in paths):
+        return "referenced source missing or untracked"
+    if git("diff", "--quiet", commit, "--", *paths).returncode:
+        return "referenced source changed since report commit"
+    return None
+
+
+def refresh_active_reports(root, work_dir):
+    """Script-only classification: archive stale reports, preserve all valid ones."""
     reports = Path(root) / ".reports"
     reports.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     for entry in reports.iterdir():
         if entry.name.startswith("."):
+            continue
+        if entry.is_symlink():
+            continue  # Never follow or move an untrusted link.
+        if not entry.is_dir() and entry.name != "SUMMARY.md":
+            continue
+        reason = report_staleness(entry, work_dir)
+        if reason:
+            shutil.move(str(entry), str(report_archive_path(root, timestamp, entry.name)))
+            print(f"[WORKER] 📦 Archived stale report '{entry.name}': {reason}")
+
+
+def archive_active_reports(root):
+    """Explicit force-archive command (not used for routine research dispatch)."""
+    reports = Path(root) / ".reports"
+    reports.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    for entry in reports.iterdir():
+        if entry.name.startswith("."):
+            continue
+        if entry.is_symlink():
             continue
         shutil.move(str(entry), str(report_archive_path(root, timestamp, entry.name)))
 
 
 def archive_overlapping_reports(root, work_dir, base):
-    reports = Path(root) / ".reports"
-    reports.mkdir(parents=True, exist_ok=True)
-    changed = subprocess.run(
-        ["git", "-C", str(work_dir), "diff", "--name-only", base, "HEAD"],
-        check=False, capture_output=True, text=True,
-    )
-    if changed.returncode:
-        return
-    changed_files = [name for name in changed.stdout.splitlines() if name]
-    if not changed_files:
-        return
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    for entry in reports.iterdir():
-        if entry.name.startswith("."):
-            continue
-        summary = entry / "SUMMARY.md" if entry.is_dir() else entry
-        if not summary.is_file():
-            continue
-        content = summary.read_text(encoding="utf-8", errors="replace")
-        if any(changed_file in content for changed_file in changed_files):
-            shutil.move(str(entry), str(report_archive_path(root, timestamp, entry.name)))
-            print(f"[WORKER] 📦 Archiving stale report '{entry.name}' (referenced file modified in commit)...")
+    """Compatibility entry point; validate against each report's own source commit."""
+    refresh_active_reports(root, work_dir)
 
 
 def _git_path_state(path):
@@ -2594,6 +2712,9 @@ def main(argv=None):
     audit.add_argument("--level", type=int, default=1)
     archive = commands.add_parser("archive-reports")
     archive.add_argument("--root", required=True)
+    refresh = commands.add_parser("refresh-reports")
+    refresh.add_argument("--root", required=True)
+    refresh.add_argument("--work-dir", required=True)
     overlap = commands.add_parser("archive-overlapping-reports")
     overlap.add_argument("--root", required=True)
     overlap.add_argument("--work-dir", required=True)
@@ -2693,6 +2814,8 @@ def main(argv=None):
         return code
     elif args.command == "archive-reports":
         archive_active_reports(args.root)
+    elif args.command == "refresh-reports":
+        refresh_active_reports(args.root, args.work_dir)
     elif args.command == "archive-overlapping-reports":
         archive_overlapping_reports(args.root, args.work_dir, args.base)
     elif args.command == "rollback-failed-task":
