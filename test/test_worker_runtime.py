@@ -3403,8 +3403,7 @@ class InstallerIntegrationTests(unittest.TestCase):
             self.assertEqual((target / "update.sh").read_bytes(), (ROOT / "update.sh").read_bytes())
             deployed_runtime = target / "scripts/worker_runtime.py"
             self.assertEqual(deployed_runtime.read_bytes(), (ROOT / "scripts/worker_runtime.py").read_bytes())
-            for adapter in ("codex.py", "agy.py", "generic.py", "aider.py",
-                            "aider_explore.py", "explore_evidence.py"):
+            for adapter in ("codex.py", "agy.py", "generic.py"):
                 self.assertEqual((target / "scripts/adapters" / adapter).read_bytes(),
                                  (ROOT / "scripts/adapters" / adapter).read_bytes())
             self.assertEqual((target / "docs/PORTING_GUIDE.md").read_bytes(),
@@ -3415,7 +3414,10 @@ class InstallerIntegrationTests(unittest.TestCase):
             operations.write_text("stale planner instructions\n")
             self.assertFalse((target / "worker_runtime.py").exists())
             self.assertTrue((target / "test/nightshift_worker/test_worker_runtime.py").is_file())
-            self.assertTrue((target / "test/nightshift_worker/test_explore_evidence.py").is_file())
+            self.assertFalse((target / "scripts/adapters/aider.py").exists())
+            self.assertFalse((target / "scripts/adapters/aider_explore.py").exists())
+            self.assertFalse((target / "scripts/adapters/explore_evidence.py").exists())
+            self.assertFalse((target / "test/nightshift_worker/test_explore_evidence.py").exists())
             self.assertTrue((target / "test/nightshift_worker/README.md").is_file())
             self.assertFalse((target / ".worker.env").exists())
             self.assertTrue((target / "scripts/adapters/agents.json").is_file())

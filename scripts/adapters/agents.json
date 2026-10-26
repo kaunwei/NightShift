@@ -34,32 +34,5 @@
         "mode": "accept-edits"
       }
     }
-  },
-  "aider-local": {
-    "default": false,
-    "worker": {
-      "task_timeout_seconds": 1800
-    },
-    "agent": {
-      "adapter": "aider",
-      "command": "aider",
-      "args": [],
-      "env": {
-        "OLLAMA_API_BASE": "http://192.168.50.183:11434"
-      },
-      "config": {
-        "model": "ollama_chat/openbmb/minicpm5-2b:q8_0",
-        "initial_score": 1,
-        "map_tokens": 2500,
-        "map_refresh": "always",
-        "edit_format": "whole",
-        "mode": "auto",
-        "research_only": true,
-        "explore_static_evidence": true,
-        "explore_max_rounds": 6,
-        "explore_max_files": 16,
-        "explore_files_per_round": 2
-      }
-    }
   }
 }

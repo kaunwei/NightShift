@@ -70,15 +70,25 @@ mkdir -p "$TARGET_DIR/scripts"
 cp -f "$SCRIPT_DIR/scripts/worker_runtime.py" "$TARGET_DIR/scripts/worker_runtime.py"
 echo "  ✓ Deployed scripts/worker_runtime.py"
 mkdir -p "$TARGET_DIR/scripts/adapters"
-for adapter in codex.py agy.py generic.py aider.py aider_explore.py explore_evidence.py; do
+for adapter in codex.py agy.py generic.py; do
   cp -f "$SCRIPT_DIR/scripts/adapters/$adapter" "$TARGET_DIR/scripts/adapters/$adapter"
   chmod +x "$TARGET_DIR/scripts/adapters/$adapter"
 done
+# Remove experimental adapters owned by earlier NightShift releases.
+rm -f "$TARGET_DIR/scripts/adapters/aider.py" \
+  "$TARGET_DIR/scripts/adapters/aider_explore.py" \
+  "$TARGET_DIR/scripts/adapters/explore_evidence.py"
 mkdir -p "$TARGET_DIR/docs"
 cp -f "$SCRIPT_DIR/docs/PORTING_GUIDE.md" "$TARGET_DIR/docs/PORTING_GUIDE.md"
+cp -f "$SCRIPT_DIR/docs/DETERMINISTIC_EXPLORE_STRATEGY.md" "$TARGET_DIR/docs/DETERMINISTIC_EXPLORE_STRATEGY.md"
+cp -f "$SCRIPT_DIR/docs/DETERMINISTIC_EXPLORE_RESULTS.md" "$TARGET_DIR/docs/DETERMINISTIC_EXPLORE_RESULTS.md"
+mkdir -p "$TARGET_DIR/docs/experiments/deterministic-explore"
+for artifact in "$SCRIPT_DIR"/docs/experiments/deterministic-explore/*; do
+  cp -f "$artifact" "$TARGET_DIR/docs/experiments/deterministic-explore/$(basename "$artifact")"
+done
 mkdir -p "$TARGET_DIR/test/nightshift_worker"
 cp -f "$SCRIPT_DIR/test/test_worker_runtime.py" "$TARGET_DIR/test/nightshift_worker/test_worker_runtime.py"
-cp -f "$SCRIPT_DIR/test/test_explore_evidence.py" "$TARGET_DIR/test/nightshift_worker/test_explore_evidence.py"
+rm -f "$TARGET_DIR/test/nightshift_worker/test_explore_evidence.py"
 cp -f "$SCRIPT_DIR/test/README.md" "$TARGET_DIR/test/nightshift_worker/README.md"
 touch "$TARGET_DIR/test/nightshift_worker/__init__.py"
 chmod +x "$TARGET_DIR/worker.sh"

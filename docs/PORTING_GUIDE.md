@@ -74,34 +74,9 @@ Set `agent.adapter` to `generic` and `agent.command` to the real wrapper executa
 
 The wrapper receives `NIGHTSHIFT_PROMPT_FILE`, `NIGHTSHIFT_RESULT_FILE`, `NIGHTSHIFT_TASK_ID`, `NIGHTSHIFT_EXECUTION_KIND` (`main` or `closeout`), `NIGHTSHIFT_MODEL`, `NIGHTSHIFT_EFFORT`, `NIGHTSHIFT_ACTION_LIMIT`, `NIGHTSHIFT_EXECUTION_TIMEOUT`, `PORT`, and `TEST_PORT`. It must write one JSON object to the result path with a supported `outcome`; successful outcomes also require the standard evidence, change, and `commit_message` fields. The wrapper owns enforcement of action limits and duration using the supplied values. Text-only legacy wrappers fail with an actionable structured-result diagnostic; migrate them to write protocol JSON before switching registrations.
 
-## Using Aider
+## Historical deterministic Explore report experiment
 
-NightShift includes an `aider` protocol adapter with separate research and coding
-paths. `[RESEARCH]` tasks call the configured Ollama model for bounded,
-per-file semantic notes. By default, deterministic AST graph and path ranking
-select files, while an append-only source ledger replaces model-rewritten project
-memory and model-authored final synthesis. The prior RepoMap and model-planner
-selection path remains available with `explore_static_evidence: false`. It writes
-the NightShift `SUMMARY.md` and
-`03-micro.md` deliverables, validates source pointers, and saves raw model traces
-under the attempt artifact directory. Set `explore_static_evidence: false` to
-compare with the earlier model-maintained-memory strategy. Coding tasks use Aider's one-shot
-`--message-file` CLI mode with declared TARGET files; both paths leave
-verification, scope audit, and Git finalization to NightShift. Each adapter task
-counts as one action.
-
-The built-in `aider-local` registration is non-default. Configure its
-`agent.config.model` and `agent.env.OLLAMA_API_BASE` for the intended local model
-server. Set `agent.config.mode` to `auto`, `explore`, or `cli`; `auto` selects
-RepoMap exploration when the task title contains `[RESEARCH]` and uses the CLI
-for other tasks. The bundled registration also sets `research_only: true`, so
-the Worker will not select it as a coding-task fallback while that path remains
-unevaluated. Tune exploration with `explore_max_rounds`, `explore_max_files`,
-and `explore_files_per_round`. `agent.config.map_tokens` controls Aider RepoMap
-size. Coding tasks may add task-relevant read-only sources with
-`agent.config.read_files`; CLI settings such as `model_settings_file`,
-`map_refresh`, and `edit_format` remain available for future evaluation. The
-bundled local registration starts at score 1 and remains non-default.
+The Aider-based implementation was removed after evaluation. Its deterministic evidence/reporting design and measured trial outcomes are preserved in [DETERMINISTIC_EXPLORE_STRATEGY.md](DETERMINISTIC_EXPLORE_STRATEGY.md) and [DETERMINISTIC_EXPLORE_RESULTS.md](DETERMINISTIC_EXPLORE_RESULTS.md). These documents describe an experiment, not a currently installed adapter.
 
 ## Legacy configuration migration
 
@@ -138,10 +113,6 @@ Helpers use their own defaults and environment overrides; they do not source the
 ## Configure and run
 
 On a fresh installation, `worker.sh` supplies worker runtime defaults and `scripts/adapters/agents.json` supplies the default Codex and backup AgY registrations. Configure at least one named agent before adding work to the queue. Each entry sets its Worker timeout under `worker.task_timeout_seconds`, then selects an adapter and real executable command under `agent`; provider options go in `agent.config`. `default: true` makes it a first candidate. Failover follows the remaining JSON order after quota exhaustion or a confirmed timeout. The runtime restores the failed attempt and raises a durable Planner gate before a replacement starts. After Planner review, use the `agent-event-ack` CLI shown above with resolution `acknowledged` or `revised`, then let the watcher resolve the gate. When all registrations are quota-exhausted, the task remains queued until the exhausted state is reset; explicit `RUN_ONCE=1` exits instead of waiting.
-
-### Local Aider Explore evidence strategy
-
-The Aider registration can set `explore_static_evidence` (default `true`). Explore builds a deterministic Python AST index for imports and bare calls with a unique indexed function name, then selects by graph leads and task/path relevance without a model planner call. Name matches are explicitly not binding or runtime proof; ambiguous and unresolved calls stay separate. Each inspected file appends its source hash, exact read spans, static facts, and clearly labeled unverified model note to the execution trace's `explore-trace/evidence-ledger.jsonl`. The model no longer rewrites accumulated project memory or synthesizes the final report; the report is rendered from static edges and observed spans, while local model notes remain in the ledger for review. Report citations must point within source spans actually sent to the reader. Set `explore_static_evidence: false` to compare with the previous RepoMap, model-planner, model-maintained-memory, and model-synthesis path.
 
 Use `/planner` for ticket planning and acceptance, `/explore` for read-only seam research, and `./worker.sh` to run the queue. The runtime handles one ticket at a time. It runs directly in the project directory and does not start a Planner agent or maintain an isolated Worker branch. See the [complete behavior specification](NIGHTSHIFT_SPEC.md) before relying on any workflow detail.
 

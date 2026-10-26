@@ -1,6 +1,6 @@
 # NightShift source coverage index
 
-Baseline: 2026-10-25, updated for external adapters, the Aider RepoMap/Ollama Explore path, per-registration scores, env-file-free configuration, in-place execution and on-demand trials. Companion to [NIGHTSHIFT_SPEC.md](NIGHTSHIFT_SPEC.md). This index records every NightShift-owned skill/reference, launcher, runtime, helper and installer/update entry. Matt skills are references only.
+Baseline: 2026-10-26, updated for external adapters, per-registration scores, env-file-free configuration, in-place execution and on-demand trials. The experimental Aider adapter and deterministic Explore implementation were removed; historical design and trial results are preserved in [DETERMINISTIC_EXPLORE_STRATEGY.md](DETERMINISTIC_EXPLORE_STRATEGY.md) and [DETERMINISTIC_EXPLORE_RESULTS.md](DETERMINISTIC_EXPLORE_RESULTS.md). Companion to [NIGHTSHIFT_SPEC.md](NIGHTSHIFT_SPEC.md). This index records every NightShift-owned skill/reference, launcher, runtime, helper and installer/update entry. Matt skills are references only.
 
 ## Preservation rule
 
@@ -18,8 +18,6 @@ For every later simplification, compare the changed source hashes and each affec
 | [scripts/adapters/agents.json](../scripts/adapters/agents.json) | 71efea4a203a9eb9a6678a83cb2e5db4409fd74ece9e5da4bb8e9e2d34129959 |
 | [install.sh](../install.sh) | be34d79ad7d2511c8c5d93033dbb630e976d5c84a8d2bbe92f78ecf343932950 |
 | [scripts/adapters/agy.py](../scripts/adapters/agy.py) | 0e6126f132b5e981b55f5bc6a8aa94f12a1516418322911350f0b41d15f9cfd9 |
-| [scripts/adapters/aider.py](../scripts/adapters/aider.py) | d9446c5eaa87452caa23edf31f592a81161f349a8e6bfb623b6a9f00db71cbc2 |
-| [scripts/adapters/aider_explore.py](../scripts/adapters/aider_explore.py) | 13ca9c1a7daef513a9c95549c2b8e48b591e6c401e428e6fea6230a51c491b39 |
 | [scripts/adapters/codex.py](../scripts/adapters/codex.py) | 1ca11f13f347d7c58dbc2f2a5429abb569273528411c04a3a7ab219bd78d1814 |
 | [scripts/adapters/generic.py](../scripts/adapters/generic.py) | fa8626610244c5d1bb6c037a6e6e6a8490a2b04c3c571108ed9b915d99b348e4 |
 | [scripts/extract_skeleton.sh](../scripts/extract_skeleton.sh) | 1ed2a93cee0194d1828336a50298ce3d7d8b981875dfaf36bd1adea469e5db01 |
