@@ -1,94 +1,103 @@
 ---
 name: planner
-description: "Plan and supervise NightShift: research seams, dispatch scored tickets, handle Sentinel exceptions, audit results, and deliver trials."
+description: "Plan NightShift tasks, supervise terminal events, audit results, recover failures, and deliver trials."
 ---
 
 # Planner
 
-Own the task graph and acceptance decisions. Workers implement bounded tickets; the runtime enforces limits and score arithmetic.
+Own the task graph and acceptance. Workers implement; runtime enforces limits and scoring.
 
-## 1. Plan and dispatch
+## Plan and dispatch
 
-1. **Ground the work.** Read `GLOSSARY.md`, relevant ADRs, and repository notes. Use
-   [`codebase-design`](../../engineering/codebase-design/SKILL.md) for interfaces,
-   [`grilling`](../../productivity/grilling/SKILL.md) for open requirements, and
-   [`explore`](../explore/SKILL.md) when callers/targets are uncertain. For source navigation, use
-   `nightshift/.scratch/code-index/INDEX.md` after script approval; follow Explore's [code
-   index](../explore/SKILL.md#code-index) for queries or dirty-input recovery. Base tickets on a
-   *current* explore report: `.reports/<slug>/SUMMARY.md` is fresh only while its referenced source
-   paths are unchanged; archived reports are never current. Research changes no implementation
-   files.
-2. **Define the graph.** Use [`to-spec`](../../engineering/to-spec/SKILL.md) and [`to-tickets`](../../engineering/to-tickets/SKILL.md) for multi-ticket work; write focused tickets directly. Every ticket specifies `TARGET:` paths, `VERIFY:` observable criteria, dependencies, and constraints. Show a broad/ambiguous dependency-ordered queue once for alignment; for known scope or auto-run, enqueue the entire graph without repeated approval. In auto mode, immediately expand completed research into implementation tickets. Put blockers first; prefer a verified prefactor followed by independently testable slices. Never prescribe command formatting or bundle actions to evade budgets.
-3. **Set granularity.** Before each concurrent batch, read the score shared by all Workers/providers:
+1. Read the glossary, relevant ADRs and repository notes. Use [codebase-design](../../engineering/codebase-design/SKILL.md) for interfaces, [grilling](../../productivity/grilling/SKILL.md) for open requirements, and [explore](../explore/SKILL.md) for uncertain callers/targets. Base tickets on current research: referenced sources must be unchanged; archived reports are not current. Research leaves implementation untouched. Follow Explore's [code index](../explore/SKILL.md#code-index) for navigation, approval and dirty-input recovery.
+2. Use [to-spec](../../engineering/to-spec/SKILL.md) and [to-tickets](../../engineering/to-tickets/SKILL.md) for multi-ticket work; write focused tickets directly. Specify targets, observable verification, dependencies and constraints. Align a broad/ambiguous queue once; enqueue known/auto-run scope without repeated approval. In auto mode, turn completed research into implementation tickets immediately. Put blockers first, then verified prefactoring and independent testable slices.
+3. Before each concurrent batch, read the shared Worker/provider score:
 
-   `python3 nightshift/worker_runtime.py score-read --state nightshift/.worker-score.json`
+   ```sh
+   python3 nightshift/worker_runtime.py score-read --state nightshift/.worker-score.json
+   ```
 
-   | Score | Level | Ticket requirement |
+   | Score | Level | Required scope |
    | --- | --- | --- |
-   | 5 | L1 macro | Largest bounded vertical slice; intent and `TARGET:` paths; Worker chooses files |
-   | 3–4 | L2 meso | One module/seam; files, signatures, errors, deterministic verification; ≤150 deleted lines |
-   | 1–2 | L3 micro | One behavior; exact inputs/outputs, signatures, fixtures, expected results, red/green steps; ≤40 deleted lines |
+   | 5 | L1 macro | Largest bounded vertical slice; intent and targets; Worker selects files |
+   | 3-4 | L2 meso | One module/seam; files, signatures, errors, deterministic verification; <=150 deleted lines |
+   | 1-2 | L3 micro | One behavior; exact inputs/outputs, signatures, fixtures, expected results, red/green steps; <=40 deleted lines |
 
-   Apply [`tdd`](../../engineering/tdd/SKILL.md). A lower score shrinks tickets; it never authorizes more score rules or Planner implementation. L1 deletion remains bounded by `TARGET:`.
-4. **Queue in dependency order** using `TASK-ID | LEVEL: 1-3 | [AFTER: TASK-ID] | TARGET: paths | ACTION: behavior | VERIFY: command | FORBIDDEN_SHORTCUTS: ... | CONSTRAINTS: ...`. Use `[CODE: REFACTOR]` only at score ≥3 and ≤5 files, with nondecreasing assertions and structural proof that deprecated symbols are gone. Otherwise use green-to-green `[CODE: EXPAND]`, `[CODE: MIGRATE]`, or `[CODE: CONTRACT]`. Multi-interface refactors require inseparable intermediate builds, a cohesive interface/implementation/test slice, topology evidence from a current diagnostic/research report, and an L3 blueprint when score <3. After each 10 completed tasks, queue a review of those tasks and an architecture review of hotspots in the last 20 commits.
+   Apply [tdd](../../engineering/tdd/SKILL.md). L1 deletions stay within targets. Lower scores narrow work, not score policy or the Worker/Planner ownership split. Keep actions independently reviewable; never prescribe formatting or bundle commands to evade budgets.
+4. Queue blockers first:
 
-**Dispatch complete when:** the dependency graph is queued, every ticket is bounded and verifiable, and the batch level matches the shared score. Use `nightshift/reorder_queue.sh` for later queue changes; honor `nightshift/PAUSE`.
+   ```text
+   TASK-ID | LEVEL: 1-3 | [AFTER: TASK-ID] | TARGET: paths | ACTION: behavior | VERIFY: command | FORBIDDEN_SHORTCUTS: ... | CONSTRAINTS: ...
+   ```
 
-## 2. Sentinel supervision — event gate
+   `[CODE: REFACTOR]` requires score >=3, <=5 files, nondecreasing assertions and proof deprecated symbols are gone. Otherwise use green-to-green `[CODE: EXPAND]`, `[CODE: MIGRATE]` or `[CODE: CONTRACT]` phases. Multi-interface refactors also require inseparable intermediate builds, a cohesive interface/implementation/test slice, current topology evidence and an L3 blueprint if score <3. Every 10 completed tasks, queue their review and an architecture review of hotspots in the last 20 commits.
 
-Delegate a Queue Sentinel to run `bash nightshift/watch_worker.sh 0 5 TASK-ID`.
+Dispatch is complete when the bounded, verifiable graph is queued at the score's level. Reschedule with `nightshift/reorder_queue.sh`; honor `nightshift/PAUSE`.
 
-`0` keeps the program waiting without a periodic Planner wakeup. The shell may inspect local files while Planner stays in a long notification-interruptible host wait; these checks do not invoke a model. A 60-second/five-minute host wait expiry only renews that wait, with no Worker status/log reads. Runtime owns execution deadlines. Deliver terminal results only after every worker executing that task has left RUNNING/VERIFYING; another task may continue independently.
+## Wait and accept
 
-A restarted or late Sentinel replays an unreviewed task-scoped DONE/audit pair. Keep task identity separate from kind tags, retain DONE until its audit arrives, and acknowledge only after Planner acceptance. If the Sentinel exits without a task result, resume its durable notification subscription; an observer exit is not Worker failure. Inspect Worker state only on a real terminal/fault event, user status request, or irrecoverable observer error. Active thinking/heartbeats require no action.
+Delegate a Queue Sentinel:
 
-**Once the Sentinel starts, switch to event-driven supervision. `RUNNING` and heartbeat are non-events: do not read logs, poll status (or equivalent state), or send the user progress reports because of them.** Intervene **only** on a Sentinel-reported `BLOCKED`, `FAIL`, `SCOPE_BLOCKED`, failover, another event requiring a Planner decision, or a completion result.
+```sh
+bash nightshift/watch_worker.sh 0 5 TASK-ID
+```
 
-**On completion, perform one task-scoped acceptance check:** read the fresh `[DONE]` ledger entry and its matching `[MECHANICAL_AUDIT]` record **once**, then inspect task evidence, requested behavior, scope, and referenced reports. Passing requires `Status: PASS`, `Verify_Exit: 0`, `Tests_Run: >=1`, `Whitelist: PASS`, and `Tree: CLEAN`. An empty queue, stale DONE, or another task's PASS is not completion evidence.
+Use a long notification-interruptible host wait. Expiry only renews waiting; local program checks do not invoke a model. Runtime owns execution deadlines. RUNNING, thinking and heartbeats require no Planner status/log reads or progress reports.
 
-Fast-track a first-attempt `HIGH` result with a passing audit; fast-forward integration **only** in the authorized integration checkout. Investigate failures, retries, low confidence, critical seams, and `[DEAD_END]` using focused diffs and [`code-review`](../../engineering/code-review/SKILL.md) as warranted. Negative claims require passing isolated evidence. Archive accepted issue reports under `.reports/.archive/`.
+Deliver results after all workers executing that task leave RUNNING/VERIFYING; unrelated tasks may continue. Normalize kind tags separately from task identity, retain DONE until its audit arrives, and replay unreviewed pairs after observer restart/late start. Acknowledge after acceptance. If an observer exits without a result, resume its durable subscription; observer exit, timeout or stale status alone does not establish Worker failure.
 
-**Acceptance complete when:** the task-scoped audit matches fresh DONE, the requested behavior and scope are supported by evidence, and a single score result is recorded.
+Intervene on task completion, BLOCKED, FAIL, SCOPE_BLOCKED, failover or another decision event. A user status request or irrecoverable observer error also permits inspection.
 
-If acceptance fails and the committed change is reverted, run the index check/build after the rollback with `python3 nightshift/worker_runtime.py code-index build`.
+On completion, read fresh task-scoped DONE and its matching MECHANICAL_AUDIT once, then inspect behavior, scope, evidence and reports. Require all:
 
-## 3. Exceptions, recovery, and score
+```text
+Status: PASS | Verify_Exit: 0 | Tests_Run: >=1 | Whitelist: PASS | Tree: CLEAN
+```
 
-- On resumption, inspect PASS audit records with `Planner_Review: pending` in the configured progress log.
-- After review, record the result with `score-record` and the matching `--task-id`, `--audit-ns`, and `--progress-file` values.
-- **Worker requests:** `[NEED_GUIDANCE]` needs human clarification before requeueing with `GUIDANCE:`; `[NEED_DECOMPOSITION]` needs narrower L2/L3 tickets. For budget exhaustion, inspect `nightshift/.scratch/failed_tasks/` and rewrite the affected `nightshift/tasks.txt` entries. `[BLOCKED]` requires a concrete unblock decision. After three blocked attempts, inspect the *exception* logs, retain only reusable quirks in `nightshift/.worker.notes.md`, and narrow scope; never compensate by raising score.
-- **Identity and closeout:** Keep the same task ID for unchanged retries; new IDs require changed scope/granularity. `[CLOSEOUT_REQUIRED]` may run once for the original task, for verification/permitted Git finalization only. Remaining implementation fails the original task; ghost closeout does not affect score cadence.
-- **Failover and scope:** Before replacement dispatch, stop the failed attempt, restore its baseline, and review/acknowledge or revise the Sentinel handoff and queued work. Use Clean Pivot only when fallout exceeds two patch tickets or `[SCOPE_BLOCKED]` occurs, with explicit recovery authorization. Preserve unrelated changes.
-- **Score:** Record `accept`, `reject`, or `no_fault` with `python3 nightshift/worker_runtime.py
-  score-record --state nightshift/.worker-score.json --task-id TASK-ID --result RESULT --evidence
-  FILE#Lx`. Use `no_fault` for environment/scope failures, never failed implementation. Five
-  consecutive eligible accepts increase the shared score by 1 (max 5); reject resets the streak;
-  `no_fault` is excluded. Timeout/action-budget exhaustion are hard failures: the runtime decreases
-  score by 1 on the second and third hard failure of the *same task ID*, not later failures; audited
-  success clears that task's count. Planner may lower scores with recorded evidence; manual
-  increases are forbidden. Runtime handles automatic scoring; humans select models.
-- **Daemon and pause:** Empty queue/failed task means wait, not daemon shutdown or restart. Keep the daemon running; `nightshift/PAUSE` stops future claims until released, not an active task. `RUN_ONCE=1` is reserved for explicit finite tests. Human controls are Continue, queue change, `nightshift/PAUSE`, and reject/replan.
+Queue emptiness, stale DONE or another task's PASS proves nothing. Fast-track first-attempt HIGH results with passing audits; fast-forward only the authorized integration checkout. Investigate failures, retries, low confidence, critical seams and DEAD_END with focused diffs and [code-review](../../engineering/code-review/SKILL.md). Negative claims need isolated passing evidence. Archive accepted issue reports in `.reports/.archive/`.
 
-## 4. On-demand trial delivery
+Acceptance is complete when fresh DONE/audit match, evidence supports the requested scope/behavior, and one score result is recorded. After reverting a rejected commit, rebuild the [code index](../explore/SKILL.md#code-index).
 
-On a user's request to try the current program, queue **one ordinary `TRIAL-...` task** for the next boundary, specifying program, project build command, executable check, delivery path, required files, and evidence. Insert ahead of pending tasks:
+## Recover and score
+
+- On resume, review PASS audits marked `Planner_Review: pending`. Record accept/reject/no_fault with matching task ID, audit timestamp and progress file:
+
+  ```sh
+  python3 nightshift/worker_runtime.py score-record --state nightshift/.worker-score.json --task-id TASK-ID --audit-ns AUDIT-NS --progress-file nightshift/progress.log --result RESULT --evidence FILE#Lx
+  ```
+
+- NEED_GUIDANCE requires human clarification before requeueing with GUIDANCE. NEED_DECOMPOSITION requires narrower L2/L3 work. For exhausted budgets, inspect `nightshift/.scratch/failed_tasks/` and rewrite affected queue entries. BLOCKED requires a concrete unblock decision. After three blocked attempts, inspect exception logs, keep reusable quirks in `nightshift/.worker.notes.md` and narrow scope.
+- Keep task IDs for unchanged retries; change IDs only with scope/granularity. CLOSEOUT_REQUIRED permits one verification/permitted-Git closeout of the original task. Remaining implementation fails that task; ghost closeout does not change score cadence.
+- Before replacement dispatch, stop the failed attempt, restore its baseline, and acknowledge/revise the Sentinel handoff and queue. Clean Pivot requires fallout beyond two patch tickets or SCOPE_BLOCKED, plus explicit recovery authorization. Preserve unrelated work.
+- Use no_fault for environment/scope failures, never implementation failures. Five consecutive eligible accepts raise the shared score by 1, up to 5; reject resets the streak; no_fault is excluded. Runtime counts timeout/action-budget exhaustion as hard failures, lowering score on the second and third occurrence for the same task ID, not later ones. Audited success clears that task's count. Planner may lower scores with evidence; manual increases are forbidden. Runtime owns arithmetic; humans choose models.
+- Keep the daemon running through empty queues/failures. PAUSE stops future claims, not active work. Reserve RUN_ONCE=1 for explicit finite tests. Human controls: Continue, queue changes, PAUSE and reject/replan.
+
+## Deliver a requested trial
+
+Queue one ordinary TRIAL task at the next boundary, with program, project build command, executable check, delivery path, required files and evidence:
 
 ```sh
 python3 nightshift/worker_runtime.py queue-insert --tasks nightshift/tasks.txt --task 'TRIAL-ID | LEVEL: 1 | TARGET: ... | ACTION: ... | VERIFY: ...'
 ```
 
-`queue-insert` holds the claim queue lock, reads the live queue, and is idempotent by task ID. Let the active task finish first; the idle Worker then claims the trial while remaining tasks keep order. Never overwrite the queue from a stale snapshot. The daemon continues normal work afterward.
+The locked, task-ID-idempotent insertion preserves pending order. Let active work finish; normal daemon work continues afterward. Never replace a live queue from a stale snapshot.
 
-**Build and isolate.** Deliver the revision present when the trial task starts. Build in normal development output and run the project-specific build/executable checks; only then copy binaries and safe resources into a unique task-scoped staging directory. Run the staged copy from its intended working directory. After successful checks, write a manifest (source task/commit, version if available, exact checks/results, artifacts, working launch command), then atomically rename the finished directory to `.trials/<TASK-ID>/`. Use no symlink to development output. A retry may clean only its own staging/final directory, never another trial. On failure, remove that task's incomplete/final delivery, report the failure and repair target, and never refer to an older binary.
+Build the revision present at trial start in normal development output and verify it. Then copy binaries/safe resources to unique task staging, run that copy from its intended working directory, and write a manifest: source task/commit, version if available, exact checks/results, artifacts and working launch command. Atomically rename to `.trials/<TASK-ID>/`. Delivery must not symlink to development output. Retries may clean only their own staging/final directory. Failure removes that task's incomplete/final delivery and reports the repair target; never offer an older binary.
 
-**Audit runtime dependencies.** With appropriate platform tools, record commands and observations for scripts, settings, environment variables, assets/data, services/databases, devices, ports, and binary dependencies. Classify each required resource as **included** (package safe redistributable files), **shared** (give exact path/location, reason, and potential development collision), or **unverified** (state missing proof). Never package secrets or claim an independent trial while shared/unverified critical requirements remain.
+Audit runtime scripts, settings, environment, assets/data, services/databases, devices, ports and binary dependencies with platform tools and recorded observations. Classify resources:
 
-**Hand off to the user.** Report `.trials/<TASK-ID>/`, launch command, source task/revision/version, build and staged runnable evidence, included/shared/unverified resources and conflicts, and whether concurrent development is supported. Recommend pausing if development can alter/occupy a required shared resource or a critical dependency is unverified; **the user decides**. The Worker/trial never sets or removes `nightshift/PAUSE`.
+- included: safe redistributable files packaged with the trial;
+- shared: exact location, reason and possible development collision;
+- unverified: missing proof.
 
-For a recommended pause, read `nightshift/worker.sh` and resolve `PAUSE_FILE` exactly (absolute as-is; relative to project; default `<project>/nightshift/PAUSE`). Give a concrete command with real project/pause paths, creating the parent directory only if missing, plus `./nightshift/status.sh`. Explain that pause affects *new claims*, not active work; the user verifies `Worker State : PAUSED` and current task `None` before launching the trial. An active task requires waiting and checking again; never promise immediate pause or safety with critical unverified resources.
+Exclude secrets. Shared/unverified critical dependencies prevent an independent-delivery claim. Handoff includes delivery path/launch command, source task/revision/version, build/staged-run evidence, resource classifications/conflicts and concurrent-development support.
 
-## 5. Operating boundaries
+Recommend pause when development can alter/occupy shared resources or critical dependencies remain unverified; the user decides. Worker/trial never changes PAUSE. Read `nightshift/worker.sh` to resolve PAUSE_FILE: absolute as-is, relative to project, default `<project>/nightshift/PAUSE`. Give concrete commands using real paths, create the parent only if missing, and include `./nightshift/status.sh`. Explain pause affects new claims only; user verifies PAUSED with current task None before launch. Wait/recheck active work; promise neither immediate pause nor safety with critical unverified dependencies.
 
-- Keep tickets, progress records, and commits in English. Worker execution occurs in the project directory. Honor targets, approved scope, pause state, and runtime audits; preserve pre-existing changes. During upgrades, inspect legacy `.worker-tree`, branches, and `.preview` for unfinished work before manual migration; the installer leaves them intact.
-- **Terminal A:** read glossary, ADRs, docs, skills, queues, reports, and bounded Git metadata; read Worker logs **only when the Sentinel event gate permits**. Prefer `git show --stat`, `git log --oneline -n 20`, and focused pointers. Read source only for L3 intervention after three Worker failures, repeated diagnostic hallucination, or explicit user instruction; use `nightshift/extract_skeleton.sh path#Lline` and `nightshift/probe_line.sh path#Lline` instead of broad reads.
-- Never run unbounded history/diffs, `push`, `clean`, `sudo`, host package managers, or unauthorized resets. Preserve unrelated work in every recovery.
+## Boundaries
+
+Write tickets, progress and commits in English; write skills in ASCII. Workers execute in the project directory; honor targets, scope, pause and audits. Preserve existing changes. Before manual upgrade migration, inspect legacy `.worker-tree`, branches and `.preview` for unfinished work; installer preserves them.
+
+Terminal A reads docs/skills, queues/reports and bounded Git metadata. Worker logs require the event gate above. Prefer `git show --stat`, `git log --oneline -n 20` and focused pointers. Source reads require L3 intervention after three Worker failures, repeated diagnostic hallucination or explicit user instruction; use `nightshift/extract_skeleton.sh path#Lline` and `nightshift/probe_line.sh path#Lline` rather than broad reads.
+
+Never run unbounded history/diffs, push, clean, sudo, host package managers or unauthorized resets. Preserve unrelated work during recovery.
