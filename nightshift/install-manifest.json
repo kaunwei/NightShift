@@ -14,6 +14,7 @@
     "tools/index.py",
     "tools/languages.json",
     "tools/requirements.txt",
+    "tools/check_env.py",
     "tools/setup.sh",
     "tools/setup.ps1",
     "install-manifest.json"

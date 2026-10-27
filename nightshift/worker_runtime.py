@@ -1170,7 +1170,9 @@ def run_code_index(work_dir, arguments, *, capture_output=False):
     tools = Path(__file__).resolve().parent / "tools"
     python = tools / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
     if not python.is_file():
-        raise FileNotFoundError(f"code-index environment is missing: {python}")
+        raise FileNotFoundError(
+            f"code-index environment is missing: {python}; "
+            f"repair it with bash {tools / 'setup.sh'} or rerun the NightShift installer")
     return subprocess.run([str(python), str(tools / "index.py"), "--repo", str(work_dir),
                            *arguments], check=False, text=True,
                           capture_output=capture_output)
@@ -2271,7 +2273,8 @@ def worker_daemon(root):
                         diff = subprocess.run(["git", "-C", str(work_dir), "diff", "--stat", base, "HEAD"],
                                                capture_output=True, text=True, check=False).stdout.splitlines()
                         diff_stat = diff[-1].strip() if diff else "0 files changed"
-                        prepend_progress(progress_file, f"[MECHANICAL_AUDIT] Status: PASS | Task: {task_id} | Verify_Exit: 0 | Tests_Run: >=1 | Whitelist: PASS | Tree: CLEAN | Diff: {diff_stat} | Attempts: {attempts} | Audit_NS: {time.time_ns()} | Planner_Review: pending")
+                        audit_ns = time.time_ns()
+                        prepend_progress(progress_file, f"[MECHANICAL_AUDIT] Status: PASS | Task: {task_id} | Verify_Exit: 0 | Tests_Run: >=1 | Whitelist: PASS | Tree: CLEAN | Diff: {diff_stat} | Attempts: {attempts} | Audit_NS: {audit_ns} | Planner_Review: pending")
                         # Audit passed: retire agent-marked reports, then validate remaining evidence.
                         settle_invalid_reports(root, work_dir, accepted=True)
                         refresh_active_reports(root, work_dir)
@@ -2282,7 +2285,7 @@ def worker_daemon(root):
                         new_done = done_count + 1
                         final_bar = progress_bar(new_done, total)
                         print(f"[{stamp()}] [SUCCESS] Task completed in {duration}s | {final_bar}")
-                        append_line(done_file, f"[{stamp()}] [DONE] {task} (Duration: {duration}s)")
+                        append_line(done_file, f"[{stamp()}] [DONE] {task} (Duration: {duration}s) [Audit_NS: {audit_ns}]")
                         update_status("IDLE", current=new_done, total=total,
                                       remaining=max(0, remaining - 1),
                                       percentage=f"{new_done * 100 // total if total else 0}%", bar=final_bar)

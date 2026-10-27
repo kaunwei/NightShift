@@ -15,12 +15,19 @@ PY
 
 if [ -x "$VENV/bin/python" ] && [ -f "$STAMP" ] \
   && [ "$(cat "$STAMP")" = "$REQUIREMENTS_HASH" ] \
-  && "$VENV/bin/python" -m pip check >/dev/null 2>&1; then
+  && "$VENV/bin/python" -m pip check >/dev/null 2>&1 \
+  && "$VENV/bin/python" "$TOOL_DIR/check_env.py" >/dev/null 2>&1; then
   echo "NightShift parser dependencies are already installed."
   exit 0
 fi
 
-if [ ! -x "$VENV/bin/python" ]; then "$PYTHON_BIN" -m venv "$VENV"; fi
-"$VENV/bin/python" -m pip install -r "$TOOL_DIR/requirements.txt"
+if [ ! -x "$VENV/bin/python" ] || ! "$VENV/bin/python" -m pip --version >/dev/null 2>&1; then
+  if ! "$PYTHON_BIN" -m venv "$VENV"; then
+    echo "Cannot create code-index environment at $VENV using $PYTHON_BIN; installation incomplete." >&2
+    exit 1
+  fi
+fi
+"$VENV/bin/python" -m pip install --force-reinstall -r "$TOOL_DIR/requirements.txt"
 "$VENV/bin/python" -m pip check
+"$VENV/bin/python" "$TOOL_DIR/check_env.py"
 printf '%s\n' "$REQUIREMENTS_HASH" > "$STAMP"

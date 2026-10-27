@@ -36,7 +36,11 @@ Own the task graph and acceptance decisions. Workers implement bounded tickets; 
 
 ## 2. Sentinel supervision — event gate
 
-Delegate a Queue Sentinel to run `bash nightshift/watch_worker.sh 3600 5 TASK-ID`.
+Delegate a Queue Sentinel to run `bash nightshift/watch_worker.sh 0 5 TASK-ID`.
+
+`0` keeps the program waiting without a periodic Planner wakeup. The shell may inspect local files while Planner stays in a long notification-interruptible host wait; these checks do not invoke a model. A 60-second/five-minute host wait expiry only renews that wait, with no Worker status/log reads. Runtime owns execution deadlines. Deliver terminal results only after every worker executing that task has left RUNNING/VERIFYING; another task may continue independently.
+
+A restarted or late Sentinel replays an unreviewed task-scoped DONE/audit pair. Keep task identity separate from kind tags, retain DONE until its audit arrives, and acknowledge only after Planner acceptance. If the Sentinel exits without a task result, resume its durable notification subscription; an observer exit is not Worker failure. Inspect Worker state only on a real terminal/fault event, user status request, or irrecoverable observer error. Active thinking/heartbeats require no action.
 
 **Once the Sentinel starts, switch to event-driven supervision. `RUNNING` and heartbeat are non-events: do not read logs, poll status (or equivalent state), or send the user progress reports because of them.** Intervene **only** on a Sentinel-reported `BLOCKED`, `FAIL`, `SCOPE_BLOCKED`, failover, another event requiring a Planner decision, or a completion result.
 

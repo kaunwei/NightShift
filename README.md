@@ -64,3 +64,9 @@ bash -n install.sh remove.sh nightshift/*.sh
 ```
 
 The installer deploys the explicit runtime allowlist in `nightshift/install-manifest.json` under `nightshift/`; skills go to the root host-discovery directories. Source docs and experiments stay in this repository. For porting details, see the [porting guide](nightshift/docs/PORTING_GUIDE.md).
+
+## Completion waiting and parser readiness
+
+Use `bash nightshift/watch_worker.sh 0 5 TASK-ID` to wait for a task. The default is unlimited notification waiting; local file checks do not call a model. Task-kind tags such as RESEARCH are normalized for exact matching. DONE remains pending until the corresponding audit arrives, and an unreviewed completed result can be replayed after a late watcher start. Completion is withheld while a worker is still RUNNING/VERIFYING on that task. Planner wakes for terminal results or genuine faults, not fixed 60-second/five-minute checks.
+
+Install/update creates and validates the private code-index environment by parsing C, C++ and Python. Generated-runtime exclusions are also persisted in local Git info/exclude so rollback of an uncommitted .gitignore cannot expose the parser venv to cleanup. A missing environment error includes the repair command. Installer success establishes parser readiness; building an index still requires clean indexed source/settings inputs and never commits unrelated user changes.

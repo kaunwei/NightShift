@@ -296,8 +296,30 @@ for entry in "${IGNORE_ENTRIES[@]}"; do
   grep -qxF "$entry" "$TARGET_DIR/.gitignore" || printf '%s\n' "$entry" >> "$TARGET_DIR/.gitignore"
 done
 
+# Persist generated-artifact exclusions outside tracked .gitignore. Attempt
+# rollback may reset an uncommitted .gitignore before cleaning task outputs.
+if git -C "$TARGET_DIR" rev-parse --git-dir >/dev/null 2>&1; then
+  EXCLUDE_FILE=$(git -C "$TARGET_DIR" rev-parse --git-path info/exclude)
+  case "$EXCLUDE_FILE" in /*) ;; *) EXCLUDE_FILE="$TARGET_DIR/$EXCLUDE_FILE" ;; esac
+  "$PYTHON_BIN" - "$EXCLUDE_FILE" "${IGNORE_ENTRIES[@]}" <<'PYEXCLUDE'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+old = path.read_text(encoding="utf-8") if path.exists() else ""
+entries = old.splitlines()
+missing = ["/" + item for item in sys.argv[2:] if "/" + item not in entries]
+if missing:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as output:
+        output.write(("\n" if old and not old.endswith("\n") else "") +
+                     "\n# NightShift generated state survives tracked-ignore rollback.\n" +
+                     "\n".join(missing) + "\n")
+PYEXCLUDE
+fi
+
 # Install all parser dependencies during both fresh installs and updates.
 PYTHON_BIN="$PYTHON_BIN" "$TARGET_DIR/nightshift/tools/setup.sh"
+"$TARGET_DIR/nightshift/tools/.venv/bin/python" "$TARGET_DIR/nightshift/tools/index.py" --help >/dev/null
 
 # Validate deployed entry points and runtime files before reporting success.
 bash -n "$TARGET_DIR/nightshift/"*.sh

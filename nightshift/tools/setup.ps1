@@ -16,3 +16,6 @@ if (-not (Test-Path $VenvPython)) {
 if ($LASTEXITCODE -ne 0) { throw "Could not install code-index dependencies." }
 & $VenvPython -m pip check
 if ($LASTEXITCODE -ne 0) { throw "Code-index dependency check failed." }
+
+& $VenvPython (Join-Path $ToolDir "check_env.py")
+if ($LASTEXITCODE -ne 0) { throw "Code-index parser smoke check failed; installation incomplete." }
