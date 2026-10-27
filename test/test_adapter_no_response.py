@@ -1,4 +1,4 @@
-"""Exercise no_response and failure classification through each built-in adapter's public protocol."""
+"""Exercise generic no_response and failure handling through each built-in adapter protocol."""
 import json
 from pathlib import Path
 import subprocess
@@ -7,10 +7,10 @@ import tempfile
 import time
 import unittest
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "install.sh").exists())
 
 
-class AdapterDiagnosticsTests(unittest.TestCase):
+class AdapterNoResponseTests(unittest.TestCase):
     def run_adapter(self, adapter, output, exit_code):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -29,7 +29,7 @@ class AdapterDiagnosticsTests(unittest.TestCase):
 
             def callback(name, request):
                 response = subprocess.run(
-                    [sys.executable, str(ROOT / 'scripts/adapters' / f'{adapter}.py'), name],
+                    [sys.executable, str(ROOT / 'nightshift/adapters' / f'{adapter}.py'), name],
                     input=json.dumps({'protocol_version': 1, **request}),
                     text=True, capture_output=True, timeout=10)
                 self.assertEqual(response.returncode, 0, response.stderr)
@@ -52,11 +52,7 @@ class AdapterDiagnosticsTests(unittest.TestCase):
     def test_unexpected_stop_without_actions_is_no_response(self):
         for adapter in ('codex', 'agy'):
             for output in ('Error: connection reset', 'unexpected stop',
-                           'Error: insufficient_quota', 'rate limit exceeded',
-                           'RESOURCE_EXHAUSTED code 429', 'out of credits',
-                           'You’ve hit your usage limit. Upgrade to Pro',
-                           'You\'ve hit your usage limit.',
-                           'usage limit exceeded', 'Error: usage limit reached', 'quota exceeded'):
+                           'provider temporarily unavailable'):
                 with self.subTest(adapter=adapter, output=output):
                     status, payload = self.run_adapter(adapter, output, 1)
                     self.assertEqual(status['status'], 'no_response')
@@ -64,8 +60,8 @@ class AdapterDiagnosticsTests(unittest.TestCase):
 
     def test_recovered_error_preserves_successful_final_result(self):
         for adapter in ('codex', 'agy'):
-            for event in ({'type': 'error', 'message': 'rate limit exceeded'},
-                          {'type': 'turn.failed', 'error': {'message': 'insufficient_quota'}}):
+            for event in ({'type': 'error', 'message': 'temporary provider failure'},
+                          {'type': 'turn.failed', 'error': {'message': 'connection reset'}}):
                 with self.subTest(adapter=adapter, event=event):
                     status, payload = self.run_adapter(adapter, json.dumps(event), 0)
                     self.assertEqual(status['status'], 'complete')
@@ -75,11 +71,11 @@ class AdapterDiagnosticsTests(unittest.TestCase):
         for adapter in ('codex', 'agy'):
             for output in (
                 json.dumps({'type': 'item.completed', 'item': {
-                    'type': 'command_execution', 'aggregated_output': 'Error: build failed HTTP 429'}}),
+                    'type': 'command_execution', 'aggregated_output': 'Error: build failed'}}),
                 json.dumps({'type': 'item.completed', 'item': {
-                    'type': 'command_execution', 'aggregated_output': 'Expected: 4294967168'}}),
+                    'type': 'command_execution', 'aggregated_output': 'Expected: 42'}}),
                 json.dumps({'type': 'item.completed', 'item': {
-                    'type': 'command_execution', 'aggregated_output': 'Test fixture mentions rate limit exceeded and error'}})):
+                    'type': 'command_execution', 'aggregated_output': 'Test fixture reports a failed assertion'}})):
                 with self.subTest(adapter=adapter, output=output):
                     status, payload = self.run_adapter(adapter, output, 1)
                     self.assertEqual(status['status'], 'failed')

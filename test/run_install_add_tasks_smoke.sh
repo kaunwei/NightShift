@@ -20,7 +20,7 @@ trap cleanup EXIT
 cat > "$SMOKE_ROOT/README.md" <<'EOF'
 # Install and add-task smoke project
 
-This disposable project checks the NightShift updater and queued Worker flow.
+This disposable project checks the single NightShift installer and queued Worker flow.
 EOF
 
 cat > "$SMOKE_ROOT/src/calc.py" <<'EOF'
@@ -38,7 +38,32 @@ EOF
 
 printf 'smoke.log\n' > "$SMOKE_ROOT/.gitignore"
 
-"$ROOT/update.sh" "$SMOKE_ROOT"
+if [ -n "${NIGHTSHIFT_TEST_PARSER_VENV:-}" ]; then
+  mkdir -p "$SMOKE_ROOT/nightshift/tools"
+  ln -s "$NIGHTSHIFT_TEST_PARSER_VENV" "$SMOKE_ROOT/nightshift/tools/.venv"
+fi
+
+"$ROOT/install.sh" "$SMOKE_ROOT"
+
+test ! -e "$SMOKE_ROOT/nightshift/skills"
+test ! -e "$SMOKE_ROOT/nightshift/docs"
+test ! -e "$SMOKE_ROOT/nightshift/local_tdd.py"
+test -f "$SMOKE_ROOT/nightshift/install-manifest.json"
+test -f "$SMOKE_ROOT/.agents/skills/nightshift/planner/SKILL.md"
+test -f "$SMOKE_ROOT/.skills/universal-build-verify.md"
+test -f "$SMOKE_ROOT/nightshift/tools/index.py"
+test -f "$SMOKE_ROOT/nightshift/tools/languages.json"
+test -f "$SMOKE_ROOT/nightshift/tools/requirements.txt"
+test -x "$SMOKE_ROOT/nightshift/tools/.venv/bin/python"
+test ! -e "$SMOKE_ROOT/tasks.txt"
+test ! -e "$SMOKE_ROOT/tasks.done"
+test ! -e "$SMOKE_ROOT/progress.log"
+test ! -e "$SMOKE_ROOT/worker.status"
+test -f "$SMOKE_ROOT/nightshift/install.sh"
+test ! -e "$SMOKE_ROOT/update.sh"
+grep -Fq 'nightshift/tools/**' "$SMOKE_ROOT/nightshift/code-index.toml"
+grep -qxF 'nightshift/tools/.venv/' "$SMOKE_ROOT/.gitignore"
+! grep -qxF 'nightshift/' "$SMOKE_ROOT/.gitignore"
 
 cat > "$SMOKE_ROOT/scripts/smoke-agent" <<'PY'
 #!/usr/bin/env python3
@@ -87,7 +112,7 @@ result_path.write_text(json.dumps(payload), encoding="utf-8")
 PY
 chmod +x "$SMOKE_ROOT/scripts/smoke-agent"
 
-python3 - "$SMOKE_ROOT/scripts/adapters/agents.json" <<'PY'
+python3 - "$SMOKE_ROOT/nightshift/adapters/agents.json" <<'PY'
 import json
 from pathlib import Path
 import sys
@@ -103,37 +128,44 @@ PY
 git -C "$SMOKE_ROOT" init -q
 git -C "$SMOKE_ROOT" config user.name "NightShift Smoke"
 git -C "$SMOKE_ROOT" config user.email "nightshift-smoke@example.invalid"
+if git -C "$SMOKE_ROOT" check-ignore -q nightshift/tasks.txt; then
+  echo "NightShift queue was incorrectly ignored" >&2
+  exit 1
+fi
+git -C "$SMOKE_ROOT" check-ignore -q nightshift/tasks.done
 git -C "$SMOKE_ROOT" add -A
 git -C "$SMOKE_ROOT" commit -qm "test: initialize disposable smoke project"
 
 EXPLORE_TASK="TASK-SMOKE-EXPLORE | LEVEL: 1 | TARGET: .reports/smoke/SUMMARY.md | ACTION: [RESEARCH] Explore the calc module seam and write a concise report | VERIFY: REPORT_ONLY | FORBIDDEN_SHORTCUTS: none | CONSTRAINTS: read-only product scope"
 CODE_TASK="TASK-SMOKE-CODE | LEVEL: 1 | TARGET: src/calc.py | ACTION: [CODE: FIX] Add a multiply function | VERIFY: python3 -c 'from src.calc import multiply; assert multiply(6, 7) == 42; print(\"1 test passed\")' | FORBIDDEN_SHORTCUTS: none | CONSTRAINTS: keep the change in src/calc.py"
 
-python3 "$SMOKE_ROOT/scripts/worker_runtime.py" queue-insert \
-  --tasks "$SMOKE_ROOT/tasks.txt" --task "$EXPLORE_TASK"
-python3 "$SMOKE_ROOT/scripts/worker_runtime.py" queue-insert \
-  --tasks "$SMOKE_ROOT/tasks.txt" --task "$CODE_TASK"
+python3 "$SMOKE_ROOT/nightshift/worker_runtime.py" queue-insert \
+  --tasks "$SMOKE_ROOT/nightshift/tasks.txt" --task "$EXPLORE_TASK"
+python3 "$SMOKE_ROOT/nightshift/worker_runtime.py" queue-insert \
+  --tasks "$SMOKE_ROOT/nightshift/tasks.txt" --task "$CODE_TASK"
 
 RUN_ONCE=1 POLL_INTERVAL=0.05 TASK_TIMEOUT=120 \
-  bash "$SMOKE_ROOT/worker.sh" | tee "$SMOKE_ROOT/smoke.log"
+  bash "$SMOKE_ROOT/nightshift/worker.sh" | tee "$SMOKE_ROOT/smoke.log"
 
-grep -q '\[DONE\].*TASK-SMOKE-CODE' "$SMOKE_ROOT/tasks.done"
-grep -q '\[DONE\].*TASK-SMOKE-EXPLORE' "$SMOKE_ROOT/tasks.done"
-grep -q 'Status: PASS | Task: TASK-SMOKE-CODE' "$SMOKE_ROOT/progress.log"
-grep -q 'Status: PASS | Task: TASK-SMOKE-EXPLORE' "$SMOKE_ROOT/progress.log"
+test -d "$SMOKE_ROOT/nightshift/.scratch/attempts"
+test ! -e "$SMOKE_ROOT/.scratch"
+grep -q '\[DONE\].*TASK-SMOKE-CODE' "$SMOKE_ROOT/nightshift/tasks.done"
+grep -q '\[DONE\].*TASK-SMOKE-EXPLORE' "$SMOKE_ROOT/nightshift/tasks.done"
+grep -q 'Status: PASS | Task: TASK-SMOKE-CODE' "$SMOKE_ROOT/nightshift/progress.log"
+grep -q 'Status: PASS | Task: TASK-SMOKE-EXPLORE' "$SMOKE_ROOT/nightshift/progress.log"
 grep -q 'REPORT_META: Task=TASK-SMOKE-EXPLORE' \
   "$SMOKE_ROOT/.reports/smoke/SUMMARY.md"
 grep -q 'src/calc.py#L1' "$SMOKE_ROOT/.reports/smoke/SUMMARY.md"
-grep -q '^feat: smoke-test code task$' <(git -C "$SMOKE_ROOT" log -1 --format=%s)
+git -C "$SMOKE_ROOT" log --format=%s | grep -qx 'feat: smoke-test code task'
 
-if [ "$(python3 -c "import json; print(json.load(open('$SMOKE_ROOT/worker.status'))['state'])")" != "STOPPED" ]; then
+if [ "$(python3 -c "import json; print(json.load(open('$SMOKE_ROOT/nightshift/worker.status'))['state'])")" != "STOPPED" ]; then
   echo "Worker did not stop cleanly; see $SMOKE_ROOT/smoke.log" >&2
   exit 1
 fi
-if [ -e "$SMOKE_ROOT/.worker.pid" ]; then
+if [ -e "$SMOKE_ROOT/nightshift/.worker.pid" ]; then
   echo "Worker PID file was not cleaned up" >&2
   exit 1
 fi
 
-echo "PASS: update, queue insertion, code task, Explore task, audits, and code commit verified."
+echo "PASS: single install, dependency setup, namespaced state, queue insertion, Worker tasks, audits, and commit verified."
 echo "The disposable project stays under $SMOKE_ROOT; its temporary .git directory will be removed."

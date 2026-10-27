@@ -6,16 +6,25 @@
 
 set -uo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$SCRIPT_DIR" || exit 1
-STATUS_FILE="${STATUS_FILE:-worker.status}"
-if [ "${WORKER_ID:-default}" != "default" ]; then
-  STATUS_FILE="worker.${WORKER_ID}.status"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ "$(basename "$SCRIPT_DIR")" = "scripts" ]; then
+  NIGHTSHIFT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+  PROJECT_ROOT="$NIGHTSHIFT_DIR"
+  RUNTIME_PATH="$SCRIPT_DIR/worker_runtime.py"
+else
+  NIGHTSHIFT_DIR="$SCRIPT_DIR"
+  PROJECT_ROOT="$(cd "$NIGHTSHIFT_DIR/.." && pwd)"
+  RUNTIME_PATH="$NIGHTSHIFT_DIR/worker_runtime.py"
 fi
-PROGRESS_FILE="${PROGRESS_FILE:-progress.log}"
-TASKS_FILE="${TASKS_FILE:-tasks.txt}"
-TASKS_DONE_FILE="${TASKS_DONE_FILE:-tasks.done}"
-PAUSE_FILE="${PAUSE_FILE:-PAUSE}"
+cd "$PROJECT_ROOT" || exit 1
+STATUS_FILE="${STATUS_FILE:-$NIGHTSHIFT_DIR/worker.status}"
+if [ "${WORKER_ID:-default}" != "default" ]; then
+  STATUS_FILE="$NIGHTSHIFT_DIR/worker.${WORKER_ID}.status"
+fi
+PROGRESS_FILE="${PROGRESS_FILE:-$NIGHTSHIFT_DIR/progress.log}"
+TASKS_FILE="${TASKS_FILE:-$NIGHTSHIFT_DIR/tasks.txt}"
+TASKS_DONE_FILE="${TASKS_DONE_FILE:-$NIGHTSHIFT_DIR/tasks.done}"
+PAUSE_FILE="${PAUSE_FILE:-$NIGHTSHIFT_DIR/PAUSE}"
 
 echo "=============================================================================="
 echo "              24h Unattended Worker Status Dashboard"
@@ -23,10 +32,10 @@ echo "==========================================================================
 
 # 1. Worker Daemon Status
 if [ -f "$STATUS_FILE" ]; then
-  "${PYTHON_BIN:-python3}" "$SCRIPT_DIR/scripts/worker_runtime.py" status-display "$STATUS_FILE" || \
+  "${PYTHON_BIN:-python3}" "$RUNTIME_PATH" status-display "$STATUS_FILE" || \
     echo "Worker Status  : Invalid status file"
 else
-  echo "Worker Status  : No worker.status found"
+  echo "Worker Status  : No $NIGHTSHIFT_DIR/worker.status found"
 fi
 
 if [ -f "$PAUSE_FILE" ]; then

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Portable, testable operations behind the worker.sh compatibility entry point.
+"""Portable, testable operations behind the nightshift/worker.sh entry point.
 
 Worker settings come from the launcher environment; agent registrations are read
-from the single scripts/adapters/agents.json registry.
+from nightshift/adapters/agents.json.
 Each command receives explicit inputs so callers and tests exercise the same seam.
 """
 
@@ -26,6 +26,9 @@ import tempfile
 import time
 import threading
 import uuid
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import scratch_review
 
 
 FIELD_NAMES = (
@@ -434,7 +437,8 @@ def workspace_snapshot(work_dir, base):
                                capture_output=True, check=False).stdout
     paths = {os.fsdecode(item) for item in changed.split(b"\0") + untracked.split(b"\0") if item}
     paths = {name for name in paths
-             if not name.startswith((".worker-ghosts/", ".worker-ghost-state"))}
+             if not name.startswith((".worker-ghosts/", ".worker-ghost-state",
+                                     "nightshift/.worker-ghosts/", "nightshift/.worker-ghost-state"))}
     snapshot = {}
     for name in paths:
         path = Path(work_dir) / name
@@ -642,7 +646,7 @@ def load_agent_registry(config_file):
 
 
 ADAPTER_PROTOCOL_VERSION = 1
-ADAPTER_TERMINAL_STATUSES = {"complete", "closeout_required", "no_response", "quota_exhausted",
+ADAPTER_TERMINAL_STATUSES = {"complete", "closeout_required", "no_response",
                              "step_budget_exceeded", "execution_timeout",
                              "callback_timeout", "cancellation_failed",
                              "failed", "cancelled"}
@@ -830,32 +834,31 @@ def should_failover_agent(exit_code, result_text):
     status = payload.get("status", "") if isinstance(payload, dict) else ""
     if status in ("cancellation_failed", "step_budget_exceeded") or exit_code == 125:
         return False
-    return status in ("no_response", "quota_exhausted", "execution_timeout", "callback_timeout")
+    return status in ("no_response", "execution_timeout", "callback_timeout")
 
 
 def read_agent_state(path):
     path = Path(path)
     if not path.exists():
-        return {"version": 1, "active_agent_id": "", "consecutive_no_response": 0, "exhausted": {}, "task_exclusions": {}}
+        return {"version": 1, "active_agent_id": "", "consecutive_no_response": 0, "task_exclusions": {}}
     try:
         state = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return {"version": 1, "active_agent_id": "", "consecutive_no_response": 0, "exhausted": {}, "task_exclusions": {}}
+        return {"version": 1, "active_agent_id": "", "consecutive_no_response": 0, "task_exclusions": {}}
     if not isinstance(state, dict):
         state = {}
     state.setdefault("version", 1)
     state.setdefault("active_agent_id", "")
     state.setdefault("consecutive_no_response", 0)
-    state.setdefault("exhausted", {})
     state.setdefault("task_exclusions", {})
     return state
 
 
 def agent_supports_task(agent, title, constraints=""):
-    """Apply an optional registration task-scope filter before timeout/quota routing."""
+    """Apply an optional registration task-scope filter before agent routing."""
     if not agent.get("overrides", {}).get("research_only", False):
         return True
-    return bool(re.search(r"\[RESEARCH\]", f"{title} {constraints}", re.I))
+    return scratch_review.is_review(title) or bool(re.search(r"\[RESEARCH\]", f"{title} {constraints}", re.I))
 
 
 def execute_registered_agents(args, agents, state_path, rollback):
@@ -892,7 +895,7 @@ def execute_registered_agents(args, agents, state_path, rollback):
         attempt = argparse.Namespace(**vars(args))
         attempt.attempt_id = str(uuid.uuid4())
         snapshot_root = Path(getattr(args, "attempt_snapshot_root", "") or
-                             (Path(args.work_dir) / ".scratch/attempts" / args.task_id))
+                             (_scratch_state_root(args.work_dir) / "attempts" / args.task_id))
         attempt.attempt_baseline = str(snapshot_root / attempt.attempt_id / "baseline")
         attempt.adapter_artifact_dir = str(Path(attempt.attempt_baseline).parent / "adapter")
         args.attempt_id = attempt.attempt_id
@@ -942,10 +945,13 @@ def execute_registered_agents(args, agents, state_path, rollback):
         actions_used = parsed_result.get("actions_used", 0) if isinstance(parsed_result, dict) else 0
 
         is_no_response = (
-            status_val in ("no_response", "quota_exhausted")
-            or outcome_val in ("no_response", "quota_exhausted")
-            or error_code_val in ("no_response", "quota_exhausted")
-            or (code != 0 and actions_used == 0 and outcome_val in ("", "failure", "invalid_result"))
+            status_val == "no_response"
+            or outcome_val == "no_response"
+            or error_code_val == "no_response"
+            or (code != 0 and actions_used == 0
+                and outcome_val in ("", "failure", "invalid_result")
+                and status_val not in ("execution_timeout", "callback_timeout",
+                                       "cancellation_failed", "step_budget_exceeded"))
         )
 
         if not is_no_response and not should_failover_agent(code, parsed_output):
@@ -960,12 +966,19 @@ def execute_registered_agents(args, agents, state_path, rollback):
         if is_no_response:
             consecutive_no_response += 1
             state["consecutive_no_response"] = consecutive_no_response
+            current_index = (current_index + 1) % len(available)
+            next_agent = available[current_index]
         else:
             task_exclusions.append(agent["id"])
             state.setdefault("task_exclusions", {})[args.task_id] = task_exclusions
-
-        current_index = (current_index + 1) % len(available)
-        next_agent = available[current_index]
+            available = [candidate for candidate in task_agents
+                         if candidate["id"] not in task_exclusions]
+            if not available:
+                args.awaiting_agent = True
+                atomic_write(state_path, json.dumps(state, ensure_ascii=False, indent=2) + "\n")
+                return 0, False
+            current_index = 0
+            next_agent = available[current_index]
         state["active_agent_id"] = next_agent["id"]
         atomic_write(state_path, json.dumps(state, ensure_ascii=False, indent=2) + "\n")
 
@@ -1015,7 +1028,7 @@ def poll_next(args):
             fields[index] = task_field(raw, key)
         targets = [item.strip() for item in fields[10].split(",") if item.strip()]
         file_count = 0
-        for target in targets:
+        for target in ([] if scratch_review.is_review(raw) else targets):
             path = Path(args.work_dir) / target
             file_count += max(1, sum(1 for item in path.rglob("*") if item.is_file())) if path.is_dir() else 1
         file_count = max(1, file_count)
@@ -1152,6 +1165,58 @@ def changed_tree_paths(work_dir, before, after):
     return _git_names(work_dir, "diff", "--name-only", "-z", before, after)
 
 
+def run_code_index(work_dir, arguments, *, capture_output=False):
+    """Run the bundled indexer through the parser environment installed with NightShift."""
+    tools = Path(__file__).resolve().parent / "tools"
+    python = tools / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    if not python.is_file():
+        raise FileNotFoundError(f"code-index environment is missing: {python}")
+    return subprocess.run([str(python), str(tools / "index.py"), "--repo", str(work_dir),
+                           *arguments], check=False, text=True,
+                          capture_output=capture_output)
+
+
+def code_index_inputs(work_dir, paths):
+    """Whether changed paths can affect the configured code index."""
+    tools = Path(__file__).resolve().parent / "tools"
+    registry = json.loads((tools / "languages.json").read_text(encoding="utf-8"))
+    extensions = {extension.lower() for spec in registry.values()
+                  for extension in spec.get("extensions", [])}
+    special = {"cmakelists.txt", "makefile", "gnumakefile", "package.swift",
+               "package.json", "tsconfig.json", "pyproject.toml", "cargo.toml",
+               "go.mod", "requirements.txt", "code-index.toml"}
+    settings_suffixes = {".xcconfig", ".xcscheme"}
+    for name in paths:
+        path = Path(name)
+        if (path.suffix.lower() in extensions or path.name.lower() in special
+                or path.suffix.lower() in settings_suffixes
+                or name in {"nightshift/tools/index.py", "nightshift/tools/languages.json",
+                            "nightshift/tools/requirements.txt"}):
+            return True
+    return False
+
+
+def ensure_code_index_after_commit(work_dir, previous_head):
+    """Refresh the index after a script-owned code commit; indexing failure is non-fatal."""
+    try:
+        current_head = subprocess.run(["git", "-C", str(work_dir), "rev-parse", "HEAD"],
+                                      check=True, capture_output=True, text=True).stdout.strip()
+        if current_head == previous_head:
+            return
+        changed = _git_names(work_dir, "diff", "--name-only", "-z", previous_head, current_head)
+        if not code_index_inputs(work_dir, changed):
+            return
+        result = run_code_index(work_dir, ["ensure"])
+        if result.returncode:
+            detail = result.stderr.strip() if result.stderr else ""
+            print("[WORKER] WARNING: task commit succeeded, but code-index refresh failed; "
+                  "a later query or explicit ensure can rebuild it. " + detail,
+                  file=sys.stderr)
+    except (OSError, ValueError, json.JSONDecodeError, subprocess.CalledProcessError) as error:
+        print("[WORKER] WARNING: task commit succeeded, but code-index refresh failed; "
+              f"a later query or explicit ensure can rebuild it. {error}", file=sys.stderr)
+
+
 def finalize_task_git(args):
     trees = attempt_audit_trees(args)
     if trees:
@@ -1170,6 +1235,8 @@ def finalize_task_git(args):
                              + ", ".join(sorted(overlap)))
         if not changed:
             return 0
+        previous_head = subprocess.run(["git", "-C", args.work_dir, "rev-parse", "HEAD"],
+                                       check=True, capture_output=True, text=True).stdout.strip()
         with temporary_git_index(args.work_dir) as git:
             git("add", "-A", "--", *changed)
             if git("diff", "--cached", "--name-only", "-z"):
@@ -1178,6 +1245,7 @@ def finalize_task_git(args):
         # Refresh only the task entries; unrelated staged/unstaged user work remains intact.
         subprocess.run(["git", "-C", args.work_dir, "reset", "-q", "HEAD", "--", *changed],
                        check=True, capture_output=True)
+        ensure_code_index_after_commit(args.work_dir, previous_head)
         return 0
     targets = [item.strip() for item in args.target.split(",") if item.strip()]
     for target in targets:
@@ -1186,6 +1254,8 @@ def finalize_task_git(args):
     staged = subprocess.run(["git", "-C", args.work_dir, "diff", "--cached", "--quiet"],
                             check=False)
     if staged.returncode:
+        previous_head = subprocess.run(["git", "-C", args.work_dir, "rev-parse", "HEAD"],
+                                       check=True, capture_output=True, text=True).stdout.strip()
         title = args.title
         commit_type = ("fix" if "[CODE: FIX]" in title else
                        "refactor" if "[CODE: REFACTOR]" in title else
@@ -1201,6 +1271,7 @@ def finalize_task_git(args):
         if commit.returncode:
             print(f"[WORKER] Failed to commit task changes for {args.task_id}.", file=sys.stderr)
             return 1
+        ensure_code_index_after_commit(args.work_dir, previous_head)
     return 0
 
 
@@ -1220,7 +1291,7 @@ def finalize_structured_adapter_result(args, result):
             untracked = subprocess.run(["git", "-C", args.work_dir, "ls-files", "--others",
                                         "--exclude-standard"], capture_output=True, text=True,
                                        check=False).stdout.splitlines()
-        runtime_file = re.compile(r"(?:^|/)(?:progress\.log|tasks\.txt|tasks\.done|worker\..*\.status|\.worker.*|\.preview(?:/|$)|\.reports(?:/|$))")
+        runtime_file = re.compile(r"(?:^|/)(?:nightshift/)?(?:progress\.log|tasks\.txt|tasks\.done|worker\..*\.status|\.worker.*|\.preview(?:/|$)|\.reports(?:/|$))")
         changes = [name for name in tracked + untracked if not runtime_file.search(name)]
         if changes:
             raise ValueError("no_change result conflicts with workspace changes")
@@ -1300,7 +1371,7 @@ def run_adapter_ghost(args, main_request, main_status, main_result):
     task_id = args.task_id
     registration_id = main_request["registration_id"]
     state_path = getattr(args, "ghost_state_path", "") or str(
-        Path(args.work_dir) / ".worker-ghost-state.json")
+        _runtime_state_root(args.work_dir) / ".worker-ghost-state.json")
     if not claim_ghost_allowance(state_path, task_id, registration_id):
         print(f"[WORKER] Ghost allowance already used for {task_id}.", file=sys.stderr)
         return 126, {}, None
@@ -1311,7 +1382,7 @@ def run_adapter_ghost(args, main_request, main_status, main_result):
     if ghost_budget <= 0 or remaining_deadline <= 0:
         return 126, {}, None
     output_root = Path(getattr(args, "ghost_artifact_root", "") or
-                       (Path(args.work_dir) / ".worker-ghosts")) / re.sub(
+                       (_runtime_state_root(args.work_dir) / ".worker-ghosts")) / re.sub(
                            r"[^A-Za-z0-9_.-]", "_", task_id)
     output_root.mkdir(parents=True, exist_ok=True)
     ghost_dir = output_root / f"ghost-{uuid.uuid4().hex}"
@@ -1452,7 +1523,7 @@ def execute_adapter_task(args):
                 result = rescued_result
                 atomic_write(result_path, json.dumps(result, ensure_ascii=False) + "\n")
     else:
-        code = {"no_response": 124, "quota_exhausted": 124, "step_budget_exceeded": 125,
+        code = {"no_response": 124, "step_budget_exceeded": 125,
                 "closeout_required": 126, "execution_timeout": 124,
                 "callback_timeout": 124, "cancellation_failed": 124}.get(
                     status["status"], 1)
@@ -1467,6 +1538,8 @@ def execute_adapter_task(args):
 
 def build_task_prompt(task, task_id, level, target, verify, forbidden, constraints,
                       max_steps, target_file_count, step_base, step_per_file, progress_file):
+    if scratch_review.is_review(task):
+        return scratch_review.prompt(task, task_id)
     contract = Path(__file__).resolve().parent.parent / ".skills/universal-build-verify.md"
     contract_text = contract.read_text(encoding="utf-8") if contract.is_file() else ""
     authority = (f"LAUNCHER CONTRACT ({contract}):\n{contract_text}"
@@ -1477,7 +1550,7 @@ TASK_ID: {task_id} | LEVEL: {level or '1'}
 {task}
 
 START
-- Read .worker.notes.md. Applicable skills under .agents/skills/: [CODE] engineering/tdd/SKILL.md (+ engineering/codebase-design/SKILL.md for interfaces); [DIAGNOSTIC] engineering/diagnosing-bugs/SKILL.md; [RESEARCH] engineering/research/SKILL.md + nightshift/explore/SKILL.md.
+- Read nightshift/.worker.notes.md. Applicable skills under .agents/skills/: [CODE] engineering/tdd/SKILL.md (+ engineering/codebase-design/SKILL.md for interfaces); [DIAGNOSTIC] engineering/diagnosing-bugs/SKILL.md; [RESEARCH] engineering/research/SKILL.md + nightshift/explore/SKILL.md.
 - Report-first: runtime filters active `.reports/<slug>/SUMMARY.md` against source revisions. Read only relevant active reports and `03-micro.md` before exploring code; reuse verified `path#Lline` and investigate only gaps. Never use `.archive/` or `.invalid/`. If you prove a report stale, you MAY move its directory to `.reports/.invalid/<slug>`; only the runtime deletes it after audited success or restores it after rollback if still valid. Do not delete/archive reports yourself or move unrelated files. Reports never override current code or the ticket.
 
 RULES
@@ -1546,13 +1619,16 @@ def worker_daemon(root):
     progress_file = resolve("PROGRESS_FILE", "progress.log")
     pause_file = resolve("PAUSE_FILE", "PAUSE")
     dispatch_gate_file = resolve("AGENT_DISPATCH_GATE_FILE", ".worker-dispatch-gate.json")
-    status_file = (resolve("STATUS_FILE", "worker.status") if worker_id == "default"
-                   else root / f"worker.{worker_id}.status")
-    log_file = (resolve("LOG_FILE", ".worker.log") if worker_id == "default"
-                else root / f".worker.{worker_id}.log")
-    pid_file = (resolve("PID_FILE", ".worker.pid") if worker_id == "default"
-                else root / f".worker.{worker_id}.pid")
-    agent_config_file = resolve("AGENT_CONFIG_FILE", "scripts/adapters/agents.json")
+    status_file = resolve("STATUS_FILE", f"worker.{worker_id}.status")
+    log_file = resolve("LOG_FILE", f".worker.{worker_id}.log")
+    pid_file = resolve("PID_FILE", f".worker.{worker_id}.pid")
+    if (root / "nightshift/adapters/agents.json").is_file():
+        agent_config_default = "nightshift/adapters/agents.json"
+    elif (root / "scripts/adapters/agents.json").is_file():
+        agent_config_default = "scripts/adapters/agents.json"
+    else:
+        agent_config_default = "agents/agents.json"
+    agent_config_file = resolve("AGENT_CONFIG_FILE", agent_config_default)
     agents = load_agent_registry(agent_config_file)
     if not agents and tasks_file.is_file() and any(
             line.strip() and not line.lstrip().startswith("#")
@@ -1561,14 +1637,6 @@ def worker_daemon(root):
     safe_worker_id = re.sub(r"[^A-Za-z0-9_.-]", "_", worker_id)
     agent_state_path = resolve(
         "AI_AGENT_STATE_FILE", f".worker-agent-state.{safe_worker_id}.json")
-    # Quota can recover while the worker is stopped. Treat persisted exhaustion
-    # as an observation from the previous process and probe registrations again
-    # on every daemon start; task-scoped timeout exclusions remain durable.
-    persisted_agent_state = read_agent_state(agent_state_path)
-    if persisted_agent_state["exhausted"]:
-        persisted_agent_state["exhausted"] = {}
-        atomic_write(agent_state_path, json.dumps(persisted_agent_state,
-                                                   ensure_ascii=False, indent=2) + "\n")
     ghost_state_path = resolve(
         "WORKER_GHOST_STATE_FILE", f".worker-ghost-state.{safe_worker_id}.json")
     ghost_artifact_root = resolve("WORKER_GHOST_ARTIFACT_DIR", ".worker-ghosts")
@@ -1686,8 +1754,9 @@ def worker_daemon(root):
         idle_status_shown = False
         run_once = env_bool("RUN_ONCE", "0")
         pending_planner = None
-        waiting_for_quota = False
+        waiting_for_response = False
         recovery_halted_task = ""
+        scratch_checked_at = float("-inf")
 
         while not stop_requested.is_set():
             if recovery_halted_task and not pause_file.exists():
@@ -1703,15 +1772,22 @@ def worker_daemon(root):
                     recovery_halted_task = ""
                 else:
                     continue
-            if waiting_for_quota and not pause_file.exists():
+            if waiting_for_response and not pause_file.exists():
                 state = read_agent_state(agent_state_path)
-                if state.get("consecutive_no_response", 0) >= len(agents) or all(agent["id"] in state.get("exhausted", {}) for agent in agents):
-                    update_status("AGENT_NO_RESPONSE", "Waiting for agent reset")
+                if state.get("consecutive_no_response", 0) >= len(agents):
+                    update_status("AGENT_NO_RESPONSE", "Waiting for agent response")
                     stop_requested.wait(poll_interval)
                     continue
                 # Back off before retrying the requeued task to avoid a hot loop.
                 stop_requested.wait(poll_interval)
-                waiting_for_quota = False
+                waiting_for_response = False
+            if (agents and not pending_planner and not pause_file.exists()
+                    and not dispatch_gate_file.exists() and time.monotonic() - scratch_checked_at >= 60):
+                try:
+                    scratch_review.check(tasks_file.parent, tasks_file, insert_task_front, atomic_write)
+                except (OSError, ValueError, TimeoutError) as error:
+                    print(f"[SCRATCH_REVIEW] monitor deferred: {error}", file=sys.stderr)
+                scratch_checked_at = time.monotonic()
             poll_args = argparse.Namespace(tasks=str(tasks_file), done=str(done_file),
                                            pause=str(pause_file), work_dir=str(work_dir),
                                            dispatch_gate=str(dispatch_gate_file),
@@ -1761,6 +1837,7 @@ def worker_daemon(root):
 
             was_busy, idle_status_shown = True, False
             pending_planner = None
+            scratch_checked_at = float("-inf")
             task, task_id, level = raw_task, fields[8], fields[9]
             target, verify, forbidden, constraints = fields[10], fields[11], fields[12], fields[13]
             target_file_count, max_steps = int(fields[14]), int(fields[15])
@@ -1800,7 +1877,7 @@ def worker_daemon(root):
                     ghost_artifact_root=str(ghost_artifact_root),
                     agent_score_state_file=str(agent_score_state_path),
                     agent_events_file=str(agent_events_path),
-                    attempt_snapshot_root=str(root / ".scratch/attempts" /
+                    attempt_snapshot_root=str(_scratch_state_root(root) / "attempts" /
                                               re.sub(r"[^A-Za-z0-9_.-]", "_", task_id)),
                     recovery_failed=False,
                     recovery_halted=False,
@@ -1853,7 +1930,6 @@ def worker_daemon(root):
                 def recover_before_switch(snapshot, attempt_id):
                     if recover_current_attempt(snapshot, attempt_id) is None:
                         raise RuntimeError("attempt recovery failed; replacement execution was not started")
-                quota_exhausted = False
                 cli_args.awaiting_planner = False
                 cli_args.awaiting_agent = False
                 cli_args.agent_no_response = False
@@ -1868,7 +1944,6 @@ def worker_daemon(root):
                     execution_error = str(error)
                     print(f"[WORKER] CLI execution failed: {error}", file=sys.stderr)
                     exit_code = 2
-                    quota_exhausted = False
                 result_output = result_path if result_path.is_file() and result_path.stat().st_size else output_path
                 duration = int(time.time() - started)
                 append_line(log_file, f"=== [{stamp()}] Task: {task} (Duration: {duration}s, Exit: {exit_code}) ===")
@@ -1910,7 +1985,6 @@ def worker_daemon(root):
                 outcome = ("agent_no_response" if getattr(cli_args, "agent_no_response", False) else
                            "planner_gate" if cli_args.awaiting_planner else
                            "agent_unavailable" if cli_args.awaiting_agent else
-                           "quota_exhausted" if quota_exhausted else
                            "cancel_failed" if structured_status == "cancel_failed" else
                            "timeout" if exit_code == 124 else
                            "step_budget" if exit_code == 125 else
@@ -1927,7 +2001,33 @@ def worker_daemon(root):
                            "guidance" if re.search(r"\[(?:NEED_GUIDANCE|NEED_DECOMPOSITION)\]", result_text) else
                            "success")
                 stamp_now = stamp()
-                if outcome not in ("success", "agent_no_response", "quota_exhausted", "planner_gate", "agent_unavailable"):
+                if (scratch_review.is_review(task) and outcome not in
+                        ("agent_no_response", "planner_gate", "agent_unavailable", "cancel_failed")):
+                    error = "" if outcome == "success" else f"execution: {outcome}"
+                    if not error:
+                        try:
+                            guard, reason = git_audit(argparse.Namespace(
+                                work_dir=str(work_dir), base=base, target=target,
+                                constraints=constraints, title=task, level=1,
+                                baseline_snapshot=getattr(cli_args, "attempt_baseline", "")))
+                            if guard:
+                                raise ValueError(reason)
+                            scratch_review.validate_report(tasks_file.parent, task_id)
+                        except (OSError, ValueError, TypeError) as failure:
+                            error = str(failure)
+                    if error and getattr(cli_args, "attempt_baseline", ""):
+                        if recover_current_attempt() is None:
+                            if run_once:
+                                break
+                            recovery_halted_task = task_id
+                            continue
+                    scratch_review.finish(tasks_file.parent, task_id, atomic_write, error,
+                        str(Path(cli_args.attempt_baseline).parent)
+                        if not error and getattr(cli_args, "attempt_baseline", "") else "")
+                    print(f"[SCRATCH_REVIEW] {'failed' if error else 'reviewed'}: fixed report overwritten")
+                    update_status("IDLE")
+                    continue
+                if outcome not in ("success", "agent_no_response", "planner_gate", "agent_unavailable"):
                     pending_planner = (task_id, outcome.upper())
                 if outcome == "agent_no_response":
                     restore_task_front(tasks_file, raw_task)
@@ -1941,7 +2041,7 @@ def worker_daemon(root):
                     if run_once:
                         final_state = "AGENT_NO_RESPONSE"
                         break
-                    waiting_for_quota = True
+                    waiting_for_response = True
                     stop_requested.wait(poll_interval)
                     continue
                 elif outcome == "planner_gate":
@@ -1956,26 +2056,10 @@ def worker_daemon(root):
                         break
                     stop_requested.wait(poll_interval)
                     continue
-                elif outcome == "quota_exhausted":
-                    restore_task_front(tasks_file, raw_task)
-                    warning = ("=" * 80 + f"\n[QUOTA_EXHAUSTED] {task_id}: All registered agents are exhausted\n"
-                               f"Time: {stamp_now} | Status: QUOTA_EXHAUSTED\n"
-                               f"Task returned to {tasks_file}; remove or edit {agent_state_path} after quota resets.\n"
-                               "Task is not failed; daemon waits for quota state reset (RUN_ONCE exits).\n" + "=" * 80)
-                    prepend_progress(progress_file, warning)
-                    print(f"[{stamp_now}] [QUOTA_EXHAUSTED] All registered agent quotas are exhausted; awaiting quota state reset.")
-                    update_status("QUOTA_EXHAUSTED", task, duration, current, total,
-                                  remaining, percent, bar)
-                    if run_once:
-                        final_state = "QUOTA_EXHAUSTED"
-                        break
-                    waiting_for_quota = True
-                    stop_requested.wait(poll_interval)
-                    continue
                 elif outcome == "agent_unavailable":
                     restore_task_front(tasks_file, raw_task)
                     append_line(progress_file,
-                                f"[AGENT_UNAVAILABLE] {task_id}: all non-exhausted registrations timed out; task returned to {tasks_file}. After fixing the adapter issue, remove this task from task_exclusions in {agent_state_path} to retry.")
+                                f"[AGENT_UNAVAILABLE] {task_id}: no eligible registration remains for this task; task returned to {tasks_file}. After fixing the adapter issue, remove this task from task_exclusions in {agent_state_path} to retry.")
                     update_status("WAITING_FOR_AGENT", task, duration, current, total,
                                   remaining, percent, bar)
                     if run_once:
@@ -2225,7 +2309,7 @@ def git_audit(args):
                               check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout
 
     trees = attempt_audit_trees(args)
-    ignored = re.compile(r"progress\.log|tasks\.txt|tasks\.done|worker\..*\.status|\.preview|\.reports|\.worker.*")
+    ignored = re.compile(r"(?:^|/)(?:nightshift/)?(?:progress\.log|tasks\.txt|tasks\.done|worker\..*\.status|\.preview|\.reports|\.worker.*)")
     if trees:
         changed = changed_tree_paths(args.work_dir, *trees)
         dirty = set(changed_tree_paths(args.work_dir, "HEAD", trees[1])).intersection(changed)
@@ -2233,8 +2317,16 @@ def git_audit(args):
         diff_base = list(trees)
     else:
         status = git("status", "--porcelain", "--untracked-files=all", "-z")
-        dirty = [entry.decode("utf-8", "replace") for entry in status.split(b"\0")
-                 if entry and not ignored.search(entry.decode("utf-8", "replace"))]
+        dirty = []
+        for entry in status.split(b"\0"):
+            if not entry:
+                continue
+            path = entry.decode("utf-8", "replace")
+            # Porcelain status prefixes ("?? ", " M ", etc.) are not part of
+            # the file path patterns used for runtime-owned artifacts.
+            path = path[3:] if len(path) >= 3 else path
+            if not ignored.search(path):
+                dirty.append(path)
         changed = [name.decode("utf-8", "replace") for name in
                    git("diff", "--name-only", "-z", args.base).split(b"\0") if name]
         if getattr(args, "allow_dirty", False):
@@ -2280,10 +2372,13 @@ def git_audit(args):
 
     if args.target and not re.search(r"unrestricted|multi-interface", args.constraints, re.I) and not (diagnostic or research):
         targets = [item.strip().rstrip("/").casefold() for item in args.target.split(",") if item.strip()]
-        exempt = {"progress.log", "tasks.txt", "tasks.done", "worker.status", ".gitignore", ".worker.notes.md"}
+        exempt = {"progress.log", "tasks.txt", "tasks.done", "worker.status", ".gitignore", ".worker.notes.md",
+                  "nightshift/progress.log", "nightshift/tasks.txt", "nightshift/tasks.done",
+                  "nightshift/worker.status", "nightshift/.worker.notes.md"}
         for name in changed:
-            if (name in exempt or name.startswith((".reports/", "docs/reports/", ".worker-ghosts/"))
-                    or re.fullmatch(r"\.worker-ghost-state(?:\.[A-Za-z0-9_.-]+)?\.json", name)):
+            if (name in exempt or name.startswith((".reports/", "docs/reports/", ".worker-ghosts/",
+                                                   "nightshift/.worker-ghosts/"))
+                    or re.fullmatch(r"(?:nightshift/)?\.worker-ghost-state(?:\.[A-Za-z0-9_.-]+)?\.json", name)):
                 continue
             lowered = name.casefold()
             if not any(lowered == target or lowered.startswith(target + "/") for target in targets):
@@ -2645,6 +2740,16 @@ def _git_path_state(path):
     return {"kind": "missing"}
 
 
+def _runtime_state_root(root):
+    root = Path(root)
+    return root / "nightshift" if (root / "nightshift").is_dir() else root
+
+
+def _scratch_state_root(root):
+    """Keep Worker attempt and recovery artifacts inside the installed bundle."""
+    return _runtime_state_root(root) / ".scratch"
+
+
 def _git_names(work_dir, *arguments):
     result = subprocess.run(["git", "-C", str(work_dir), *arguments],
                             check=True, capture_output=True)
@@ -2727,7 +2832,7 @@ def recover_attempt_baseline(work_dir, snapshot_path, archive_path, runtime_path
     baseline_untracked = set(metadata.get("untracked", []))
     runtime_resolved = set(runtime_states)
     for relative in _git_names(work_dir, "ls-files", "--others", "--exclude-standard", "-z"):
-        if relative in baseline_untracked or relative.startswith((".scratch/", ".worker-ghosts/")):
+        if relative in baseline_untracked or relative.startswith((".scratch/", "nightshift/.scratch/", ".worker-ghosts/", "nightshift/.worker-ghosts/")):
             continue
         p = work_dir / relative
         if str(p.resolve()) in runtime_resolved:
@@ -2758,7 +2863,7 @@ def rollback_failed_task(root, work_dir, task_id, runtime_paths, baseline_snapsh
                          attempt_id=""):
     if baseline_snapshot:
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        base = Path(root) / ".scratch" / "failed_tasks" / f"{task_id}_{attempt_id or stamp}"
+        base = _scratch_state_root(root) / "failed_tasks" / f"{task_id}_{attempt_id or stamp}"
         archive = base
         suffix = 1
         while archive.exists():
@@ -2767,10 +2872,10 @@ def rollback_failed_task(root, work_dir, task_id, runtime_paths, baseline_snapsh
         return recover_attempt_baseline(work_dir, baseline_snapshot, archive, runtime_paths)
     root, work_dir = Path(root).resolve(), Path(work_dir).resolve()
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup = root / ".scratch" / "failed_tasks" / f"{task_id}_{stamp}"
+    backup = _scratch_state_root(root) / "failed_tasks" / f"{task_id}_{stamp}"
     suffix = 1
     while backup.exists():
-        backup = root / ".scratch" / "failed_tasks" / f"{task_id}_{stamp}_{suffix}"
+        backup = _scratch_state_root(root) / "failed_tasks" / f"{task_id}_{stamp}_{suffix}"
         suffix += 1
     backup.mkdir(parents=True)
     print(f"[WORKER] Isolating failed changes to {backup} and resetting clean git tree...",
@@ -2793,7 +2898,7 @@ def rollback_failed_task(root, work_dir, task_id, runtime_paths, baseline_snapsh
 
     subprocess.run(["git", "-C", str(work_dir), "reset", "--hard", "HEAD"],
                    check=False, capture_output=True)
-    subprocess.run(["git", "-C", str(work_dir), "clean", "-fd", "-e", ".scratch", "-e", ".worker*"],
+    subprocess.run(["git", "-C", str(work_dir), "clean", "-fd", "-e", ".scratch", "-e", ".worker*", "-e", "nightshift/"],
                    check=False, capture_output=True)
 
     for path_str, content in runtime_states.items():
@@ -2913,6 +3018,11 @@ def main(argv=None):
     timeout = commands.add_parser("run-timeout")
     timeout.add_argument("seconds", type=float)
     timeout.add_argument("argv", nargs=argparse.REMAINDER)
+    scratch = commands.add_parser("scratch-review-check")
+    scratch.add_argument("--root", required=True)
+    scratch.add_argument("--stats-only", action="store_true")
+    code_index = commands.add_parser("code-index")
+    code_index.add_argument("indexer_args", nargs=argparse.REMAINDER)
     audit = commands.add_parser("git-audit")
     audit.add_argument("--work-dir", required=True)
     audit.add_argument("--baseline-snapshot", default="")
@@ -3019,6 +3129,15 @@ def main(argv=None):
     elif args.command == "run-timeout":
         command = args.argv[1:] if args.argv[:1] == ["--"] else args.argv
         return run_with_timeout(args.seconds, command)
+    elif args.command == "scratch-review-check":
+        project = Path(args.root).resolve()
+        runtime = project / "nightshift" if (project / "nightshift").is_dir() else project
+        result = (scratch_review.inventory(runtime) if args.stats_only else
+                  scratch_review.check(runtime, runtime / "tasks.txt", insert_task_front, atomic_write))
+        print(json.dumps(result))
+    elif args.command == "code-index":
+        result = run_code_index(Path.cwd(), args.indexer_args)
+        return result.returncode
     elif args.command == "git-audit":
         code, reason = git_audit(args)
         if reason:

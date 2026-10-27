@@ -3,23 +3,32 @@
 
 set -uo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$SCRIPT_DIR" || exit 1
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ "$(basename "$SCRIPT_DIR")" = "scripts" ]; then
+  NIGHTSHIFT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+  PROJECT_ROOT="$NIGHTSHIFT_DIR"
+  RUNTIME_PATH="$SCRIPT_DIR/worker_runtime.py"
+else
+  NIGHTSHIFT_DIR="$SCRIPT_DIR"
+  PROJECT_ROOT="$(cd "$NIGHTSHIFT_DIR/.." && pwd)"
+  RUNTIME_PATH="$NIGHTSHIFT_DIR/worker_runtime.py"
+fi
+cd "$PROJECT_ROOT" || exit 1
 
-TASKS_FILE="${TASKS_FILE:-tasks.txt}"
-TASKS_DONE_FILE="${TASKS_DONE_FILE:-tasks.done}"
-STATUS_FILE="${STATUS_FILE:-worker.status}"
-PROGRESS_FILE="${PROGRESS_FILE:-progress.log}"
+TASKS_FILE="${TASKS_FILE:-$NIGHTSHIFT_DIR/tasks.txt}"
+TASKS_DONE_FILE="${TASKS_DONE_FILE:-$NIGHTSHIFT_DIR/tasks.done}"
+STATUS_FILE="${STATUS_FILE:-$NIGHTSHIFT_DIR/worker.status}"
+PROGRESS_FILE="${PROGRESS_FILE:-$NIGHTSHIFT_DIR/progress.log}"
 if [ "${WORKER_ID:-default}" != "default" ]; then
-  STATUS_FILE="worker.${WORKER_ID}.status"
+  STATUS_FILE="$NIGHTSHIFT_DIR/worker.${WORKER_ID}.status"
 fi
 MAX_WAIT_SECONDS="${1:-3600}"
 POLL_INTERVAL="${2:-5}"
 EXPECTED_TASK_ID="${3:-${WATCH_TASK_ID:-}}"
-AGENT_EVENTS_FILE="${WORKER_AGENT_EVENTS_FILE:-.worker-agent-events.jsonl}"
-AGENT_EVENTS_CURSOR_FILE="${WORKER_AGENT_EVENTS_CURSOR_FILE:-.worker-agent-events.cursor.json}"
-AGENT_EVENTS_ACK_FILE="${WORKER_AGENT_EVENTS_ACK_FILE:-.worker-agent-events.acks.jsonl}"
-AGENT_DISPATCH_GATE_FILE="${AGENT_DISPATCH_GATE_FILE:-.worker-dispatch-gate.json}"
+AGENT_EVENTS_FILE="${WORKER_AGENT_EVENTS_FILE:-$NIGHTSHIFT_DIR/.worker-agent-events.jsonl}"
+AGENT_EVENTS_CURSOR_FILE="${WORKER_AGENT_EVENTS_CURSOR_FILE:-$NIGHTSHIFT_DIR/.worker-agent-events.cursor.json}"
+AGENT_EVENTS_ACK_FILE="${WORKER_AGENT_EVENTS_ACK_FILE:-$NIGHTSHIFT_DIR/.worker-agent-events.acks.jsonl}"
+AGENT_DISPATCH_GATE_FILE="${AGENT_DISPATCH_GATE_FILE:-$NIGHTSHIFT_DIR/.worker-dispatch-gate.json}"
 
 START_TIME=$(date +%s)
 LAST_DONE_BYTES=0
@@ -58,10 +67,12 @@ track_task "$EXPECTED_TASK_ID"
 echo "[SENTINEL] Watching background worker (Timeout: ${MAX_WAIT_SECONDS}s, Interval: ${POLL_INTERVAL}s${EXPECTED_TASK_ID:+, Task: ${EXPECTED_TASK_ID}})..."
 
 while true; do
-  python3 "$SCRIPT_DIR/scripts/worker_runtime.py" agent-events-watch \
-    --events "$AGENT_EVENTS_FILE" --cursor "$AGENT_EVENTS_CURSOR_FILE" \
-    --acknowledgements "$AGENT_EVENTS_ACK_FILE" --gate "$AGENT_DISPATCH_GATE_FILE" \
-    --handoff "$PROGRESS_FILE" >/dev/null || echo "[SENTINEL_WARNING] Agent event watcher failed; dispatch remains gated." >&2
+  if [ -f "$RUNTIME_PATH" ]; then
+    python3 "$RUNTIME_PATH" agent-events-watch \
+      --events "$AGENT_EVENTS_FILE" --cursor "$AGENT_EVENTS_CURSOR_FILE" \
+      --acknowledgements "$AGENT_EVENTS_ACK_FILE" --gate "$AGENT_DISPATCH_GATE_FILE" \
+      --handoff "$PROGRESS_FILE" >/dev/null || echo "[SENTINEL_WARNING] Agent event watcher failed; dispatch remains gated." >&2
+  fi
   NOW=$(date +%s)
   ELAPSED=$(( NOW - START_TIME ))
 

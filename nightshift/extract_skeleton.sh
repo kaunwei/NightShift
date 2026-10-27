@@ -9,7 +9,7 @@ set -uo pipefail
 
 if [ "${NIGHTSHIFT_WORKER:-0}" != "1" ]; then
   echo "[GUARD] scripts/extract_skeleton.sh is restricted to the Background Worker (Terminal B)."
-  echo "[GUARD] In Terminal A, read active .reports/<slug>/SUMMARY.md or .worker.notes.md; if missing, enqueue a [RESEARCH] task to tasks.txt."
+  echo "[GUARD] In Terminal A, read active .reports/<slug>/SUMMARY.md or nightshift/.worker.notes.md; if missing, enqueue a [RESEARCH] task to nightshift/tasks.txt."
   exit 1
 fi
 

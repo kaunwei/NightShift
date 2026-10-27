@@ -1,32 +1,29 @@
-# 24h Unattended Worker Runtime Artifacts
-.worker.env
-worker*.status
-.worker*.log
-.worker*.pid
-.worker-agent-state*.json
-.worker-score*.json
-.worker-score*.json.lock/
-.worker-agent-scores/
-.worker-agent-events.jsonl
-.worker-agent-events.jsonl.lock/
-.worker-agent-events*.json*
-.worker-dispatch-gate.json
-.worker-dispatch-gate.json.lock/
-.worker-ghost-state*.json
-.worker-ghost-state*.json.lock/
-.worker-ghosts/
-PAUSE
-.scratch/
-.reports
-tasks.txt.lock/
-.worker-tree/
-.preview/
-.trials/
-tasks.done
-tasks.done.*
+# NightShift runtime artifacts (kept inside nightshift/)
+nightshift/tasks.done
+nightshift/tasks.done.*
+nightshift/worker*.status
+nightshift/.worker*.log
+nightshift/.worker*.pid
+nightshift/.worker-agent-state*.json
+nightshift/.worker-score*.json
+nightshift/.worker-agent-scores/
+nightshift/.worker-agent-events*.json*
+nightshift/.worker-dispatch-gate.json
+nightshift/.worker*.lock/
+nightshift/PAUSE
+nightshift/tasks.txt.lock/
+nightshift/.worker-ghosts/
+nightshift/.worker-ghost-state*.json
+nightshift/.scratch/
+nightshift/tools/.venv/
 /test/.install-add-task-smoke/
 
-# Build & Environment Artifacts
+# Project artifacts and generated build files
+.worker.env
+.worker-tree/
+.preview/
+.reports/
+.trials/
 build/
 .build/
 .swiftpm/
@@ -38,5 +35,6 @@ __pycache__/
 .coverage
 htmlcov/
 *.log
-!progress.log
 .DS_Store
+*.swp
+*~

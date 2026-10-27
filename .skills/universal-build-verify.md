@@ -4,7 +4,10 @@ This is the shared execution reference for every queued task. The runtime is aut
 
 ## Before and during work
 
-- Read `.worker.notes.md` and the applicable skill: [`tdd`](../.agents/skills/engineering/tdd/SKILL.md) for `[CODE]`; [`diagnosing-bugs`](../.agents/skills/engineering/diagnosing-bugs/SKILL.md) for `[DIAGNOSTIC]`; [`research`](../.agents/skills/engineering/research/SKILL.md) and [`explore`](../.agents/skills/nightshift/explore/SKILL.md) for `[RESEARCH]`. The ticket is the pre-agreed seam: proceed autonomously unless an ambiguity changes scope or expected behavior. The Planner owns acceptance and independent review.
+- For indexed navigation, run `python3 nightshift/worker_runtime.py code-index ensure`, then
+  read `nightshift/.scratch/code-index/INDEX.md` only after script approval. Use compact queries
+  for details; `index.json` is script-owned cache. Dirty-input recovery follows Explore's code index.
+- Read `nightshift/.worker.notes.md` and the applicable skill: [`tdd`](../.agents/skills/engineering/tdd/SKILL.md) for `[CODE]`; [`diagnosing-bugs`](../.agents/skills/engineering/diagnosing-bugs/SKILL.md) for `[DIAGNOSTIC]`; [`research`](../.agents/skills/engineering/research/SKILL.md) and [`explore`](../.agents/skills/nightshift/explore/SKILL.md) for `[RESEARCH]`. The ticket is the pre-agreed seam: proceed autonomously unless an ambiguity changes scope or expected behavior. The Planner owns acceptance and independent review.
 - Work only in declared `TARGET:` paths. If a necessary change is outside scope, stop and report `[SCOPE_BLOCKED] (Need Target: path#Lline)`; do not expand scope yourself.
 - `[CODE: FIX]` cannot change tests. `[CODE: REFACTOR]` can change tests only when declared, and may not reduce the total assertion count. `[DIAGNOSTIC]` may add a compile-clean repro that fails on the bug, but cannot modify product code. `[RESEARCH]` is read-only for product code and produces the requested report.
 - Respect `FORBIDDEN_SHORTCUTS:` and `CONSTRAINTS:`. Do not weaken assertions, hide errors, add dummy behavior, or use thread sleeps to mask a race. Never use `sudo` or host package managers.
@@ -25,4 +28,4 @@ This is the shared execution reference for every queued task. The runtime is aut
 
 - Research/benchmark reports follow the artifact and probe requirements in `explore`: `SUMMARY.md` at most 5 KB, runtime `REPORT_META`, verified pointers and topology/strategy, plus `03-micro.md` skeletons.
 - Do not claim a report is current after a referenced source path changes. Do not treat `.reports/.archive/` as active evidence.
-- Check `.worker.notes.md` before work. Append 1–2 lines for non-obvious build/linker quirks and toolchain flags; keep it under 30 lines, without architectural lore, secrets, or task history. Work directly in the project directory. Preserve unrelated and pre-existing changes; never clean or reset the checkout as a shortcut.
+- Check `nightshift/.worker.notes.md` before work. Append 1–2 lines for non-obvious build/linker quirks and toolchain flags; keep it under 30 lines, without architectural lore, secrets, or task history. Work directly in the project directory. Preserve unrelated and pre-existing changes; never clean or reset the checkout as a shortcut.

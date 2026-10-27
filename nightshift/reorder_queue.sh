@@ -8,9 +8,13 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+if [ "$(basename "$SCRIPT_DIR")" = "scripts" ]; then
+  NIGHTSHIFT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+else
+  NIGHTSHIFT_DIR="$SCRIPT_DIR"
+fi
 
-TASKS_FILE="${TASKS_FILE:-$REPO_ROOT/tasks.txt}"
+TASKS_FILE="${TASKS_FILE:-$NIGHTSHIFT_DIR/tasks.txt}"
 LOCK_DIR="${TASKS_FILE}.lock"
 LOCK_MAX_RETRIES=50
 LOCK_RETRY=0

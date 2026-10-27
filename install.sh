@@ -1,128 +1,176 @@
 #!/usr/bin/env bash
-# ==============================================================================
-# NightShift Framework Installer & Updater
-# Clean, non-destructive installer and updater for Pure Skills-Driven Architecture.
-# Usage: ./install.sh <target_repository_path>
-#    or: ./update.sh <target_repository_path>
-# ==============================================================================
-
+# Install NightShift or update an existing deployment in place.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-TARGET_DIR="${1:-}"
-
-# Display banner
-echo "=============================================================================="
-echo "    NightShift: 24h Unattended Dual-Terminal AI Framework"
-echo "=============================================================================="
-
-if [ -z "$TARGET_DIR" ]; then
-  echo "Error: Target repository path is required."
-  echo "Usage: $0 /path/to/target-project"
-  echo "  (Use '.' if you are running this from within the target repository)"
+if [ -d "$SCRIPT_DIR/nightshift" ] && [ -f "$SCRIPT_DIR/nightshift/worker.sh" ]; then
+  SOURCE_ROOT="$SCRIPT_DIR"
+  BUNDLE_SOURCE="$SCRIPT_DIR/nightshift"
+  SELF_DEPLOYED=0
+elif [ -f "$SCRIPT_DIR/worker.sh" ] && [ -f "$SCRIPT_DIR/worker_runtime.py" ]; then
+  BUNDLE_SOURCE="$SCRIPT_DIR"
+  SOURCE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
+  SELF_DEPLOYED=1
+else
+  echo "Error: cannot find the NightShift bundle beside $SCRIPT_DIR" >&2
   exit 1
 fi
 
-if [ "$#" -ne 1 ]; then
-  echo "Error: Exactly one target repository path is required."
-  echo "Usage: $0 /path/to/target-project"
-  exit 1
+if [ "$#" -ne 1 ] || [ -z "${1:-}" ]; then
+  echo "Usage: $0 <target_repository_path>" >&2
+  exit 2
+fi
+if ! TARGET_DIR="$(cd -P -- "$1" 2>/dev/null && pwd -P)"; then
+  echo "Error: target directory does not exist: $1" >&2
+  exit 2
+fi
+PYTHON_BIN="${PYTHON_BIN:-python3}"
+if [ "$TARGET_DIR" = "$SOURCE_ROOT" ] && [ "$SELF_DEPLOYED" -eq 0 ]; then
+  echo "Refusing to install NightShift into its source repository." >&2
+  exit 2
 fi
 
-if ! TARGET_DIR="$(cd -P -- "$TARGET_DIR" 2>/dev/null && pwd -P)"; then
-  echo "Error: Target directory does not exist: $TARGET_DIR"
-  exit 1
-fi
-
-if [ ! -d "$TARGET_DIR" ]; then
-  echo "Error: Target directory does not exist: $TARGET_DIR"
-  exit 1
-fi
-
-if [ "$TARGET_DIR" = "$SCRIPT_DIR" ]; then
-  echo "Notice: Target directory is the NightShift framework source itself ($SCRIPT_DIR)."
-  echo "Cannot install/update NightShift into its own source directory."
-  exit 0
-fi
-
-# Detect whether this is a fresh install or an update
 IS_UPDATE=0
-if [ -f "$TARGET_DIR/worker.sh" ] || [ -d "$TARGET_DIR/.agents/skills/nightshift" ] || [ -d "$TARGET_DIR/.agents/skills/planner" ]; then
+if [ -d "$TARGET_DIR/nightshift" ] || [ -f "$TARGET_DIR/worker.sh" ] || [ -d "$TARGET_DIR/.agents/skills/nightshift" ]; then
   IS_UPDATE=1
-  echo "Target Repository : $TARGET_DIR"
-  echo "Operation Mode    : UPDATE (Existing installation detected)"
-else
-  echo "Target Repository : $TARGET_DIR"
-  echo "Operation Mode    : FRESH INSTALL"
 fi
-echo "Source Repository : $SCRIPT_DIR"
-echo ""
+printf 'NightShift %s: %s\n' "$([ "$IS_UPDATE" -eq 1 ] && echo update || echo install)" "$TARGET_DIR"
 
-# ------------------------------------------------------------------------------
-# 1. Non-Destructive Copy of Core Assets
-# ------------------------------------------------------------------------------
-echo ">>> [1/5] Deploying core worker daemon & configuration..."
-cp -f "$SCRIPT_DIR/worker.sh" "$TARGET_DIR/worker.sh"
-cp -f "$SCRIPT_DIR/update.sh" "$TARGET_DIR/update.sh"
-chmod +x "$TARGET_DIR/update.sh"
-echo "  ✓ Deployed update.sh"
-mkdir -p "$TARGET_DIR/scripts"
-cp -f "$SCRIPT_DIR/scripts/worker_runtime.py" "$TARGET_DIR/scripts/worker_runtime.py"
-echo "  ✓ Deployed scripts/worker_runtime.py"
-mkdir -p "$TARGET_DIR/scripts/adapters"
-for adapter in codex.py agy.py generic.py; do
-  cp -f "$SCRIPT_DIR/scripts/adapters/$adapter" "$TARGET_DIR/scripts/adapters/$adapter"
-  chmod +x "$TARGET_DIR/scripts/adapters/$adapter"
+mkdir -p "$TARGET_DIR/nightshift/adapters"
+# Migrate consumer configuration before retiring legacy locations.
+if [ ! -f "$TARGET_DIR/nightshift/adapters/agents.json" ]; then
+  for registry in "$TARGET_DIR/scripts/adapters/agents.json" "$TARGET_DIR/agents/agents.json"; do
+    if [ -f "$registry" ]; then
+      cp "$registry" "$TARGET_DIR/nightshift/adapters/agents.json"
+      break
+    fi
+  done
+fi
+if [ ! -f "$TARGET_DIR/nightshift/code-index.toml" ] && [ -f "$TARGET_DIR/.nightshift/code-index.toml" ]; then
+  cp "$TARGET_DIR/.nightshift/code-index.toml" "$TARGET_DIR/nightshift/code-index.toml"
+fi
+# Deploy only listed runtime files, never the source bundle or its development docs.
+"$PYTHON_BIN" - "$BUNDLE_SOURCE" "$TARGET_DIR/nightshift" <<'PYDEPLOY'
+import json
+from pathlib import Path
+import shutil
+import sys
+source, target = map(Path, sys.argv[1:])
+manifest = json.loads((source / "install-manifest.json").read_text(encoding="utf-8"))
+for relative in manifest["runtime"]:
+    origin, destination = source / relative, target / relative
+    if origin.resolve() == destination.resolve():
+        continue
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(origin, destination)
+PYDEPLOY
+if [ "$SCRIPT_DIR/install.sh" != "$TARGET_DIR/nightshift/install.sh" ]; then
+  cp -f "$SCRIPT_DIR/install.sh" "$TARGET_DIR/nightshift/install.sh"
+fi
+for script in worker.sh extract_skeleton.sh probe_line.sh reorder_queue.sh status.sh watch_worker.sh install.sh tools/setup.sh; do
+  chmod +x "$TARGET_DIR/nightshift/$script"
 done
-# Remove experimental adapters owned by earlier NightShift releases.
-rm -f "$TARGET_DIR/scripts/adapters/aider.py" \
-  "$TARGET_DIR/scripts/adapters/aider_explore.py" \
-  "$TARGET_DIR/scripts/adapters/explore_evidence.py"
-mkdir -p "$TARGET_DIR/docs"
-cp -f "$SCRIPT_DIR/docs/PORTING_GUIDE.md" "$TARGET_DIR/docs/PORTING_GUIDE.md"
-cp -f "$SCRIPT_DIR/docs/DETERMINISTIC_EXPLORE_STRATEGY.md" "$TARGET_DIR/docs/DETERMINISTIC_EXPLORE_STRATEGY.md"
-cp -f "$SCRIPT_DIR/docs/DETERMINISTIC_EXPLORE_RESULTS.md" "$TARGET_DIR/docs/DETERMINISTIC_EXPLORE_RESULTS.md"
-mkdir -p "$TARGET_DIR/docs/experiments/deterministic-explore"
-for artifact in "$SCRIPT_DIR"/docs/experiments/deterministic-explore/*; do
-  cp -f "$artifact" "$TARGET_DIR/docs/experiments/deterministic-explore/$(basename "$artifact")"
+
+# Move old root-level project settings/state into the NightShift-owned folder.
+if [ ! -f "$TARGET_DIR/nightshift/code-index.toml" ]; then
+  cp "$BUNDLE_SOURCE/code-index.toml" "$TARGET_DIR/nightshift/code-index.toml"
+fi
+"$PYTHON_BIN" - "$TARGET_DIR/nightshift/code-index.toml" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+text = text.replace("tools/nightshift-code-index/**", "nightshift/tools/**")
+path.write_text(text, encoding="utf-8")
+PY
+rm -f "$TARGET_DIR/.nightshift/code-index.toml"
+rmdir "$TARGET_DIR/.nightshift" 2>/dev/null || true
+if [ ! -f "$TARGET_DIR/nightshift/adapters/agents.json" ] && [ -f "$TARGET_DIR/scripts/adapters/agents.json" ]; then
+  mkdir -p "$TARGET_DIR/nightshift/adapters"
+  mv "$TARGET_DIR/scripts/adapters/agents.json" "$TARGET_DIR/nightshift/adapters/agents.json"
+fi
+state_files=(tasks.txt tasks.done progress.log worker.status .worker.log .worker.pid .worker.notes.md \
+  .worker-score.json .worker-agent-events.jsonl .worker-agent-events.cursor.json .worker-agent-events.acks.jsonl \
+  .worker-dispatch-gate.json .worker-agent-state.default.json .worker-ghost-state.default.json PAUSE)
+for state_file in "${state_files[@]}"; do
+  if [ -f "$TARGET_DIR/$state_file" ] && [ ! -e "$TARGET_DIR/nightshift/$state_file" ]; then
+    mv "$TARGET_DIR/$state_file" "$TARGET_DIR/nightshift/$state_file"
+  fi
 done
-mkdir -p "$TARGET_DIR/test/nightshift_worker"
-cp -f "$SCRIPT_DIR/test/test_worker_runtime.py" "$TARGET_DIR/test/nightshift_worker/test_worker_runtime.py"
-rm -f "$TARGET_DIR/test/nightshift_worker/test_explore_evidence.py"
-cp -f "$SCRIPT_DIR/test/README.md" "$TARGET_DIR/test/nightshift_worker/README.md"
-touch "$TARGET_DIR/test/nightshift_worker/__init__.py"
-chmod +x "$TARGET_DIR/worker.sh"
-if [ "$IS_UPDATE" -eq 1 ]; then
-  echo "  ✓ Updated worker.sh"
-else
-  echo "  ✓ Installed worker.sh"
+for state_file in "$TARGET_DIR"/.worker-agent-state.*.json "$TARGET_DIR"/.worker-ghost-state.*.json \
+  "$TARGET_DIR"/worker.*.status "$TARGET_DIR"/.worker.*.log "$TARGET_DIR"/.worker.*.pid; do
+  [ -f "$state_file" ] || continue
+  name="$(basename "$state_file")"
+  [ -e "$TARGET_DIR/nightshift/$name" ] || mv "$state_file" "$TARGET_DIR/nightshift/$name"
+done
+for state_dir in .worker-agent-scores .worker-ghosts; do
+  if [ -d "$TARGET_DIR/$state_dir" ] && [ ! -e "$TARGET_DIR/nightshift/$state_dir" ]; then
+    mv "$TARGET_DIR/$state_dir" "$TARGET_DIR/nightshift/$state_dir"
+  fi
+done
+for state_dir in tasks.txt.lock .worker-score.json.lock .worker-dispatch-gate.json.lock \
+  .worker-agent-events.jsonl.lock .worker-agent-events.cursor.json.lock; do
+  if [ -d "$TARGET_DIR/$state_dir" ] && [ ! -e "$TARGET_DIR/nightshift/$state_dir" ]; then
+    mv "$TARGET_DIR/$state_dir" "$TARGET_DIR/nightshift/$state_dir"
+  fi
+done
+
+# Older Worker versions wrote snapshots to the project root. Keep their history
+# when upgrading, but move it into the NightShift-owned runtime directory.
+if [ -d "$TARGET_DIR/.scratch" ]; then
+  mkdir -p "$TARGET_DIR/nightshift/.scratch"
+  "$PYTHON_BIN" - "$TARGET_DIR/.scratch" "$TARGET_DIR/nightshift/.scratch" <<'PY'
+import shutil
+import sys
+from pathlib import Path
+
+source, target = map(Path, sys.argv[1:])
+for child in source.iterdir():
+    destination = target / child.name
+    if child.is_dir() and not child.is_symlink():
+        if destination.exists() and destination.is_dir():
+            shutil.copytree(child, destination, dirs_exist_ok=True)
+            shutil.rmtree(child)
+        elif not destination.exists():
+            child.rename(destination)
+        else:
+            child.rename(target / f"legacy-root-{child.name}")
+    elif destination.exists():
+        alternate = target / f"legacy-root-{child.name}"
+        index = 2
+        while alternate.exists():
+            alternate = target / f"legacy-root-{index}-{child.name}"
+            index += 1
+        child.rename(alternate)
+    else:
+        child.rename(destination)
+source.rmdir()
+PY
 fi
 
-mkdir -p "$TARGET_DIR/scripts/adapters"
-if [ ! -f "$TARGET_DIR/scripts/adapters/agents.json" ]; then
-  if [ -f "$TARGET_DIR/agents/agents.json" ]; then
-    mv "$TARGET_DIR/agents/agents.json" "$TARGET_DIR/scripts/adapters/agents.json"
-    rmdir "$TARGET_DIR/agents" 2>/dev/null || true
-    echo "  ✓ Migrated agents/agents.json to scripts/adapters/agents.json"
-  else
-    cp "$SCRIPT_DIR/scripts/adapters/agents.json" "$TARGET_DIR/scripts/adapters/agents.json"
-    echo "  ✓ Initialized scripts/adapters/agents.json"
-  fi
-else
-  echo "  • Preserved existing scripts/adapters/agents.json (not overwritten)"
-  if [ -f "$TARGET_DIR/agents/agents.json" ]; then
-    rm -f "$TARGET_DIR/agents/agents.json"
-    rmdir "$TARGET_DIR/agents" 2>/dev/null || true
-    echo "  ✓ Removed obsolete agents/agents.json"
-  fi
+# Remove only exact legacy NightShift files after their user data has been moved.
+rm -f "$TARGET_DIR/worker.sh" "$TARGET_DIR/update.sh" "$TARGET_DIR/.worker.env.example" \
+  "$TARGET_DIR/scripts/worker_runtime.py" "$TARGET_DIR/scripts/adapters/agy.py" \
+  "$TARGET_DIR/scripts/adapters/codex.py" "$TARGET_DIR/scripts/adapters/generic.py" \
+  "$TARGET_DIR/scripts/adapters/agents.json" "$TARGET_DIR/scripts/extract_skeleton.sh" \
+  "$TARGET_DIR/scripts/probe_line.sh" "$TARGET_DIR/scripts/reorder_queue.sh" \
+  "$TARGET_DIR/scripts/status.sh" "$TARGET_DIR/scripts/watch_worker.sh"
+rm -rf "$TARGET_DIR/tools/nightshift-code-index" "$TARGET_DIR/test/nightshift_worker"
+rm -f "$TARGET_DIR/nightshift/tools/bin/code-index" "$TARGET_DIR/nightshift/tools/bin/code-index.cmd"
+rmdir "$TARGET_DIR/nightshift/tools/bin" 2>/dev/null || true
+rmdir "$TARGET_DIR/scripts/adapters" 2>/dev/null || true
+rmdir "$TARGET_DIR/.nightshift" 2>/dev/null || true
+
+# Preserve the existing agent registry; otherwise the bundled default is ready to use.
+if [ ! -f "$TARGET_DIR/nightshift/adapters/agents.json" ]; then
+  mkdir -p "$TARGET_DIR/nightshift/adapters"
+  cp "$BUNDLE_SOURCE/adapters/agents.json" "$TARGET_DIR/nightshift/adapters/agents.json"
 fi
-python3 - "$TARGET_DIR/scripts/adapters/agents.json" <<'PY'
+"$PYTHON_BIN" - "$TARGET_DIR/nightshift/adapters/agents.json" <<'PY'
 import json
 from pathlib import Path
 import sys
-
-path = Path(sys.argv[1])
-registry = json.loads(path.read_text(encoding="utf-8"))
+registry = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 if not isinstance(registry, dict):
     raise SystemExit("agent registry must be a JSON object keyed by agent name")
 migrated = False
@@ -136,228 +184,128 @@ for name, profile in registry.items():
         raise SystemExit(f"legacy agent {name} config must be an object")
     config = dict(config)
     adapter = profile.get("adapter", "")
-    legacy_adapter_launcher = (
-        Path(profile.get("command", "")).name in ("python", "python3")
-        and bool(profile.get("args"))
-        and Path(profile["args"][0]).name == f"{adapter}.py"
-    )
-    configured_executable = config.pop("executable", None)
-    command = configured_executable or profile.get("command", "")
-    if legacy_adapter_launcher and not configured_executable:
+    old_launcher = (Path(profile.get("command", "")).name in ("python", "python3")
+                    and bool(profile.get("args"))
+                    and Path(profile["args"][0]).name == f"{adapter}.py")
+    command = config.pop("executable", None) or profile.get("command", "")
+    if old_launcher and command == profile.get("command", ""):
         command = adapter
-    args = config.pop("args", [] if legacy_adapter_launcher else profile.get("args", []))
+    args = config.pop("args", [] if old_launcher else profile.get("args", []))
     env = config.pop("env", profile.get("env", {}))
-    if not isinstance(args, list) or not all(isinstance(arg, str) for arg in args):
-        raise SystemExit(f"legacy agent {name} args must be an array of strings")
     worker = profile.get("worker", {"task_timeout_seconds": 1800})
-    replacement = {"default": bool(profile.get("default", False)), "worker": worker,
-                   "agent": {"adapter": adapter, "command": command, "args": args,
-                             "env": env, "config": config}}
-    registry[name] = replacement
+    registry[name] = {"default": bool(profile.get("default", False)), "worker": worker,
+                      "agent": {"adapter": adapter, "command": command, "args": args,
+                                "env": env, "config": config}}
     migrated = True
 if migrated:
-    path.write_text(json.dumps(registry, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    print("  ✓ Migrated legacy agent entries to separate worker and agent config")
+    Path(sys.argv[1]).write_text(json.dumps(registry, indent=2, ensure_ascii=False) + "\n",
+                                 encoding="utf-8")
 PY
-if [ -f "$TARGET_DIR/.worker.env.example" ]; then
-  rm -f "$TARGET_DIR/.worker.env.example"
-  echo "  ✓ Removed deprecated .worker.env.example"
-fi
 
-# ------------------------------------------------------------------------------
-# 2. Deploy Helper Scripts
-# ------------------------------------------------------------------------------
-echo ">>> [2/5] Deploying helper scripts..."
-mkdir -p "$TARGET_DIR/scripts"
-for script in extract_skeleton.sh probe_line.sh reorder_queue.sh status.sh watch_worker.sh; do
-  if [ -f "$SCRIPT_DIR/scripts/$script" ]; then
-    cp -f "$SCRIPT_DIR/scripts/$script" "$TARGET_DIR/scripts/$script"
-    chmod +x "$TARGET_DIR/scripts/$script"
-    echo "  ✓ Deployed scripts/$script"
-  fi
-done
+# Skill sources and installed skills share the host-discovered root layout.
+"$PYTHON_BIN" - "$BUNDLE_SOURCE" "$SOURCE_ROOT" "$TARGET_DIR" <<'PYSKILLS'
+import json
+from pathlib import Path
+import shutil
+import sys
+bundle, root, target = map(Path, sys.argv[1:])
+manifest = json.loads((bundle / "install-manifest.json").read_text(encoding="utf-8"))
+def copy_asset(origin, destination):
+    if origin.resolve() == destination.resolve():
+        return
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(origin, destination)
+for asset in manifest["skill_files"]:
+    origin = root / asset["source"]
+    copy_asset(origin, target / asset["target"])
+for category in manifest["shared_skill_categories"]:
+    category_root = root / ".agents/skills" / category
+    for entry in sorted(category_root.glob("*/SKILL.md")):
+        for origin in sorted(entry.parent.rglob("*")):
+            if not origin.is_file() or origin.name == ".DS_Store" or "__pycache__" in origin.parts:
+                continue
+            copy_asset(origin, target / ".agents/skills" / category / origin.relative_to(category_root))
+catalog = root / ".agents/skills.json"
+if catalog.is_file() and not (target / ".agents/skills.json").exists():
+    copy_asset(catalog, target / ".agents/skills.json")
+# Exact retired assets only: keep project notes, queues, registries and scratch data.
+parents = set()
+for relative in manifest["retired_files"]:
+    path = target / "nightshift" / relative
+    if path.is_file() or path.is_symlink():
+        path.unlink()
+    parents.update(path.parents)
+for directory in sorted(parents, key=lambda path: len(path.parts), reverse=True):
+    if directory == target / "nightshift" or target / "nightshift" not in directory.parents:
+        continue
+    try:
+        directory.rmdir()
+    except OSError:
+        pass
+PYSKILLS
 
-# ------------------------------------------------------------------------------
-# 3. Deploy Skills Catalog (Pure Skills-Driven Architecture)
-# ------------------------------------------------------------------------------
-echo ">>> [3/5] Deploying skills catalog (Zero Context Pollution)..."
-mkdir -p "$TARGET_DIR/.skills"
-cp -f "$SCRIPT_DIR/.skills/universal-build-verify.md" "$TARGET_DIR/.skills/universal-build-verify.md"
-echo "  ✓ Deployed .skills/universal-build-verify.md"
-
-mkdir -p "$TARGET_DIR/.agents/skills"
-if [ -f "$SCRIPT_DIR/.agents/skills.json" ]; then
-  if [ ! -e "$TARGET_DIR/.agents/skills.json" ]; then
-    cp "$SCRIPT_DIR/.agents/skills.json" "$TARGET_DIR/.agents/skills.json"
-  else
-    echo "  • Preserved existing .agents/skills.json"
-  fi
-fi
-
-# Clean up legacy paths if updating from older layout
-rm -rf "$TARGET_DIR/.agents/skills/architect" 2>/dev/null || true
-rm -rf "$TARGET_DIR/.agents/skills/worker" 2>/dev/null || true
-rm -rf "$TARGET_DIR/.agents/skills/planner" 2>/dev/null || true
-rm -rf "$TARGET_DIR/.agents/skills/explore" 2>/dev/null || true
-rm -rf "$TARGET_DIR/.agents/skills/productivity/configure-unattended-worker" 2>/dev/null || true
-rm -rf "$TARGET_DIR/.agents/skills/engineering/setup-unattended-workflow" 2>/dev/null || true
-for legacy_ns in watch-worker-queue score-worker-performance handle-worker-guidance manage-worker-notes record-attempt-trace configure-unattended-worker setup-unattended-workflow; do
-  rm -rf "$TARGET_DIR/.agents/skills/nightshift/$legacy_ns" 2>/dev/null || true
-done
-
-# Deploy skill categories
-for category in nightshift engineering productivity misc in-progress; do
-  if [ -d "$SCRIPT_DIR/.agents/skills/$category" ]; then
-    mkdir -p "$TARGET_DIR/.agents/skills/$category"
-    cp -R "$SCRIPT_DIR/.agents/skills/$category/." "$TARGET_DIR/.agents/skills/$category/"
-    echo "  ✓ Deployed .agents/skills/$category/"
-  fi
-done
-
-# Remove retired Planner sidecar after its guidance has moved into the skill.
-rm -f "$TARGET_DIR/.agents/skills/nightshift/planner/OPERATIONS.md"
-
-# ------------------------------------------------------------------------------
-# 4. Initialize State Files (Non-Destructive)
-# ------------------------------------------------------------------------------
-echo ">>> [4/5] Initializing runtime tracking files..."
-
-# tasks.txt
-if [ ! -f "$TARGET_DIR/tasks.txt" ]; then
-  cat <<'EOF' > "$TARGET_DIR/tasks.txt"
+# Create NightShift state only when missing; existing queues and history survive updates.
+mkdir -p "$TARGET_DIR/nightshift"
+if [ ! -f "$TARGET_DIR/nightshift/tasks.txt" ]; then
+  cat > "$TARGET_DIR/nightshift/tasks.txt" <<'QUEUE'
 # Task Queue (FIFO) - Format: TASK-XXX | LEVEL: 1-3 | [AFTER: <id>] | TARGET: <paths> | ACTION: <logic> | VERIFY: <test_cmd> | FORBIDDEN_SHORTCUTS: <hacks> | CONSTRAINTS: <limits>
-EOF
-  echo "  ✓ Initialized tasks.txt with schema header"
-else
-  echo "  • Preserved existing tasks.txt"
+QUEUE
 fi
-
-# tasks.done
-if [ ! -f "$TARGET_DIR/tasks.done" ]; then
-  touch "$TARGET_DIR/tasks.done"
-  echo "  ✓ Initialized tasks.done"
-else
-  echo "  • Preserved existing tasks.done"
-fi
-
-# progress.log
-if [ ! -f "$TARGET_DIR/progress.log" ]; then
-  touch "$TARGET_DIR/progress.log"
-  echo "  ✓ Initialized progress.log"
-else
-  echo "  • Preserved existing progress.log"
-fi
-
-# .worker.notes.md
-if [ ! -f "$TARGET_DIR/.worker.notes.md" ]; then
-  cat <<'EOF' > "$TARGET_DIR/.worker.notes.md"
+for state_file in tasks.done progress.log; do touch "$TARGET_DIR/nightshift/$state_file"; done
+if [ ! -f "$TARGET_DIR/nightshift/.worker.notes.md" ]; then
+  cat > "$TARGET_DIR/nightshift/.worker.notes.md" <<'NOTES'
 # Worker Repository Notes & Compiler Quirks
-# Shared across stateless worker runs. Updated by background worker per .skills/universal-build-verify.md.
-EOF
-  echo "  ✓ Initialized .worker.notes.md"
-else
-  echo "  • Preserved existing .worker.notes.md"
+# Keep reusable build/toolchain quirks here; do not record task history or secrets.
+NOTES
 fi
-
-# docs/agents metadata
-mkdir -p "$TARGET_DIR/docs/agents"
-if [ ! -f "$TARGET_DIR/docs/agents/granularity-profile.json" ]; then
-  cat <<'EOF' > "$TARGET_DIR/docs/agents/granularity-profile.json"
-{
-  "modules": {}
-}
-EOF
-  echo "  ✓ Initialized docs/agents/granularity-profile.json"
-else
-  echo "  • Preserved existing docs/agents/granularity-profile.json"
-fi
-
-# ------------------------------------------------------------------------------
-# 5. Non-Destructive .gitignore Protection (Zero Duplication)
-# ------------------------------------------------------------------------------
-echo ">>> [5/5] Ensuring .gitignore protection..."
-GITIGNORE_FILE="$TARGET_DIR/.gitignore"
-touch "$GITIGNORE_FILE"
-
-REQUIRED_IGNORES=(
-  ".worker.env"
-  "worker*.status"
-  ".worker*.log"
-  ".worker*.pid"
-  ".worker-agent-state*.json"
-  ".worker-score*.json"
-  ".worker-score*.json.lock/"
-  ".worker-agent-scores/"
-  ".worker-agent-events.jsonl"
-  ".worker-agent-events.jsonl.lock/"
-  ".worker-agent-events*.json*"
-  ".worker-dispatch-gate.json"
-  ".worker-dispatch-gate.json.lock/"
-  "PAUSE"
-  ".scratch/"
-  ".reports"
-  "tasks.txt.lock/"
-  ".worker-tree/"
-  ".preview/"
+# Keep generated runtime state and the private parser venv out of Git.
+touch "$TARGET_DIR/.gitignore"
+IGNORE_HEADER="# NightShift runtime artifacts (stored under nightshift/)"
+IGNORE_ENTRIES=(
+  "nightshift/tasks.done" "nightshift/tasks.done.*" "nightshift/worker*.status"
+  "nightshift/.worker*.log" "nightshift/.worker*.pid" "nightshift/.worker-agent-state*.json"
+  "nightshift/.worker-score*.json" "nightshift/.worker-agent-scores/" "nightshift/.worker-agent-events*.json*"
+  "nightshift/.worker-dispatch-gate.json" "nightshift/.worker*.lock/" "nightshift/PAUSE" "nightshift/tasks.txt.lock/"
+  "nightshift/.worker-ghosts/" "nightshift/.worker-ghost-state*.json" "nightshift/.scratch/" "nightshift/tools/.venv/"
   ".trials/"
-  "tasks.done"
-  "tasks.done.*"
 )
-
-HEADER="# NightShift 24h Unattended Worker Artifacts"
-
-# Ensure existing .gitignore ends with a newline if non-empty
-if [ -s "$GITIGNORE_FILE" ]; then
-  LAST_CHAR=$(tail -c 1 "$GITIGNORE_FILE" 2>/dev/null || true)
-  if [ -n "$LAST_CHAR" ] && [ "$LAST_CHAR" != $'\n' ]; then
-    echo "" >> "$GITIGNORE_FILE"
-  fi
+LEGACY_IGNORE_ENTRIES=(
+  "worker*.status" ".worker*.log" ".worker*.pid" "PAUSE" ".scratch/"
+  "tasks.txt.lock/" ".worker-agent-state*.json" ".worker-score*.json"
+  ".worker-score*.json.lock/" "tasks.done" "tasks.done.*" ".worker-agent-scores/"
+  ".worker-agent-events.jsonl" ".worker-agent-events.jsonl.lock/" ".worker-agent-events*.json*"
+  ".worker-dispatch-gate.json" ".worker-dispatch-gate.json.lock/"
+  ".worker-ghost-state*.json" ".worker-ghost-state*.json.lock/" ".worker-ghosts/"
+)
+if [ "${#LEGACY_IGNORE_ENTRIES[@]}" -gt 0 ]; then
+  "$PYTHON_BIN" - "$TARGET_DIR/.gitignore" "${LEGACY_IGNORE_ENTRIES[@]}" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+legacy = set(sys.argv[2:])
+if path.exists():
+    lines = path.read_text(encoding="utf-8").splitlines()
+    path.write_text("".join(line + "\n" for line in lines if line not in legacy), encoding="utf-8")
+PY
 fi
-
-# Find which required entries are actually missing
-MISSING_ENTRIES=()
-for entry in "${REQUIRED_IGNORES[@]}"; do
-  if ! grep -qxF "$entry" "$GITIGNORE_FILE" 2>/dev/null; then
-    MISSING_ENTRIES+=("$entry")
-  fi
+if ! grep -qxF "$IGNORE_HEADER" "$TARGET_DIR/.gitignore"; then
+  [ ! -s "$TARGET_DIR/.gitignore" ] || [ "$(tail -c 1 "$TARGET_DIR/.gitignore")" = $'\n' ] || printf '\n' >> "$TARGET_DIR/.gitignore"
+  printf '%s\n' "$IGNORE_HEADER" >> "$TARGET_DIR/.gitignore"
+fi
+for entry in "${IGNORE_ENTRIES[@]}"; do
+  grep -qxF "$entry" "$TARGET_DIR/.gitignore" || printf '%s\n' "$entry" >> "$TARGET_DIR/.gitignore"
 done
 
-if [ ${#MISSING_ENTRIES[@]} -gt 0 ]; then
-  # Only add header if it is not already in .gitignore
-  if ! grep -qxF "$HEADER" "$GITIGNORE_FILE" 2>/dev/null; then
-    if [ -s "$GITIGNORE_FILE" ]; then
-      echo "" >> "$GITIGNORE_FILE"
-    fi
-    echo "$HEADER" >> "$GITIGNORE_FILE"
-  fi
+# Install all parser dependencies during both fresh installs and updates.
+PYTHON_BIN="$PYTHON_BIN" "$TARGET_DIR/nightshift/tools/setup.sh"
 
-  for entry in "${MISSING_ENTRIES[@]}"; do
-    echo "$entry" >> "$GITIGNORE_FILE"
-  done
-  echo "  ✓ Appended ${#MISSING_ENTRIES[@]} missing worker artifact entries to .gitignore (no duplicates)"
-else
-  echo "  • .gitignore is already up to date (no changes needed)"
-fi
+# Validate deployed entry points and runtime files before reporting success.
+bash -n "$TARGET_DIR/nightshift/"*.sh
+sh -n "$TARGET_DIR/nightshift/tools/setup.sh"
+"$PYTHON_BIN" -c 'import ast, pathlib, sys; ast.parse(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))' "$TARGET_DIR/nightshift/worker_runtime.py"
+"$PYTHON_BIN" -c 'import ast, pathlib, sys; ast.parse(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))' "$TARGET_DIR/nightshift/tools/index.py"
 
-# ------------------------------------------------------------------------------
-# Verification & Self-Test
-# ------------------------------------------------------------------------------
-echo ""
-echo ">>> Verifying syntax of deployed scripts in target..."
-bash -n "$TARGET_DIR/worker.sh" "$TARGET_DIR"/scripts/*.sh
-"${PYTHON_BIN:-python3}" -c 'import ast, pathlib, sys; ast.parse(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))' "$TARGET_DIR/scripts/worker_runtime.py"
-echo "  ✓ Bash and Python worker files pass syntax validation (Exit 0)"
-
-echo ""
-echo "=============================================================================="
-if [ "$IS_UPDATE" -eq 1 ]; then
-  echo "  Update Complete! (All scripts & skills updated; configs & state preserved)"
-else
-  echo "  Installation Complete! (Pure Skills-Driven Architecture)"
-fi
-echo "=============================================================================="
-echo "Quick Start in target repository:"
-echo "  1. Terminal A (Planner) : Use /planner or natural language to decompose tasks"
-echo "  2. Terminal B (Worker)  : Run './worker.sh' to start autonomous background loop"
-echo "  3. Live Status          : Run './scripts/status.sh' to inspect live progress"
-echo "=============================================================================="
+printf '\nNightShift %s complete.\n' "$([ "$IS_UPDATE" -eq 1 ] && echo update || echo install)"
+printf '  Worker: %s\n  Queue:  %s\n  Index:  %s\n' \
+  "$TARGET_DIR/nightshift/worker.sh" "$TARGET_DIR/nightshift/tasks.txt" \
+  "$TARGET_DIR/nightshift/.scratch/code-index/INDEX.md"

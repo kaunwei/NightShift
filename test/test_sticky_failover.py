@@ -7,7 +7,7 @@ import sys
 import tempfile
 import unittest
 
-ROOT = Path(__file__).resolve().parents[1] if (Path(__file__).resolve().parents[1] / "worker.sh").exists() else Path(__file__).resolve().parents[2]
+ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "install.sh").exists())
 
 
 class StickyFailoverTests(unittest.TestCase):
@@ -16,10 +16,12 @@ class StickyFailoverTests(unittest.TestCase):
         self.root = Path(self.tmp.name) / "repo"
         self.root.mkdir()
         for name in ("worker.sh", ".gitignore"):
-            shutil.copy2(ROOT / name, self.root / name)
+            source = ROOT / "nightshift/worker.sh" if name == "worker.sh" else ROOT / name
+            shutil.copy2(source, self.root / name)
         (self.root / "scripts").mkdir()
-        shutil.copy2(ROOT / "scripts/worker_runtime.py", self.root / "scripts/worker_runtime.py")
-        shutil.copytree(ROOT / "scripts/adapters", self.root / "scripts/adapters")
+        shutil.copy2(ROOT / "nightshift/worker_runtime.py", self.root / "scripts/worker_runtime.py")
+        shutil.copy2(ROOT / "nightshift/scratch_review.py", self.root / "scripts/scratch_review.py")
+        shutil.copytree(ROOT / "nightshift/adapters", self.root / "scripts/adapters")
 
         subprocess.run(["git", "init", "-q", str(self.root)], check=True)
         subprocess.run(["git", "-C", str(self.root), "config", "user.name", "Worker Test"], check=True)
