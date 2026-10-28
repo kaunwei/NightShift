@@ -30,9 +30,21 @@ class SentinelCompletionTests(unittest.TestCase):
         temporary.replace(path)
 
     def start(self, task='TASK-ONE', limit='3'):
+        watcher_env = os.environ.copy()
+        for name, filename in {
+            'TASKS_FILE': 'tasks.txt', 'TASKS_DONE_FILE': 'tasks.done',
+            'STATUS_FILE': 'worker.status', 'PROGRESS_FILE': 'progress.log',
+            'WORKER_AGENT_EVENTS_FILE': '.worker-agent-events.jsonl',
+            'WORKER_AGENT_EVENTS_CURSOR_FILE': '.worker-agent-events.cursor.json',
+            'WORKER_AGENT_EVENTS_ACK_FILE': '.worker-agent-events.acks.jsonl',
+            'AGENT_DISPATCH_GATE_FILE': '.worker-dispatch-gate.json',
+        }.items():
+            watcher_env[name] = str(self.ns / filename)
+        watcher_env['WORKER_ID'] = 'default'
+        watcher_env['WATCH_TASK_ID'] = ''
         self.process = subprocess.Popen(
             ['bash', str(self.ns / 'watch_worker.sh'), limit, '0.02', task],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=watcher_env)
         self.addCleanup(self.stop)
         self.assertIn('[SENTINEL]', self.process.stdout.readline())
         return self.process
@@ -149,3 +161,35 @@ class SentinelCompletionTests(unittest.TestCase):
         (self.ns / 'tasks.txt').write_text('')
         self.status('IDLE')
         self.assert_completed()
+
+
+    def test_repeated_stale_blocked_transition_uses_consistent_snapshot(self):
+        for iteration in range(30):
+            with self.subTest(iteration=iteration):
+                case = type(self)('test_queue_watch_ignores_preexisting_global_blocked_status')
+                result = unittest.TestResult()
+                case.run(result)
+                self.assertTrue(result.wasSuccessful(), result.failures + result.errors)
+
+    def test_genuine_current_task_blocked_still_notifies(self):
+        self.status('RUNNING', 'TASK-ONE')
+        self.start()
+        self.status('BLOCKED', 'TASK-ONE')
+        out, err = self.process.communicate(timeout=5)
+        self.assertEqual(self.process.returncode, 1, out + err)
+        self.assertIn('[SENTINEL_BLOCKED]', out)
+
+    def test_fixture_isolated_from_inherited_worker_paths(self):
+        from unittest import mock
+        foreign = self.root / 'foreign'
+        with mock.patch.dict(os.environ, {
+            'TASKS_FILE': str(foreign / 'tasks.txt'),
+            'TASKS_DONE_FILE': str(foreign / 'tasks.done'),
+            'STATUS_FILE': str(foreign / 'worker.status'),
+            'PROGRESS_FILE': str(foreign / 'progress.log'),
+            'WORKER_ID': 'foreign', 'WATCH_TASK_ID': 'TASK-FOREIGN',
+        }):
+            self.start()
+            self.done()
+            self.audit()
+            self.assert_completed()
