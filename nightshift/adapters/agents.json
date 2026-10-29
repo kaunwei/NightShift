@@ -2,7 +2,8 @@
   "codex-main": {
     "default": true,
     "worker": {
-      "task_timeout_seconds": 1800
+      "task_timeout_seconds": 1800,
+      "research_step_budget": 100
     },
     "agent": {
       "adapter": "codex",
@@ -21,7 +22,8 @@
   "agy-backup": {
     "default": false,
     "worker": {
-      "task_timeout_seconds": 1800
+      "task_timeout_seconds": 1800,
+      "research_step_budget": 100
     },
     "agent": {
       "adapter": "agy",
