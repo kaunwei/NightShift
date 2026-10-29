@@ -196,13 +196,21 @@ class SentinelCompletionTests(unittest.TestCase):
             self.audit()
             self.assert_completed()
 
-    def test_inactive_worker_triggers_sentinel_inactive(self):
+    def test_inactive_worker_emits_recurring_notifications_without_exiting(self):
         (self.ns / 'tasks.txt').write_text('TASK-ONE | LEVEL: 1\n')
         self.status('IDLE')
         self.start(limit='0', env_overrides={'WORKER_INACTIVE_TIMEOUT': '1'})
-        out, err = self.process.communicate(timeout=5)
-        self.assertEqual(self.process.returncode, 5, out + err)
-        self.assertIn('[SENTINEL_INACTIVE]', out)
+        line1 = self.process.stdout.readline()
+        self.assertIn('[SENTINEL_INACTIVE_NOTIFY]', line1)
+        self.assertIsNone(self.process.poll(), 'sentinel must not exit on inactive notification')
+        line2 = self.process.stdout.readline()
+        self.assertIn('[SENTINEL_INACTIVE_NOTIFY]', line2)
+        self.assertIsNone(self.process.poll(), 'sentinel must continue running as recurring heartbeat')
+        self.status('RUNNING', 'TASK-ONE')
+        self.done()
+        self.audit()
+        self.status('IDLE')
+        self.assert_completed()
 
     def test_long_running_compilation_or_test_does_not_trigger_inactive(self):
         self.status('RUNNING', 'TASK-ONE')

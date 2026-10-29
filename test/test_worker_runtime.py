@@ -265,6 +265,19 @@ class AgentConfigContractTests(unittest.TestCase):
                 "command": "/opt/bin/codex", "args": ["--profile", "fast"],
             })
 
+    def test_agent_config_accepts_research_step_budget(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "agents.json"
+            path.write_text(json.dumps({
+                "explorer": {
+                    "default": True,
+                    "worker": {"task_timeout_seconds": 120, "research_step_budget": 150},
+                    "agent": {"adapter": "codex", "command": "codex"},
+                },
+            }))
+            (agent,) = runtime_module.load_agent_registry(path)
+            self.assertEqual(agent["worker"]["research_step_budget"], 150)
+
     def test_registry_orders_every_default_agent_first_and_allows_multiple_defaults(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "agents.json"
@@ -1035,6 +1048,21 @@ class PollContractTests(unittest.TestCase):
             self.assertEqual(fields[8], "TASK-2")
             self.assertEqual(fields[15], "22")
             self.assertEqual(tasks.read_text(), "# queued\n")
+
+    def test_claim_uses_research_step_budget_for_research_tasks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            tasks, done = root / "tasks.txt", root / "tasks.done"
+            tasks.write_text("TASK-R [RESEARCH] | LEVEL: 1 | TARGET: .reports/a/SUMMARY.md | VERIFY: REPORT_ONLY\n")
+            done.write_text("")
+            result = runtime("poll-next", "--tasks", tasks, "--done", done,
+                             "--pause", root / "PAUSE", "--work-dir", root,
+                             "--step-base", "12", "--step-per-file", "5",
+                             "--research-step-budget", "120")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            fields = result.stdout.split("\0")
+            self.assertEqual(fields[8], "TASK-R[RESEARCH]")
+            self.assertEqual(fields[15], "120")
 
 
 class WorkerScoreTests(unittest.TestCase):

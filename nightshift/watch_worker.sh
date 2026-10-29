@@ -34,6 +34,7 @@ INACTIVE_TIMEOUT="${WORKER_INACTIVE_TIMEOUT:-180}"
 SECONDS=0
 START_TIME=$SECONDS
 LAST_ACTIVE_SECONDS=$SECONDS
+LAST_INACTIVE_NOTIFY_SECONDS=$SECONDS
 LAST_DONE_BYTES=0
 BASELINE_AUDITS=$(mktemp "${TMPDIR:-/tmp}/nightshift-audit-baseline.XXXXXX") || exit 1
 trap 'rm -f "$BASELINE_AUDITS"' EXIT
@@ -206,7 +207,11 @@ while true; do
   # Treat any RUNNING observation in this iteration as active. A transition to
   # IDLE after the ledger read must not make us expire before reading its DONE.
   if [ "$STATE" = "RUNNING" ] || [ "$STATE" = "VERIFYING" ]; then
-    ANY_AGENT_ACTIVE=1
+    if [ -n "$WORKER_PID" ] && kill -0 "$WORKER_PID" 2>/dev/null; then
+      ANY_AGENT_ACTIVE=1
+    elif [ -z "$WORKER_PID" ]; then
+      ANY_AGENT_ACTIVE=1
+    fi
     if [ -z "$EXPECTED_TASK_ID" ] || [ "$CURRENT_TASK" = "$EXPECTED_TASK_ID" ]; then
       ACTIVE_TASK=1
     fi
@@ -216,9 +221,14 @@ while true; do
     [ -f "$active_status" ] || continue
     ACTIVE_STATUS_SNAPSHOT=$(cat "$active_status" 2>/dev/null || true)
     active_state=$(printf '%s\n' "$ACTIVE_STATUS_SNAPSHOT" | grep -o '"state":[[:space:]]*"[^"]*"' | cut -d'"' -f4 || true)
+    active_pid=$(printf '%s\n' "$ACTIVE_STATUS_SNAPSHOT" | grep -o '"pid":[[:space:]]*[0-9]*' | awk '{print $2}' || true)
     active_id=$(canonical_task "$(printf '%s\n' "$ACTIVE_STATUS_SNAPSHOT" | grep -o '"current_task":[[:space:]]*"[^"]*"' || true)")
     if [ "$active_state" = "RUNNING" ] || [ "$active_state" = "VERIFYING" ]; then
-      ANY_AGENT_ACTIVE=1
+      if [ -n "$active_pid" ] && kill -0 "$active_pid" 2>/dev/null; then
+        ANY_AGENT_ACTIVE=1
+      elif [ -z "$active_pid" ]; then
+        ANY_AGENT_ACTIVE=1
+      fi
       if [ -z "$EXPECTED_TASK_ID" ] || [ "$active_id" = "$EXPECTED_TASK_ID" ]; then
         ACTIVE_TASK=1
       fi
@@ -226,6 +236,7 @@ while true; do
   done
   if [ "$ANY_AGENT_ACTIVE" -eq 1 ]; then
     LAST_ACTIVE_SECONDS=$SECONDS
+    LAST_INACTIVE_NOTIFY_SECONDS=$SECONDS
   fi
 
   for task_id in $PENDING_DONE_TASKS; do
@@ -309,9 +320,10 @@ while true; do
   fi
 
   INACTIVE_SECONDS=$(( SECONDS - LAST_ACTIVE_SECONDS ))
-  if [ "$INACTIVE_TIMEOUT" -gt 0 ] && [ "$INACTIVE_SECONDS" -ge "$INACTIVE_TIMEOUT" ] && [ "$ANY_AGENT_ACTIVE" -eq 0 ]; then
-    echo "[SENTINEL_INACTIVE] No agent active on worker for ${INACTIVE_SECONDS}s (State: ${STATE}, Remaining: ${REMAINING_TASKS}${EXPECTED_TASK_ID:+, Task: ${EXPECTED_TASK_ID}})."
-    exit 5
+  SINCE_LAST_NOTIFY=$(( SECONDS - LAST_INACTIVE_NOTIFY_SECONDS ))
+  if [ "$INACTIVE_TIMEOUT" -gt 0 ] && [ "$SINCE_LAST_NOTIFY" -ge "$INACTIVE_TIMEOUT" ] && [ "$ANY_AGENT_ACTIVE" -eq 0 ]; then
+    echo "[SENTINEL_INACTIVE_NOTIFY] All agents inactive for ${INACTIVE_SECONDS}s (State: ${STATE}, Remaining: ${REMAINING_TASKS}${EXPECTED_TASK_ID:+, Task: ${EXPECTED_TASK_ID}})."
+    LAST_INACTIVE_NOTIFY_SECONDS=$SECONDS
   fi
 
   sleep "$POLL_INTERVAL"
