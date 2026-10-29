@@ -46,10 +46,12 @@ Own the task graph and acceptance. Workers implement; runtime enforces limits an
 1. Delegate waiting to Queue Sentinel and yield host control:
 
    ```sh
-   bash nightshift/watch_worker.sh 0 5 TASK-ID
+   WORKER_INACTIVE_REPEAT=1 bash nightshift/watch_worker.sh 0 5 TASK-ID
    ```
 
-   Use interruptible host waits. RUNNING state, thinking, and heartbeats require no status/log reads or progress reports. Intervene only on terminal events: completion, BLOCKED, FAIL, SCOPE_BLOCKED, failover, inactivity (180s without active agent), or observer fault.
+   Use interruptible streaming host waits and keep the same watcher process alive across inactivity notifications. Queue Sentinel relays each `[SENTINEL_INACTIVE]` line immediately to Planner with `send_message`; Planner sends one user-facing inactivity reminder for each line and keeps waiting. First notice follows 180 seconds without any observed active worker; further notices repeat every 180 seconds while inactivity persists. The shell clock has one-second resolution; polling adds up to the polling interval, plus host delivery latency. RUNNING/VERIFYING observations reset this inactivity timer; live manager PID alone does not establish agent progress. Inactivity is an observation, not task failure or completion, and never acknowledges an event.
+
+   Sentinel drains watcher stdout through host streaming waits no longer than 180 seconds, without routine Worker status/log reads. A wait expiry renews waiting on the same process. If the host cannot stream output, retain the watcher and report that relay limitation rather than promise delivery. Unexpected watcher/Sentinel exit is an observer fault: report it separately from Worker/task health and restore supervision using durable task evidence. Default CLI consumers retain one-shot exit 5 unless they opt into repeat mode. `WORKER_INACTIVE_TIMEOUT=0` disables inactivity notices. Intervene on completion, BLOCKED, FAIL, SCOPE_BLOCKED, failover, inactivity, or observer fault; active heartbeats alone require no progress report.
 2. Deliver results after all workers executing that task leave RUNNING/VERIFYING. Normalize kind tags, retain DONE until audit arrives, and replay unreviewed pairs after late start.
 3. Require valid mechanical audit:
 
