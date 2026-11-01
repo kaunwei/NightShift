@@ -21,6 +21,7 @@ nightshift/tools/.venv/
 
 # Project artifacts and generated build files
 .scratch/
+todo/
 .worker.env
 .worker-tree/
 .preview/
