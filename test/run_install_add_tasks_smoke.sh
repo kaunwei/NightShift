@@ -29,11 +29,13 @@ def add(left, right):
 EOF
 
 cat > "$SMOKE_ROOT/tests/test_calc.py" <<'EOF'
+import unittest
 from src.calc import add
 
 
-def test_add():
-    assert add(2, 3) == 5
+class CalcTests(unittest.TestCase):
+    def test_add(self):
+        self.assertEqual(add(2, 3), 5)
 EOF
 
 printf 'smoke.log\n' > "$SMOKE_ROOT/.gitignore"
@@ -49,6 +51,7 @@ test ! -e "$SMOKE_ROOT/nightshift/skills"
 test ! -e "$SMOKE_ROOT/nightshift/docs"
 test ! -e "$SMOKE_ROOT/nightshift/local_tdd.py"
 test -f "$SMOKE_ROOT/nightshift/install-manifest.json"
+test -f "$SMOKE_ROOT/nightshift/config.json"
 test -f "$SMOKE_ROOT/.agents/skills/nightshift/planner/SKILL.md"
 test -f "$SMOKE_ROOT/.skills/universal-build-verify.md"
 test -f "$SMOKE_ROOT/nightshift/tools/index.py"
@@ -80,11 +83,18 @@ if task_id == "TASK-SMOKE-CODE":
     source.write_text(source.read_text(encoding="utf-8") +
                       "\n\ndef multiply(left, right):\n    return left * right\n",
                       encoding="utf-8")
+    test_src = Path("tests/test_calc.py")
+    test_src.write_text(test_src.read_text(encoding="utf-8") +
+                        "\n    def test_multiply(self):\n        from src.calc import multiply\n        self.assertEqual(multiply(2, 3), 6)\n",
+                        encoding="utf-8")
     payload = {
         "outcome": "complete",
         "changed": True,
         "verification_evidence": "Added multiply and passed its declared check.",
         "commit_message": "feat: smoke-test code task",
+        "tdd_cases": [
+            {"id": "test_calc.CalcTests.test_multiply", "source": "tests/test_calc.py"}
+        ],
     }
 elif task_id == "TASK-SMOKE-EXPLORE":
     report = Path(".reports/smoke/SUMMARY.md")
@@ -112,17 +122,26 @@ result_path.write_text(json.dumps(payload), encoding="utf-8")
 PY
 chmod +x "$SMOKE_ROOT/scripts/smoke-agent"
 
-python3 - "$SMOKE_ROOT/nightshift/adapters/agents.json" <<'PY'
+python3 - "$SMOKE_ROOT/nightshift/adapters/agents.json" "$SMOKE_ROOT/nightshift/config.json" <<'PY'
 import json
 from pathlib import Path
 import sys
 
-Path(sys.argv[1]).write_text(json.dumps({"smoke": {
+payload = {"smoke": {
     "default": True,
     "worker": {"task_timeout_seconds": 120},
     "agent": {"adapter": "generic", "command": "./scripts/smoke-agent",
               "args": [], "env": {}, "config": {"model": "smoke"}},
-}}, indent=2) + "\n", encoding="utf-8")
+}}
+Path(sys.argv[1]).write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+cfg_path = Path(sys.argv[2])
+if cfg_path.exists():
+    cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    cfg["agents"] = payload
+    if "acceptance" in cfg:
+        cfg["acceptance"]["hot"] = "python3 nightshift/unittest_hot.py --start tests"
+        cfg["acceptance"]["cold"] = "python3 -m unittest discover -s tests"
+    cfg_path.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
 PY
 
 git -C "$SMOKE_ROOT" init -q
@@ -137,7 +156,7 @@ git -C "$SMOKE_ROOT" add -A
 git -C "$SMOKE_ROOT" commit -qm "test: initialize disposable smoke project"
 
 EXPLORE_TASK="TASK-SMOKE-EXPLORE | LEVEL: 1 | TARGET: .reports/smoke/SUMMARY.md | ACTION: [RESEARCH] Explore the calc module seam and write a concise report | VERIFY: REPORT_ONLY | FORBIDDEN_SHORTCUTS: none | CONSTRAINTS: read-only product scope"
-CODE_TASK="TASK-SMOKE-CODE | LEVEL: 1 | TARGET: src/calc.py | ACTION: [CODE: FIX] Add a multiply function | VERIFY: python3 -c 'from src.calc import multiply; assert multiply(6, 7) == 42; print(\"1 test passed\")' | FORBIDDEN_SHORTCUTS: none | CONSTRAINTS: keep the change in src/calc.py"
+CODE_TASK="TASK-SMOKE-CODE | LEVEL: 1 | TARGET: src/calc.py,tests/test_calc.py | ACTION: [CODE: FIX] Add a multiply function | VERIFY: python3 -m unittest discover -s tests | FORBIDDEN_SHORTCUTS: none | CONSTRAINTS: keep the change in src/calc.py and tests/test_calc.py"
 
 python3 "$SMOKE_ROOT/nightshift/worker_runtime.py" queue-insert \
   --tasks "$SMOKE_ROOT/nightshift/tasks.txt" --task "$EXPLORE_TASK"

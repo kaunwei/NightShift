@@ -161,7 +161,10 @@ rmdir "$TARGET_DIR/nightshift/tools/bin" 2>/dev/null || true
 rmdir "$TARGET_DIR/scripts/adapters" 2>/dev/null || true
 rmdir "$TARGET_DIR/.nightshift" 2>/dev/null || true
 
-# Preserve the existing agent registry; otherwise the bundled default is ready to use.
+# Preserve existing configurations; otherwise the bundled default is ready to use.
+if [ ! -f "$TARGET_DIR/nightshift/config.json" ] && [ -f "$BUNDLE_SOURCE/config.json" ]; then
+  cp "$BUNDLE_SOURCE/config.json" "$TARGET_DIR/nightshift/config.json"
+fi
 if [ ! -f "$TARGET_DIR/nightshift/adapters/agents.json" ]; then
   mkdir -p "$TARGET_DIR/nightshift/adapters"
   cp "$BUNDLE_SOURCE/adapters/agents.json" "$TARGET_DIR/nightshift/adapters/agents.json"
@@ -262,7 +265,7 @@ fi
 touch "$TARGET_DIR/.gitignore"
 IGNORE_HEADER="# NightShift runtime artifacts (stored under nightshift/)"
 IGNORE_ENTRIES=(
-  "nightshift/tasks.done" "nightshift/tasks.done.*" "nightshift/worker*.status"
+  "nightshift/progress.log" "nightshift/tasks.done" "nightshift/tasks.done.*" "nightshift/worker*.status"
   "nightshift/.worker*.log" "nightshift/.worker*.pid" "nightshift/.worker-agent-state*.json"
   "nightshift/.worker-score*.json" "nightshift/.worker-agent-scores/" "nightshift/.worker-agent-events*.json*"
   "nightshift/.worker-dispatch-gate.json" "nightshift/.worker*.lock/" "nightshift/PAUSE" "nightshift/tasks.txt.lock/"

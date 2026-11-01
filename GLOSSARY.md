@@ -1,15 +1,23 @@
-# Domain Glossary
+# NightShift
 
-This file defines the canonical vocabulary for the project. When discussing or implementing features, stick to these terms.
+Vocabulary for unattended execution and Planner supervision.
 
-## Terms
+## Language
 
-| Term | Definition | Avoid |
-| :--- | :--------- | :---- |
-| **NightShift** | The 24-hour unattended dual-terminal AI development framework. | auto_script, script_repo, scripts |
+**NightShift**: The unattended dual-terminal AI development framework.
+_Avoid_: auto_script, script_repo
 
-## Acceptance lifecycle
+**Automatic acceptance**: Runtime approval after hot, TDD evidence and mechanical
+checks pass, followed by commit and automatic scoring.
+_Avoid_: Planner acceptance, automatic merge
 
-**Planner acceptance rollback**:
-The Planner-controlled rejection of candidate commits and restoration of the last accepted commit before work is replanned.
-_Avoid_: Planner cancellation, task completion
+**Hot**: The project's precommit test gate, including persistent TDD coverage and
+task-required checks.
+
+**Cold**: An independent periodic regression task whose failure creates a new issue.
+
+**Ghost**: A bounded assistant for handoff metadata, existing-test wiring and diagnosis.
+
+**Planner recovery**: Replanning ordinary issue tasks and explicitly restarting
+execution after an unresolved failure. Each new Worker starts clean.
+_Avoid_: continuing failed work, automatic resume

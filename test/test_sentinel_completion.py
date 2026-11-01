@@ -30,7 +30,8 @@ class SentinelCompletionTests(unittest.TestCase):
         temporary.replace(path)
 
     def dead_pid(self):
-        dead = subprocess.Popen(['/bin/true'])
+        true_cmd = '/usr/bin/true' if os.path.exists('/usr/bin/true') else '/bin/true'
+        dead = subprocess.Popen([true_cmd])
         dead.wait()
         return dead.pid
 

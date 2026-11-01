@@ -1,4 +1,5 @@
 # NightShift runtime artifacts (kept inside nightshift/)
+nightshift/tasks.txt
 nightshift/tasks.done
 nightshift/tasks.done.*
 nightshift/worker*.status
@@ -19,6 +20,7 @@ nightshift/tools/.venv/
 /test/.install-add-task-smoke/
 
 # Project artifacts and generated build files
+.scratch/
 .worker.env
 .worker-tree/
 .preview/
