@@ -34,12 +34,12 @@ For every later simplification, compare the changed source hashes and each affec
 | [nightshift/tools/setup.ps1](../tools/setup.ps1) | 31fbe3b44ed2b160342d0b507931f1e23f1ba57f62ceba03ec92d7e4cf0802b6 |
 | [nightshift/scratch_review.py](../scratch_review.py) | 146f28c2325e9bfee6c3c94877bb37bffbd9dc45d00db16204f4722df4e7964c |
 | [nightshift/install-manifest.json](../install-manifest.json) | 9dd5d9f680653ab32c258d78e73baf5926830c6d70d165a75dddaddff95b5b3e |
-| [install.sh](../../install.sh) | 12fea53a8c397697338ac31675795578289d89fb2ad37bbdc864d416ba467163 |
-| [remove.sh](../../remove.sh) | 81f147d5efd6e24cf2ba68ae39b97dbbf17ca5fe79fdc55233e1a164f3eeb359 |
+| [install.sh](../../install.sh) | 2fdc0f193bbaf8a790844d2140face9085716f51c54cf4fa1a9f79ddc926c9e7 |
+| [remove.sh](../../remove.sh) | c048fe8d0982e7eabfc695296debe2ee0aef0f8c2aed709318416bbccf935feb |
 | [README.md](../../README.md) | dcb943b41c867909a7f697836c2e4a176e7d403d938b4b4ad4c8b3dbf9b81374 |
 | [test/README.md](../../test/README.md) | f08d9ab6eb15eb369421ef3b4bc405c8f0f2dd26f60b89aac24dbc139b6a409b |
 | [nightshift/docs/NIGHTSHIFT_SPEC.md](../docs/NIGHTSHIFT_SPEC.md) | 20cca335a8cb295023fc54bf3b653958218310fc7b53dd4fdea07f009bd77664 |
-| [nightshift/docs/PORTING_GUIDE.md](../docs/PORTING_GUIDE.md) | 3e130caf0a8991533d61ed40cefe82222844d1865a5c4548de4e7b613a8eff1f |
+| [nightshift/docs/PORTING_GUIDE.md](../docs/PORTING_GUIDE.md) | 8d53a8e0a0a006deb7e8876679d4665839ddcc5a21f47facfa497bfee71fabad |
 | [nightshift/docs/DETERMINISTIC_EXPLORE_STRATEGY.md](../docs/DETERMINISTIC_EXPLORE_STRATEGY.md) | c832795fb51c7e8ad65e66de0116629a70480172d0628217cb3aafb12683e896 |
 | [nightshift/docs/DETERMINISTIC_EXPLORE_RESULTS.md](../docs/DETERMINISTIC_EXPLORE_RESULTS.md) | a624dfe4d49bc5fe167e597b71f86e1c3d86610b9e6084fc0e1d3c49721b068c |
 ## Runtime function coverage

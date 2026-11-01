@@ -25,7 +25,7 @@ if [ ! -d "$TARGET_DIR/nightshift" ] && [ ! -f "$TARGET_DIR/worker.sh" ] \
   exit 1
 fi
 
-# Keep the consumer-owned index scope while removing the installed tool and state.
+# Keep the consumer-owned index scope and configuration while removing the installed tool and state.
 SCOPE_CONFIG=""
 if [ -f "$TARGET_DIR/nightshift/code-index.toml" ]; then
   SCOPE_CONFIG="$(mktemp "${TMPDIR:-/tmp}/nightshift-code-index.XXXXXX")"
@@ -34,6 +34,11 @@ elif [ -f "$TARGET_DIR/.nightshift/code-index.toml" ]; then
   SCOPE_CONFIG="$(mktemp "${TMPDIR:-/tmp}/nightshift-code-index.XXXXXX")"
   cp "$TARGET_DIR/.nightshift/code-index.toml" "$SCOPE_CONFIG"
 fi
+CONFIG_JSON=""
+if [ -f "$TARGET_DIR/nightshift/config.json" ]; then
+  CONFIG_JSON="$(mktemp "${TMPDIR:-/tmp}/nightshift-config.XXXXXX")"
+  cp "$TARGET_DIR/nightshift/config.json" "$CONFIG_JSON"
+fi
 
 rm -rf "$TARGET_DIR/nightshift"
 if [ -n "$SCOPE_CONFIG" ]; then
@@ -41,6 +46,26 @@ if [ -n "$SCOPE_CONFIG" ]; then
   cp "$SCOPE_CONFIG" "$TARGET_DIR/nightshift/code-index.toml"
   rm -f "$SCOPE_CONFIG"
 fi
+if [ -n "$CONFIG_JSON" ]; then
+  mkdir -p "$TARGET_DIR/nightshift"
+  cp "$CONFIG_JSON" "$TARGET_DIR/nightshift/config.json"
+  rm -f "$CONFIG_JSON"
+fi
+
+# Remove durable Git state directory owned by NightShift.
+if git -C "$TARGET_DIR" rev-parse --git-dir >/dev/null 2>&1; then
+  GIT_NIGHTSHIFT="$(git -C "$TARGET_DIR" rev-parse --git-path nightshift 2>/dev/null || true)"
+  case "$GIT_NIGHTSHIFT" in /*) ;; *) GIT_NIGHTSHIFT="$TARGET_DIR/$GIT_NIGHTSHIFT" ;; esac
+  if [ -d "$GIT_NIGHTSHIFT" ]; then
+    rm -rf "$GIT_NIGHTSHIFT"
+  fi
+fi
+rm -rf "$TARGET_DIR/.git/nightshift"
+
+# Remove legacy project-level generated state and artifacts.
+rm -rf "$TARGET_DIR/.reports" "$TARGET_DIR/.trials" "$TARGET_DIR/.preview" "$TARGET_DIR/.worker-tree"
+rm -f "$TARGET_DIR/.worker.env"
+
 # Remove legacy code locations owned by earlier NightShift installs.
 rm -f "$TARGET_DIR/worker.sh" "$TARGET_DIR/update.sh" "$TARGET_DIR/.worker.env.example" \
   "$TARGET_DIR/tasks.txt" "$TARGET_DIR/tasks.done" "$TARGET_DIR/progress.log" \
@@ -65,8 +90,8 @@ rm -f "$TARGET_DIR/.worker.env.example" \
 rm -rf "$TARGET_DIR/tools/nightshift-code-index" "$TARGET_DIR/test/nightshift_worker"
 rmdir "$TARGET_DIR/scripts/adapters" 2>/dev/null || true
 # Retain all unrelated skills/docs/scripts in the consuming project.
-rm -rf "$TARGET_DIR/.agents/skills/nightshift"
-rm -f "$TARGET_DIR/.skills/universal-build-verify.md"
+rm -rf "$TARGET_DIR/.agents/skills/nightshift" "$TARGET_DIR/skills/nightshift"
+rm -f "$TARGET_DIR/.skills/universal-build-verify.md" "$TARGET_DIR/skills/universal-build-verify.md"
 for doc in PORTING_GUIDE.md DETERMINISTIC_EXPLORE_STRATEGY.md DETERMINISTIC_EXPLORE_RESULTS.md NIGHTSHIFT_SPEC.md NIGHTSHIFT_SOURCE_COVERAGE.md LOCAL_TDD.md; do
   if [ -f "$TARGET_DIR/docs/$doc" ] && [ -f "$SOURCE_ROOT/nightshift/docs/$doc" ] \
     && cmp -s "$TARGET_DIR/docs/$doc" "$SOURCE_ROOT/nightshift/docs/$doc"; then
@@ -77,6 +102,21 @@ if [ -f "$TARGET_DIR/docs/PORTING_GUIDE.md" ] \
   && grep -q '^# Install NightShift in another repository' "$TARGET_DIR/docs/PORTING_GUIDE.md"; then
   rm -f "$TARGET_DIR/docs/PORTING_GUIDE.md"
 fi
-rmdir "$TARGET_DIR/.agents/skills" "$TARGET_DIR/.skills" "$TARGET_DIR/.agents" 2>/dev/null || true
-rmdir "$TARGET_DIR/.nightshift" 2>/dev/null || true
-printf 'Removed NightShift-owned files from %s; retained project code, docs, skills, and the code-index scope config.\n' "$TARGET_DIR"
+rmdir "$TARGET_DIR/.agents/skills" "$TARGET_DIR/.skills" "$TARGET_DIR/skills" "$TARGET_DIR/.agents" 2>/dev/null || true
+rmdir "$TARGET_DIR/scripts" "$TARGET_DIR/tools" "$TARGET_DIR/.nightshift" 2>/dev/null || true
+
+# Clean up NightShift entries from .gitignore if present.
+if [ -f "$TARGET_DIR/.gitignore" ]; then
+  python3 - "$TARGET_DIR/.gitignore" <<'PYIGNORE'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+if path.exists():
+    lines = path.read_text(encoding="utf-8").splitlines()
+    cleaned = [l for l in lines if not l.startswith("nightshift/") and not l.startswith("# NightShift")
+               and l not in (".worker.env", ".worker-tree/", ".preview/", ".reports/", ".trials/")]
+    path.write_text("".join(l + "\n" for l in cleaned), encoding="utf-8")
+PYIGNORE
+fi
+
+printf 'Removed NightShift-owned files from %s; retained project code, docs, skills, and configuration.\n' "$TARGET_DIR"

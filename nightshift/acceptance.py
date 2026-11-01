@@ -275,17 +275,25 @@ def clean(root):
     """Authorized clean-start policy. Never discard commits or ignored files."""
     preserved = {}
     for name in ("tasks.txt", "nightshift/tasks.txt", "tasks.done", "nightshift/tasks.done",
-                 "progress.log", "nightshift/progress.log"):
+                 "progress.log", "nightshift/progress.log",
+                 "nightshift/config.json", "nightshift/acceptance.json",
+                 "nightshift/code-index.toml", "nightshift/adapters/agents.json"):
         target = Path(root) / name
         if target.is_file():
             preserved[name] = target.read_bytes()
     git(root, "reset", "--hard", "HEAD")
-    git(root, "clean", "-fd")
+    git(root, "clean", "-fd", "-e", ".scratch", "-e", ".worker*", "-e", "nightshift/",
+        "-e", ".agents/", "-e", ".skills/", "-e", ".gitignore")
     for name, content in preserved.items():
         (Path(root) / name).write_bytes(content)
     status_raw = git(root, "status", "--porcelain", "--untracked-files=all")
     if status_raw:
-        lines = [line for line in status_raw.splitlines() if not any(name in line for name in preserved)]
+        lines = [line for line in status_raw.splitlines()
+                 if not any(name in line for name in preserved)
+                 and not line[3:].startswith("nightshift/")
+                 and not line[3:].startswith(".agents/")
+                 and not line[3:].startswith(".skills/")
+                 and not line[3:] == ".gitignore"]
         if lines:
             raise GateError("clean-start failed; Worker not launched")
 

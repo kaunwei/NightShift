@@ -204,6 +204,23 @@ if migrated:
     Path(sys.argv[1]).write_text(json.dumps(registry, indent=2, ensure_ascii=False) + "\n",
                                  encoding="utf-8")
 PY
+if [ -f "$TARGET_DIR/nightshift/config.json" ] && [ -f "$TARGET_DIR/nightshift/adapters/agents.json" ]; then
+  "$PYTHON_BIN" - "$TARGET_DIR/nightshift/config.json" "$TARGET_DIR/nightshift/adapters/agents.json" <<'PYMERGE'
+import json
+from pathlib import Path
+import sys
+cfg_path, agents_path = Path(sys.argv[1]), Path(sys.argv[2])
+try:
+    cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    agents = json.loads(agents_path.read_text(encoding="utf-8"))
+    if isinstance(cfg, dict) and isinstance(agents, dict) and agents:
+        if "agents" not in cfg or set(agents.keys()) != {"codex-main", "agy-backup"}:
+            cfg["agents"] = agents
+            cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+except Exception:
+    pass
+PYMERGE
+fi
 
 # Skill sources and installed skills share the host-discovered root layout.
 "$PYTHON_BIN" - "$BUNDLE_SOURCE" "$SOURCE_ROOT" "$TARGET_DIR" <<'PYSKILLS'

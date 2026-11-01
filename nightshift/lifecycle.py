@@ -372,6 +372,7 @@ def run(root, runtime):
                 if once:
                     return 0
                 continue
+            args = None
             result = {}
             try:
                 if (root / "nightshift/config.json").is_file() or (root / "nightshift/acceptance.json").is_file():
@@ -482,7 +483,7 @@ def run(root, runtime):
                     return 0
                 update("IDLE")
             except Exception as error:
-                if getattr(args, "recovery_failed", False):
+                if args is not None and getattr(args, "recovery_failed", False):
                     update("RECOVERY_FAILED", active["task_id"])
                     print(f"[RECOVERY_HALTED] {active['task_id']}: baseline could not be restored; task requeued.", flush=True)
                     runtime.insert_task_front(tasks, raw)

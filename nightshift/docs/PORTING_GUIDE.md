@@ -23,25 +23,27 @@ Run the same installer for a fresh install or update:
 ./install.sh /path/to/project
 ```
 
-The installed copy is `nightshift/install.sh`; running it again from the target updates that installation. There is no separate updater. The installer refreshes NightShift files, preserves the project-owned index config and agent registry, migrates old root-level Worker state into `nightshift/`, and installs `tree-sitter-language-pack` with pip into `nightshift/tools/.venv`. It validates shell and Python syntax before reporting success.
+The installed copy is `nightshift/install.sh`; running it again from the target updates that installation. There is no separate updater. The installer refreshes NightShift files, preserves the project-owned index config and agent registry/config, migrates old root-level Worker state into `nightshift/`, and installs `tree-sitter-language-pack` with pip into `nightshift/tools/.venv`. It validates shell and Python syntax before reporting success.
 
-Older NightShift files can be removed with the temporary `./remove.sh /path/to/project` helper. It removes the NightShift package, old root-level runtime/state files, and the NightShift skill namespace while retaining application code, unrelated scripts/docs/skills, and the project-owned code-index scope config. It leaves `.worker-tree`, `.preview`, and `.trials` intact because they can hold unfinished or delivered work.
+Older NightShift files can be removed with the `./remove.sh /path/to/project` helper. It removes the NightShift package, durable git state (`.git/nightshift`), project-level worker artifacts (`.reports`, `.trials`, `.preview`, `.worker-tree`, `.worker.env`), and the NightShift skill namespace while retaining application code, unrelated scripts/docs/skills, and the project-owned configuration (`nightshift/config.json` and `nightshift/code-index.toml`).
 
 ## Agent configuration
 
-Edit `nightshift/adapters/agents.json`. Each named entry separates Worker limits from the selected adapter and executable:
+Edit `nightshift/config.json` (or legacy `nightshift/adapters/agents.json`). In `nightshift/config.json`, the `"agents"` section separates Worker limits from the selected adapter and executable:
 
 ```json
 {
-  "codex-main": {
-    "default": true,
-    "worker": { "task_timeout_seconds": 1800 },
-    "agent": {
-      "adapter": "codex",
-      "command": "codex",
-      "args": [],
-      "env": {},
-      "config": { "model": "gpt-6.1-sol", "effort": "low" }
+  "agents": {
+    "codex-main": {
+      "default": true,
+      "worker": { "task_timeout_seconds": 1800 },
+      "agent": {
+        "adapter": "codex",
+        "command": "codex",
+        "args": [],
+        "env": {},
+        "config": { "model": "gpt-6.1-sol", "effort": "low" }
+      }
     }
   }
 }
