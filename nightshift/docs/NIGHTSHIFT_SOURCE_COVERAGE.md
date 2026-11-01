@@ -33,8 +33,8 @@ For every later simplification, compare the changed source hashes and each affec
 | [nightshift/tools/setup.sh](../tools/setup.sh) | a2cbd18108502b18d4f1a8ad83c3455a94888fbd6cbe65a4ee53c5c1075b3644 |
 | [nightshift/tools/setup.ps1](../tools/setup.ps1) | 31fbe3b44ed2b160342d0b507931f1e23f1ba57f62ceba03ec92d7e4cf0802b6 |
 | [nightshift/scratch_review.py](../scratch_review.py) | 146f28c2325e9bfee6c3c94877bb37bffbd9dc45d00db16204f4722df4e7964c |
-| [nightshift/install-manifest.json](../install-manifest.json) | 9dd5d9f680653ab32c258d78e73baf5926830c6d70d165a75dddaddff95b5b3e |
-| [install.sh](../../install.sh) | 8b24daafc23e6914c45a91584df72f72117daa88edfdda403ef1b723b08222d2 |
+| [nightshift/install-manifest.json](../install-manifest.json) | eb84195699956a7d644a272804b4ddd18ef607bd7a50fd6895fef3ad49a5bfaf |
+| [install.sh](../../install.sh) | fdeeb5921379ed67e230dcc3672017dcd5a2fbc09e0ffbe8059ff89edbd007c0 |
 | [remove.sh](../../remove.sh) | dc903ef55e497f8eeaaf5829ffc46f0c0cf81aa72fe78f670a8b3c314837242e |
 | [README.md](../../README.md) | dcb943b41c867909a7f697836c2e4a176e7d403d938b4b4ad4c8b3dbf9b81374 |
 | [test/README.md](../../test/README.md) | f08d9ab6eb15eb369421ef3b4bc405c8f0f2dd26f60b89aac24dbc139b6a409b |

@@ -3362,6 +3362,8 @@ class InstallerIntegrationTests(unittest.TestCase):
             self.assertFalse((target / "nightshift/skills").exists())
             self.assertEqual((target / "nightshift/docs/custom.md").read_text(), "Keep project notes.\n")
             self.assertTrue((target / "nightshift/install-manifest.json").is_file())
+            self.assertTrue((target / "nightshift/config.json").is_file())
+            self.assertTrue((target / "nightshift/PORTING_GUIDE.md").is_file())
             self.assertTrue((target / ".agents/skills/engineering/tdd/tests.md").is_file())
             self.assertTrue((target / ".agents/skills/nightshift/planner/SKILL.md").is_file())
             self.assertTrue((target / ".skills/universal-build-verify.md").is_file())
@@ -3425,6 +3427,34 @@ class InstallerIntegrationTests(unittest.TestCase):
                                     cwd=ROOT, capture_output=True, text=True, timeout=10)
             self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
             self.assertIn("Refusing to install NightShift into its source repository.", result.stderr)
+
+    @unittest.skipUnless((ROOT / "install.sh").exists(), "source checkout only")
+    def test_installer_deploys_and_preserves_porting_guide(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "project"
+            target.mkdir()
+            seed_parser_environment(target)
+            install = subprocess.run(["bash", str(ROOT / "install.sh"), str(target)],
+                                     cwd=ROOT, capture_output=True, text=True, timeout=30)
+            self.assertEqual(install.returncode, 0, install.stdout + install.stderr)
+            guide = target / "nightshift/PORTING_GUIDE.md"
+            self.assertTrue(guide.is_file())
+            self.assertIn("NightShift Project Porting & Deployment Guide", guide.read_text())
+
+            # Verify customized / completed guide survives re-install
+            guide.write_text("CUSTOM PORTING NOTES\n[x] Completed\n")
+            update = subprocess.run(["bash", str(target / "nightshift/install.sh"), str(target)],
+                                    cwd=target, capture_output=True, text=True, timeout=30)
+            self.assertEqual(update.returncode, 0, update.stdout + update.stderr)
+            self.assertEqual(guide.read_text(), "CUSTOM PORTING NOTES\n[x] Completed\n")
+
+            # Verify .ported marker prevents re-creating guide if deleted
+            guide.unlink()
+            (target / "nightshift/.ported").touch()
+            update2 = subprocess.run(["bash", str(target / "nightshift/install.sh"), str(target)],
+                                     cwd=target, capture_output=True, text=True, timeout=30)
+            self.assertEqual(update2.returncode, 0, update2.stdout + update2.stderr)
+            self.assertFalse(guide.exists())
 
 
 if __name__ == "__main__":

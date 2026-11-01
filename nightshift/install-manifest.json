@@ -21,7 +21,8 @@
     "acceptance.py",
     "lifecycle.py",
     "unittest_hot.py",
-    "acceptance.md"
+    "acceptance.md",
+    "PORTING_GUIDE.md"
   ],
   "skill_files": [
     {

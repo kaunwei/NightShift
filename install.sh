@@ -61,6 +61,8 @@ for relative in manifest["runtime"]:
     origin, destination = source / relative, target / relative
     if origin.resolve() == destination.resolve():
         continue
+    if relative == "PORTING_GUIDE.md" and (destination.exists() or (destination.parent / ".ported").exists()):
+        continue
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(origin, destination)
 PYDEPLOY
@@ -352,8 +354,15 @@ bash -n "$TARGET_DIR/nightshift/"*.sh
 sh -n "$TARGET_DIR/nightshift/tools/setup.sh"
 "$PYTHON_BIN" -c 'import ast, pathlib, sys; ast.parse(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))' "$TARGET_DIR/nightshift/worker_runtime.py"
 "$PYTHON_BIN" -c 'import ast, pathlib, sys; ast.parse(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))' "$TARGET_DIR/nightshift/tools/index.py"
+[ -f "$TARGET_DIR/nightshift/config.json" ] || { echo "Missing config.json after install" >&2; exit 1; }
+[ -f "$TARGET_DIR/nightshift/PORTING_GUIDE.md" ] || [ -f "$TARGET_DIR/nightshift/.ported" ] || {
+  echo "Missing PORTING_GUIDE.md after install" >&2; exit 1;
+}
 
 printf '\nNightShift %s complete.\n' "$([ "$IS_UPDATE" -eq 1 ] && echo update || echo install)"
 printf '  Worker: %s\n  Queue:  %s\n  Index:  %s\n' \
   "$TARGET_DIR/nightshift/worker.sh" "$TARGET_DIR/nightshift/tasks.txt" \
   "$TARGET_DIR/nightshift/.scratch/code-index/INDEX.md"
+if [ -f "$TARGET_DIR/nightshift/PORTING_GUIDE.md" ]; then
+  printf '  Guide:  %s\n' "$TARGET_DIR/nightshift/PORTING_GUIDE.md"
+fi
