@@ -1,117 +1,348 @@
-# NightShift deployment guide
+# NightShift Project Porting & Deployment Guide
 
-## Ownership and layout
+> **Porting Status**: [ ] In Progress (mark as `[x] Completed` when your project configuration is verified)
+>
+> Once marked completed (or when `nightshift/.ported` exists), `install.sh` will never overwrite your project-specific configurations or this porting guide during future updates.
 
-Install NightShift into an existing project with `./install.sh /path/to/project`. The installer uses `nightshift/install-manifest.json` to deploy runtime files and tools under the project's `nightshift/` directory; configuration and Worker state are initialized only when missing. Development docs and experiments stay in the NightShift source checkout. Skills use the root discovery paths in both source and consuming projects. The agent host's discovery entries remain under `.agents/skills/` and `.skills/` so Planner and Worker skills are loaded by the host.
+---
 
-Key paths in an installed project:
+## 1. Overview & Architecture
 
-- `nightshift/worker.sh`, `nightshift/worker_runtime.py`: Worker entry point and runtime.
-- `nightshift/adapters/`: protocol adapters and the project-owned `agents.json` registry.
-- `nightshift/tools/`: multi-language Tree-sitter indexer, parser registry, requirements, and private `.venv`.
-- `nightshift/code-index.toml`: project-owned source selection and `tool`/`project` scope rules.
-- `nightshift/tasks.txt`, `nightshift/tasks.done`, `nightshift/progress.log`, `nightshift/worker.status`, `nightshift/.worker.log`, and `nightshift/.worker.notes.md`: queue, history, runtime evidence, status, logs, and reusable environment notes.
-- `nightshift/.worker-*`: score, event, ghost, and related runtime state.
-- `nightshift/.scratch/`: attempt baselines and failed-task recovery snapshots.
-- `.reports/`, `.trials/`, and application source folders remain in the project root because they describe or contain project work.
+NightShift provides a 24-hour unattended dual-loop AI worker daemon. The daemon continuously consumes development tasks from `nightshift/tasks.txt`, executes them with registered agent adapters (Codex, Antigravity, etc.), and enforces rigorous test-driven acceptance before committing changes to Git.
 
-## Install and update
+### Dual-Phase Acceptance Model: Hot vs. Cold
 
-Run the same installer for a fresh install or update:
-
-```sh
-./install.sh /path/to/project
+```
+                    +---------------------------+
+                    |  Next Task in tasks.txt   |
+                    +-------------+-------------+
+                                  |
+                                  v
+                    +---------------------------+
+                    | Agent Execution (TDD)     |
+                    +-------------+-------------+
+                                  |
+                                  v
+                    +---------------------------+
+                    | [HOT ACCEPTANCE]          |  <- Fast: tests touched modules & new TDD cases
+                    +-------------+-------------+
+                                  | Pass
+                                  v
+                    +---------------------------+
+                    | Git Commit & Streak Score |
+                    +-------------+-------------+
+                                  |
+               +------------------+------------------+
+               | Every cold_every tasks (e.g. 5)     | Other tasks
+               v                                     v
++-------------------------------+      +---------------------------+
+| [COLD ACCEPTANCE]             |      | Wait for next task        |
+| Full regression suite         |      +---------------------------+
+| Clean tree (git clean -fd)    |
++--------------+----------------+
+               | Pass
+               v
++-------------------------------+
+| Silent pass; ready next task  |
++-------------------------------+
 ```
 
-The installed copy is `nightshift/install.sh`; running it again from the target updates that installation. There is no separate updater. The installer refreshes NightShift files, preserves the project-owned index config and agent registry/config, migrates old root-level Worker state into `nightshift/`, and installs `tree-sitter-language-pack` with pip into `nightshift/tools/.venv`. It validates shell and Python syntax before reporting success.
+1. **Hot Acceptance (`acceptance.hot`)**:
+   - Executes immediately after each development task finishes and before changes are committed.
+   - Fast, focused gate: verifies the new TDD case or touched module without waiting for slow project-wide test suites.
+   - Ensures that every committed task introduces passing, verified test evidence.
+2. **Cold Acceptance (`acceptance.cold`)**:
+   - Runs periodically after every `cold_every` successfully committed development tasks (e.g., every 5 tasks), or on-demand via a `[COLD]` task.
+   - Complete project regression suite run in a clean workspace (`git reset --hard HEAD && git clean -fd`).
+   - Ensures long-term project stability, catches hidden integration regressions, and requires a strictly clean working tree (no untracked non-ignored artifacts).
 
-Older NightShift files can be removed with the `./remove.sh /path/to/project` helper. It removes the NightShift package, durable git state (`.git/nightshift`), project-level worker artifacts (`.reports`, `.trials`, `.preview`, `.worker-tree`, `.worker.env`), and the NightShift skill namespace while retaining application code, unrelated scripts/docs/skills, and the project-owned configuration (`nightshift/config.json` and `nightshift/code-index.toml`).
+---
 
-## Agent configuration
+## 2. Directory Layout & Ownership
 
-Edit `nightshift/config.json` (or legacy `nightshift/adapters/agents.json`). In `nightshift/config.json`, the `"agents"` section separates Worker limits from the selected adapter and executable:
+Installing NightShift into a project creates the self-contained `nightshift/` directory:
+
+| Path | Purpose |
+| --- | --- |
+| `nightshift/config.json` | **Primary configuration**: acceptance gates (`hot`, `cold`), agent registry, and code index scope. |
+| `nightshift/PORTING_GUIDE.md` | This porting guide and project porting checklist. |
+| `nightshift/worker.sh` | Main daemon launcher script (`./nightshift/worker.sh` or `RUN_ONCE=1 ./nightshift/worker.sh`). |
+| `nightshift/worker_runtime.py` | Daemon runtime engine and CLI commands. |
+| `nightshift/lifecycle.py` | Task dispatch, state transitions, pause handling, and error recovery. |
+| `nightshift/acceptance.py` | Acceptance engine executing hot and cold test runners. |
+| `nightshift/unittest_hot.py` | Built-in Python unittest AST fingerprinting and hot discovery runner. |
+| `nightshift/tasks.txt` | FIFO task queue (one task description per non-comment line). |
+| `nightshift/tasks.done` | Completed task history with execution timestamps. |
+| `nightshift/progress.log` | Human-readable audit log of daemon progress and task outcomes. |
+| `nightshift/worker.status` | Machine-readable worker status (`IDLE`, `RUNNING`, `PAUSED`, `GATE_FAILED`, etc.). |
+| `nightshift/code-index.toml` | Tree-sitter index scope configuration (project vs. tool boundaries). |
+| `nightshift/adapters/` | Protocol adapters for Codex, AgY, and generic JSON agents. |
+| `nightshift/tools/` | Multi-language Tree-sitter indexing tool with private virtualenv. |
+| `nightshift/.scratch/` | Runtime scratch space: attempt snapshots, code index database, pressure reviews. |
+| `.agents/skills/` | Agent skills installed to host discovery paths (Planner, Explore, Universal Build/Verify). |
+
+---
+
+## 3. Configuration Contract: `nightshift/config.json`
+
+All runtime settings live in `nightshift/config.json`. Below is the complete schema with default settings:
 
 ```json
 {
+  "version": 1,
+  "acceptance": {
+    "hot": "python3 nightshift/unittest_hot.py --start test",
+    "cold": "python3 -m unittest discover -s test",
+    "cold_every": 5,
+    "timeout": 180,
+    "wiring": []
+  },
   "agents": {
     "codex-main": {
       "default": true,
-      "worker": { "task_timeout_seconds": 1800 },
+      "worker": {
+        "step_base": 22,
+        "step_per_file": 5,
+        "task_timeout_seconds": 1800,
+        "research_step_budget": 100
+      },
       "agent": {
         "adapter": "codex",
         "command": "codex",
         "args": [],
         "env": {},
-        "config": { "model": "gpt-6.1-sol", "effort": "low" }
+        "config": {
+          "model": "gpt-6-luna",
+          "effort": "low",
+          "approval_mode": "auto",
+          "sandbox": "workspace-write",
+          "ephemeral": "1"
+        }
+      }
+    },
+    "agy-backup": {
+      "default": false,
+      "worker": {
+        "task_timeout_seconds": 1800,
+        "research_step_budget": 100
+      },
+      "agent": {
+        "adapter": "agy",
+        "command": "agy",
+        "args": [],
+        "env": {},
+        "config": {
+          "model": "gemini-3.8-flash-low",
+          "effort": "low",
+          "mode": "accept-edits"
+        }
       }
     }
+  },
+  "code_index": {
+    "include": ["**/*"],
+    "exclude": [],
+    "tool": ["nightshift/tools/**"],
+    "project": ["**/*"]
   }
 }
 ```
 
-Skills install only to `.agents/skills/nightshift/`, shared `.agents/skills/<category>/<skill>/` packages and `.skills/universal-build-verify.md`, including their referenced resources. Updates remove exact retired NightShift assets while preserving unknown project notes.
+### Acceptance Fields:
 
-The installer preserves an existing registry and migrates a legacy `agents/agents.json` or `scripts/adapters/agents.json`. A registration returning no response or a confirmed timeout may fail over in registry order; the runtime records a Planner review gate before replacement work proceeds.
+- **`hot`** (string, required): Shell command executed for hot acceptance from the project root. Exit code 0 indicates success.
+- **`cold`** (string, required): Shell command executed for cold regression from the project root. Exit code 0 indicates success.
+- **`cold_every`** (integer, optional): Frequency of automatic cold regression runs. If set to `5`, cold runs after every 5 successfully committed development tasks. Set to `0` or omit to run cold only when explicitly requested via queue.
+- **`timeout`** (integer, default `180`): Maximum execution time in seconds for acceptance commands before aborting.
+- **`wiring`** (array of strings, default `[]`): Explicit allowlist of configuration or registration files that Ghost agent is permitted to edit when connecting newly created tests.
 
-## Run, pause, and inspect
+---
 
-From the project root:
+## 4. Adapting Hot & Cold for Your Project
 
-```sh
+Different languages and test frameworks have different commands. Configure `acceptance.hot` and `acceptance.cold` in `nightshift/config.json` according to your project stack:
+
+### A. Python Projects
+
+- **Standard `unittest` (Default)**:
+  ```json
+  "acceptance": {
+    "hot": "python3 nightshift/unittest_hot.py --start test",
+    "cold": "python3 -m unittest discover -s test",
+    "cold_every": 5
+  }
+  ```
+- **`pytest`**:
+  ```json
+  "acceptance": {
+    "hot": "pytest -m 'not slow' -q",
+    "cold": "pytest",
+    "cold_every": 5
+  }
+  ```
+
+### B. C / C++ Projects (e.g. TinyCpuSim, Make, CMake)
+
+- **Makefile**:
+  ```json
+  "acceptance": {
+    "hot": "make -j test-quick",
+    "cold": "make clean && make -j test",
+    "cold_every": 5
+  }
+  ```
+- **CMake / CTest**:
+  ```json
+  "acceptance": {
+    "hot": "ctest -L unit --output-on-failure",
+    "cold": "ctest --output-on-failure",
+    "cold_every": 5
+  }
+  ```
+
+### C. Rust Projects (Cargo)
+
+```json
+"acceptance": {
+  "hot": "cargo test --lib --quiet",
+  "cold": "cargo test --all",
+  "cold_every": 5
+}
+```
+
+### D. Go Projects
+
+```json
+"acceptance": {
+  "hot": "go test -short ./...",
+  "cold": "go test -v ./...",
+  "cold_every": 5
+}
+```
+
+### E. JavaScript / TypeScript Projects (Vitest / Jest / npm)
+
+- **Vitest**:
+  ```json
+  "acceptance": {
+    "hot": "npx vitest run --changed",
+    "cold": "npx vitest run",
+    "cold_every": 5
+  }
+  ```
+- **Jest**:
+  ```json
+  "acceptance": {
+    "hot": "npx jest -o --passWithNoTests",
+    "cold": "npx jest --ci",
+    "cold_every": 5
+  }
+  ```
+
+---
+
+## 5. Advanced Hot Runner Customization
+
+By default, NightShift executes `hot` and `cold` via bash (`acceptance.DefaultAcceptanceRunner`). When the hot command runs, NightShift provides environment variables:
+
+| Environment Variable | Description |
+| --- | --- |
+| `NIGHTSHIFT_PHASE` | Current phase: `"discover"` or `"run"`. |
+| `NIGHTSHIFT_RESULT` | Path where the runner must write structured JSON result (if providing fine-grained case tracking). |
+| `NIGHTSHIFT_RUN` | Unique nonce to be echoed in the result output. |
+| `NIGHTSHIFT_BASE` | Commit SHA at task start for diff / AST baseline comparison. |
+| `NIGHTSHIFT_TASK` | Active Task ID (e.g., `"TASK-001"`). |
+| `NIGHTSHIFT_REQUIRED` | Required case IDs passed as JSON array string. |
+
+### Implementing a Custom Runner: `nightshift/acceptance_runner.py`
+
+If your project requires custom Python test discovery or custom test harness orchestration, create `nightshift/acceptance_runner.py` in your project root:
+
+```python
+import acceptance
+
+class ProjectRunner(acceptance.DefaultAcceptanceRunner):
+    def run_hot(self, args, result, run_verify):
+        # Custom setup, container execution, or targeted test discovery
+        return super().run_hot(args, result, run_verify)
+
+    def run_cold(self, root, run_verify):
+        # Custom full-suite execution or integration environment teardown
+        return super().run_cold(root, run_verify)
+
+def get_runner(root, cfg):
+    return ProjectRunner()
+```
+
+---
+
+## 6. Porting Checklist & Smoke Test
+
+Follow this step-by-step checklist to verify your porting:
+
+- [ ] **Step 1: Install NightShift**
+  ```bash
+  ./install.sh /path/to/project
+  cd /path/to/project
+  ```
+- [ ] **Step 2: Configure `nightshift/config.json`**
+  - Set `acceptance.hot` to your project's fast/unit test command.
+  - Set `acceptance.cold` to your project's full test suite command.
+  - Verify `agents` executable commands (e.g. `codex`, `agy`) are installed and in `$PATH`.
+- [ ] **Step 3: Test Hot Acceptance Manually**
+  Run your hot acceptance command directly in the project root:
+  ```bash
+  eval "$(python3 -c 'import json; print(json.load(open("nightshift/config.json"))["acceptance"]["hot"])')"
+  ```
+  Ensure it exits 0.
+- [ ] **Step 4: Test Cold Acceptance Manually**
+  Run your cold acceptance command directly in the project root:
+  ```bash
+  eval "$(python3 -c 'import json; print(json.load(open("nightshift/config.json"))["acceptance"]["cold"])')"
+  ```
+  Ensure it exits 0 and leaves no untracked files (`git status --porcelain` is clean).
+- [ ] **Step 5: Build Code Index**
+  ```bash
+  python3 nightshift/worker_runtime.py code-index build
+  python3 nightshift/worker_runtime.py code-index query symbol main --scope project
+  ```
+- [ ] **Step 6: Run a Single Task Trial**
+  Add a test task to `nightshift/tasks.txt`:
+  ```bash
+  echo "Add a minimal test case to verify worker pipeline" >> nightshift/tasks.txt
+  RUN_ONCE=1 ./nightshift/worker.sh
+  ```
+  Verify the worker completes the task, passes hot acceptance, commits to git, and updates `nightshift/progress.log`.
+- [ ] **Step 7: Mark Porting as Completed**
+  Update the header of this file:
+  ```markdown
+  > **Porting Status**: [x] Completed
+  ```
+  *(Or execute `touch nightshift/.ported`)*.
+  Once completed, `install.sh` will preserve your configuration and porting guide permanently.
+
+---
+
+## 7. Operating the Worker
+
+From your project root:
+
+```bash
+# Start 24-hour unattended worker daemon:
 ./nightshift/worker.sh
+
+# Run exactly one task and stop:
 RUN_ONCE=1 ./nightshift/worker.sh
+
+# Inspect current status:
 ./nightshift/status.sh
-./nightshift/reorder_queue.sh prepared-queue.txt
+
+# Watch progress in real-time:
+./nightshift/watch_worker.sh
+
+# Pause future task claims safely (active task completes first):
+touch nightshift/PAUSE
+
+# Resume daemon:
+rm -f nightshift/PAUSE
 ```
-
-The queue is `nightshift/tasks.txt`. Create `nightshift/PAUSE` to stop future claims after the active task finishes, then remove that file to resume. Check `nightshift/worker.status` to confirm the Worker is paused and has no active task. `nightshift/watch_worker.sh` can watch a task and process durable agent events.
-
-Worker execution stays in the project root so task targets and Git operations refer to application files. Runtime state paths are absolute paths under `nightshift/` by default; explicit environment overrides remain supported. Application reports and staged trials remain under `.reports/` and `.trials/`.
-
-## Scratch review
-
-Worker checks scratch pressure at startup, task boundaries and every 60 idle seconds. Defaults:
-`SCRATCH_REVIEW_ATTEMPTS_MB=100`, `SCRATCH_REVIEW_FAILED_MB=100`,
-`SCRATCH_REVIEW_FAILED_DIRS=20`; zero disables an individual trigger and
-`SCRATCH_REVIEW_ENABLED=0` disables monitoring. Values are inherited environment settings.
-The monitor reads file metadata only and inserts one deduplicated `SCRATCH-REVIEW-*` ticket.
-After review, unchanged pressure waits 24 hours; growth of at least 25% (minimum 1 MiB or 5 failure directories)
-allows another review sooner. Queued/active reviews are retained; an orphaned claim is requeued after 120 seconds.
-
-The ticket asks Worker to inspect at most eight candidates and remove at most five whole directories:
-only artifacts older than seven days, matching their task/attempt identity, with accepted final work and
-no live references. Recovery archives also need successful recovery proof. Newest per-task diagnostic
-anchors, active/pending/retried/unresolved work, unknown evidence, symlinks and the code index stay.
-Internal maintenance attempts use the runtime's completion receipt instead of Planner acceptance.
-These are Worker prompt rules, not a filesystem deletion sandbox; the monitor never deletes artifacts.
-
-Worker overwrites `nightshift/.scratch/review/last-review.json` (maximum 1,024 bytes) with byte counts,
-removed paths, kept counts and a short note. The fixed scheduler state and lock are in the same directory.
-No report history, normal task audit/score entry or Planner skill change is added. A failed review produces
-a compact failure report and normal queued work continues; cancellation, provider gates and unsafe recovery
-retain the existing runtime stop/retry behavior.
-
-Read only current sizes without creating a ticket:
-`python3 nightshift/worker_runtime.py scratch-review-check --root . --stats-only`.
-
-## Code index
-
-The installer creates the parser environment automatically. Agents use `nightshift/.scratch/code-index/INDEX.md` (at most 8 KiB); `index.json` in the same directory is script-owned cache. Build and query from the consuming repository root:
-
-```sh
-python3 nightshift/worker_runtime.py code-index build
-python3 nightshift/worker_runtime.py code-index query symbol ExampleType --scope project --format compact
-```
-
-Use `--scope project` for application code, `--scope tool` for `nightshift/tools/`, or `--scope all` when a change crosses both. The index reports Tree-sitter syntax evidence; reference and caller matches are leads, not compiler-resolved bindings.
-
-## Verification
-
-The source repository tests use fake agents and do not call a live model:
-
-```sh
-python3 -m unittest discover -s test -v
-bash -n install.sh remove.sh nightshift/*.sh
-```
-
-The install smoke test removes a disposable install, installs it again, checks parser dependencies, then runs code and research tickets through the installed Worker.

@@ -165,6 +165,12 @@ rmdir "$TARGET_DIR/.nightshift" 2>/dev/null || true
 if [ ! -f "$TARGET_DIR/nightshift/config.json" ] && [ -f "$BUNDLE_SOURCE/config.json" ]; then
   cp "$BUNDLE_SOURCE/config.json" "$TARGET_DIR/nightshift/config.json"
 fi
+# Deploy PORTING_GUIDE.md for new projects; never overwrite if already present or porting is completed.
+if [ -f "$BUNDLE_SOURCE/PORTING_GUIDE.md" ]; then
+  if [ ! -f "$TARGET_DIR/nightshift/PORTING_GUIDE.md" ] && [ ! -f "$TARGET_DIR/nightshift/.ported" ]; then
+    cp "$BUNDLE_SOURCE/PORTING_GUIDE.md" "$TARGET_DIR/nightshift/PORTING_GUIDE.md"
+  fi
+fi
 if [ ! -f "$TARGET_DIR/nightshift/adapters/agents.json" ]; then
   mkdir -p "$TARGET_DIR/nightshift/adapters"
   cp "$BUNDLE_SOURCE/adapters/agents.json" "$TARGET_DIR/nightshift/adapters/agents.json"

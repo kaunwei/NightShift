@@ -277,7 +277,8 @@ def clean(root):
     for name in ("tasks.txt", "nightshift/tasks.txt", "tasks.done", "nightshift/tasks.done",
                  "progress.log", "nightshift/progress.log",
                  "nightshift/config.json", "nightshift/acceptance.json",
-                 "nightshift/code-index.toml", "nightshift/adapters/agents.json"):
+                 "nightshift/code-index.toml", "nightshift/adapters/agents.json",
+                 "nightshift/PORTING_GUIDE.md", "nightshift/.ported"):
         target = Path(root) / name
         if target.is_file():
             preserved[name] = target.read_bytes()

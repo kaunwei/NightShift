@@ -39,6 +39,16 @@ if [ -f "$TARGET_DIR/nightshift/config.json" ]; then
   CONFIG_JSON="$(mktemp "${TMPDIR:-/tmp}/nightshift-config.XXXXXX")"
   cp "$TARGET_DIR/nightshift/config.json" "$CONFIG_JSON"
 fi
+PORTING_GUIDE=""
+if [ -f "$TARGET_DIR/nightshift/PORTING_GUIDE.md" ]; then
+  PORTING_GUIDE="$(mktemp "${TMPDIR:-/tmp}/nightshift-porting-guide.XXXXXX")"
+  cp "$TARGET_DIR/nightshift/PORTING_GUIDE.md" "$PORTING_GUIDE"
+fi
+PORTED_MARKER=""
+if [ -f "$TARGET_DIR/nightshift/.ported" ]; then
+  PORTED_MARKER="$(mktemp "${TMPDIR:-/tmp}/nightshift-ported.XXXXXX")"
+  cp "$TARGET_DIR/nightshift/.ported" "$PORTED_MARKER"
+fi
 
 rm -rf "$TARGET_DIR/nightshift"
 if [ -n "$SCOPE_CONFIG" ]; then
@@ -50,6 +60,16 @@ if [ -n "$CONFIG_JSON" ]; then
   mkdir -p "$TARGET_DIR/nightshift"
   cp "$CONFIG_JSON" "$TARGET_DIR/nightshift/config.json"
   rm -f "$CONFIG_JSON"
+fi
+if [ -n "$PORTING_GUIDE" ]; then
+  mkdir -p "$TARGET_DIR/nightshift"
+  cp "$PORTING_GUIDE" "$TARGET_DIR/nightshift/PORTING_GUIDE.md"
+  rm -f "$PORTING_GUIDE"
+fi
+if [ -n "$PORTED_MARKER" ]; then
+  mkdir -p "$TARGET_DIR/nightshift"
+  cp "$PORTED_MARKER" "$TARGET_DIR/nightshift/.ported"
+  rm -f "$PORTED_MARKER"
 fi
 
 # Remove durable Git state directory owned by NightShift.
