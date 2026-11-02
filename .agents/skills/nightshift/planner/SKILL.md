@@ -38,16 +38,18 @@ commits and scores on the same current branch. Successful tasks need no manual r
 
 ## Supervise
 
-After dispatching tasks, Planner MUST immediately delegate supervision to Queue Sentinel for 0-token background streaming wait on the entire queue:
+After dispatching tasks, delegate supervision to a Queue Sentinel and wait for its notifications using long, notification-interruptible waits supported by the host. Avoid fixed 60-second Planner wakeups and routine Worker status/log polling:
 
     WORKER_INACTIVE_REPEAT=1 bash nightshift/watch_worker.sh 0 5
 
 Run this command as a background process and end the turn. While the watcher runs, Terminal A (Planner) consumes 0 LLM tokens. Do NOT poll in a chat loop. Do NOT pass a single TASK-ID unless conducting interactive single-task diagnosis.
 
-The Worker runtime automatically drains FIFO tasks sequentially. Normal task completion does NOT interrupt Planner. The host reactive wakeup will notify Planner ONLY when decision/intervention is required:
-- `[SENTINEL_COMPLETED]`: Entire queue is empty (`REMAINING_TASKS == 0` and worker entered `IDLE`).
+The Worker runtime owns execution timeouts and cancellation. Normal task completion does NOT interrupt Planner. Planner intervenes on fresh completion of the entire batch, failure, blockage, failover, or another decision event; RUNNING and heartbeat updates require no action:
+- `[SENTINEL_COMPLETED]`: Entire batch queue is empty (`REMAINING_TASKS == 0` and worker entered `IDLE`).
 - `[BLOCKED]` / `PAUSED_FOR_PLANNER` / `[SCOPE_BLOCKED]`: Worker blocked or requested decomposition.
 - `[SENTINEL_INACTIVE]`: Worker heartbeat became stale.
+
+A wait-window expiry only renews notification waiting. A Sentinel timeout or stale status is not proof that the current attempt failed; require fresh task-scoped evidence before recovery or acceptance.
 
 Keep the same watcher process alive across inactivity notifications. Queue Sentinel relays
 each `[SENTINEL_INACTIVE]` line immediately to Planner with `send_message`; Planner sends one
