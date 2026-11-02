@@ -38,14 +38,9 @@ commits and scores on the same current branch. Successful tasks need no manual r
 
 ## Supervise
 
-After dispatching tasks, Planner MUST immediately delegate supervision to Queue Sentinel for 0-token background streaming wait:
+Use a Queue Sentinel for interruptible streaming waits:
 
     WORKER_INACTIVE_REPEAT=1 bash nightshift/watch_worker.sh 0 5 TASK-ID
-
-Run this command as a background process and end the turn. While the watcher runs, Terminal A (Planner) consumes 0 LLM tokens. Do NOT poll in a chat loop. The host reactive wakeup will notify Planner upon:
-- `[SENTINEL_COMPLETED]`: Task completed and passed mechanical audit.
-- `[BLOCKED]` / `PAUSED_FOR_PLANNER`: Worker blocked or requested decomposition.
-- `[SENTINEL_INACTIVE]`: Worker heartbeat became stale.
 
 Keep the same watcher process alive across inactivity notifications. Queue Sentinel relays
 each `[SENTINEL_INACTIVE]` line immediately to Planner with `send_message`; Planner sends one
