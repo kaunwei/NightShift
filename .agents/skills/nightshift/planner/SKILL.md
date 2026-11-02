@@ -38,25 +38,16 @@ commits and scores on the same current branch. Successful tasks need no manual r
 
 ## Supervise
 
-After dispatching tasks, delegate supervision to a Queue Sentinel and wait for its notifications using long, notification-interruptible waits supported by the host. Avoid fixed 60-second Planner wakeups and routine Worker status/log polling:
+Delegate queue monitoring to Queue Sentinel and end the turn. Never poll status or chat loops.
 
     WORKER_INACTIVE_REPEAT=1 bash nightshift/watch_worker.sh 0 5
 
-Run this command as a background process and end the turn. While the watcher runs, Terminal A (Planner) consumes 0 LLM tokens. Do NOT poll in a chat loop. Do NOT pass a single TASK-ID unless conducting interactive single-task diagnosis.
+Worker owns execution and drains tasks autonomously. Wake Planner **only** on:
+- `[SENTINEL_COMPLETED]`: Entire queue drained (`IDLE`).
+- `[BLOCKED]` / `PAUSED_FOR_PLANNER`: Unrecoverable failure or needs decomposition.
+- `[SENTINEL_INACTIVE]`: Stale heartbeat (relay note and keep waiting).
 
-The Worker runtime owns execution timeouts and cancellation. Normal task completion does NOT interrupt Planner. Planner intervenes on fresh completion of the entire batch, failure, blockage, failover, or another decision event; RUNNING and heartbeat updates require no action:
-- `[SENTINEL_COMPLETED]`: Entire batch queue is empty (`REMAINING_TASKS == 0` and worker entered `IDLE`).
-- `[BLOCKED]` / `PAUSED_FOR_PLANNER` / `[SCOPE_BLOCKED]`: Worker blocked or requested decomposition.
-- `[SENTINEL_INACTIVE]`: Worker heartbeat became stale.
-
-A wait-window expiry only renews notification waiting. A Sentinel timeout or stale status is not proof that the current attempt failed; require fresh task-scoped evidence before recovery or acceptance.
-
-Keep the same watcher process alive across inactivity notifications. Queue Sentinel relays
-each `[SENTINEL_INACTIVE]` line immediately to Planner with `send_message`; Planner sends one
-user-facing inactivity reminder for each line and keeps waiting. Inactivity is an observation,
-not completion. RUNNING/VERIFYING resets the timer. Unexpected watcher exit is an observer fault:
-restore an exited observer separately from diagnosing task health. Active heartbeats need no
-routine message. Pair DONE with automatic audit evidence; completion is script-owned.
+Normal task completions and heartbeats require zero Planner intervention. Stale timeout is not task failure—require fresh evidence before acting.
 
 ## Recover
 
