@@ -25,7 +25,9 @@ def runtime(*args, env=None):
     args = list(args)
     if args and args[0] == "daemon" and env and env.get("AI_AGENTS_JSON"):
         root_index = args.index("--root") + 1
-        write_legacy_registry(Path(args[root_index]), env["AI_AGENTS_JSON"])
+        root = Path(args[root_index])
+        write_legacy_registry(root, env["AI_AGENTS_JSON"])
+        env = {**env, "TASKS_FILE": str(root / "tasks.txt")}
     return subprocess.run(
         [sys.executable, str(RUNTIME), *map(str, args)],
         text=True,
@@ -54,14 +56,14 @@ def write_legacy_registry(root, raw):
                  if key not in {"id", "adapter", "command", "args", "env", "model", "effort", "overrides", "config"}}
         entry.update({
             "default": index == 0,
-            "worker": {},
+            "worker": {"step_base": {"L1": 60, "L2": 40, "L3": 20}},
             "agent": {"adapter": profile.get("adapter", ""), "command": command,
                       "args": agent_args, "env": agent_env, "config": agent_config},
         })
         registry[name] = entry
-    agent_dir = Path(root) / "scripts/adapters"
+    agent_dir = Path(root) / "nightshift"
     agent_dir.mkdir(parents=True, exist_ok=True)
-    (agent_dir / "agents.json").write_text(json.dumps(registry))
+    (agent_dir / "config.json").write_text(json.dumps({"version": 1, "agents": registry}))
 
 
 _real_subprocess_run = subprocess.run
@@ -91,7 +93,7 @@ def _run_worker_fixture_compat(command, *args, **kwargs):
                 write_legacy_registry(root, settings.pop("AI_AGENTS_JSON"))
                 if _real_subprocess_run(["git", "-C", str(root), "rev-parse", "--is-inside-work-tree"],
                                         capture_output=True, text=True).returncode == 0:
-                    _real_subprocess_run(["git", "-C", str(root), "add", "scripts/adapters/agents.json"], check=True)
+                    _real_subprocess_run(["git", "-C", str(root), "add", "nightshift/config.json"], check=True)
                     if _real_subprocess_run(["git", "-C", str(root), "diff", "--cached", "--quiet"]).returncode:
                         _real_subprocess_run(["git", "-C", str(root), "-c", "user.name=Fixture",
                                               "-c", "user.email=fixture@example.invalid",
@@ -236,6 +238,13 @@ class InPlaceExecutionContractTests(unittest.TestCase):
 
 
 class AgentConfigContractTests(unittest.TestCase):
+    def load_agents(self, path):
+        profiles = json.loads(path.read_text())
+        for profile in profiles.values():
+            profile.setdefault("worker", {}).setdefault("step_base", {"L1": 60, "L2": 40, "L3": 20})
+        path.write_text(json.dumps({"version": 1, "agents": profiles}))
+        return runtime_module.load_agent_registry(path)
+
     def test_agent_config_separates_worker_timeout_from_real_agent_launch(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "agents.json"
@@ -253,7 +262,7 @@ class AgentConfigContractTests(unittest.TestCase):
                 },
             }))
 
-            (agent,) = runtime_module.load_agent_registry(path)
+            (agent,) = self.load_agents(path)
 
             self.assertEqual(agent["worker"]["task_timeout_seconds"], 73)
             self.assertEqual(agent["adapter"], "codex")
@@ -275,7 +284,7 @@ class AgentConfigContractTests(unittest.TestCase):
                     "agent": {"adapter": "codex", "command": "codex"},
                 },
             }))
-            (agent,) = runtime_module.load_agent_registry(path)
+            (agent,) = self.load_agents(path)
             self.assertEqual(agent["worker"]["research_step_budget"], 150)
 
     def test_registry_orders_every_default_agent_first_and_allows_multiple_defaults(self):
@@ -287,7 +296,7 @@ class AgentConfigContractTests(unittest.TestCase):
                 "secondary-default": {"default": True, "worker": {}, "agent": {"adapter": "opaque", "command": "secondary"}},
             }))
 
-            agents = runtime_module.load_agent_registry(path)
+            agents = self.load_agents(path)
 
             self.assertEqual({agent["id"] for agent in agents[:2]}, {"main", "secondary-default"})
             self.assertEqual(agents[2]["id"], "backup")
@@ -302,7 +311,13 @@ class AgentConfigContractTests(unittest.TestCase):
                 "backup": {"default": False, "worker": {}, "agent": {"adapter": "opaque", "command": "backup"}},
                 "main": {"default": True, "worker": {}, "agent": {"adapter": "opaque", "command": "main"}},
             }))
-            env = {**os.environ, "RUN_ONCE": "1", "POLL_INTERVAL": "0"}
+            profiles = json.loads((config_dir / "agents.json").read_text())
+            for profile in profiles.values():
+                profile["worker"]["step_base"] = {"L1": 60, "L2": 40, "L3": 20}
+            owned = root / "nightshift"
+            owned.mkdir()
+            (owned / "config.json").write_text(json.dumps({"version": 1, "agents": profiles}))
+            env = {**os.environ, "RUN_ONCE": "1", "POLL_INTERVAL": "0", "TASKS_FILE": str(root / "tasks.txt")}
 
             result = runtime("daemon", "--root", root, env=env)
 
@@ -1038,6 +1053,11 @@ class PollContractTests(unittest.TestCase):
             tasks, done = root / "tasks.txt", root / "tasks.done"
             tasks.write_text("# queued\nTASK-2 | LEVEL: 2 | TARGET: a.py,b.py | VERIFY: true\n")
             done.write_text("[DONE] TASK-1\n")
+            owned = root / "nightshift"
+            owned.mkdir()
+            (owned / "config.json").write_text(json.dumps({"version": 1, "agents": {
+                "main": {"worker": {"step_base": {"L1": 60, "L2": 12, "L3": 20}},
+                         "agent": {"adapter": "generic", "command": "unused"}}}}))
             result = runtime("poll-next", "--tasks", tasks, "--done", done,
                              "--pause", root / "PAUSE", "--work-dir", root,
                              "--step-base", "12", "--step-per-file", "5")
@@ -3310,6 +3330,7 @@ class InstallerIntegrationTests(unittest.TestCase):
             seed_parser_environment(target)
             (target / "nightshift/docs").mkdir(parents=True, exist_ok=True)
             (target / "nightshift/docs/custom.md").write_text("Keep project notes.\n")
+            (target / "nightshift/acceptance.json").write_text('{"version": 1, "hot": "legacy-hot"}')
             (target / "nightshift/docs/NIGHTSHIFT_SPEC.md").write_text("Old shipped spec.\n")
             (target / "nightshift/skills/nightshift/planner").mkdir(parents=True)
             (target / "nightshift/skills/nightshift/planner/SKILL.md").write_text("Duplicate.\n")
@@ -3334,8 +3355,8 @@ class InstallerIntegrationTests(unittest.TestCase):
                                      cwd=ROOT, capture_output=True, text=True, timeout=60)
             self.assertEqual(install.returncode, 0, install.stdout + install.stderr)
             self.assertEqual(manifest.read_text(), '{"entries":[{"path":"custom/skills"}]}\n')
-            self.assertEqual((target / "nightshift/code-index.toml").read_text(), scope)
-            self.assertFalse((target / ".nightshift").exists())
+            self.assertFalse((target / "nightshift/code-index.toml").exists())
+            self.assertEqual((target / ".nightshift/code-index.toml").read_text(), scope)
             self.assertEqual((target / "nightshift/tasks.txt").read_text(), "TASK-OLD | ACTION: preserve queue\n")
             self.assertFalse((target / ".scratch").exists())
             self.assertEqual((target / "nightshift/.scratch/failed_tasks/TASK-OLD/status.txt").read_text(),
@@ -3375,17 +3396,18 @@ class InstallerIntegrationTests(unittest.TestCase):
 
             agent_registry = target / "nightshift/adapters/agents.json"
             custom_registry = '{"custom":{"default":true,"worker":{},"agent":{"adapter":"opaque","command":"custom","args":[],"env":{},"config":{}}}}\n'
-            agent_registry.write_text(custom_registry)
-            sentinel.unlink()
+            agent_registry.write_text("invalid legacy json")
+            config_before = (target / "nightshift/config.json").read_text()
             upgrade = subprocess.run(["bash", str(ROOT / "install.sh"), str(target)],
                                      cwd=target, capture_output=True, text=True, timeout=60)
             self.assertEqual(upgrade.returncode, 0, upgrade.stdout + upgrade.stderr)
             self.assertTrue(sentinel.is_file())
+            self.assertEqual(json.loads((target / "nightshift/config.json").read_text()), json.loads(config_before))
             update = subprocess.run(["bash", str(target / "nightshift/install.sh"), str(target)],
                                     cwd=target, capture_output=True, text=True, timeout=60)
             self.assertEqual(update.returncode, 0, update.stdout + update.stderr)
             self.assertTrue(sentinel.is_file())
-            self.assertEqual(agent_registry.read_text(), custom_registry)
+            self.assertEqual(agent_registry.read_text(), "invalid legacy json")
             self.assertEqual((target / "nightshift/tasks.txt").read_text(), "TASK-OLD | ACTION: preserve queue\n")
             self.assertTrue((target / "scripts/build_app.sh").is_file())
             self.assertTrue((target / "docs/APP_GUIDE.md").is_file())

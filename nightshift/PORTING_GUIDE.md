@@ -75,7 +75,7 @@ Installing NightShift into a project creates the self-contained `nightshift/` di
 | `nightshift/tasks.done` | Completed task history with execution timestamps. |
 | `nightshift/progress.log` | Human-readable audit log of daemon progress and task outcomes. |
 | `nightshift/worker.status` | Machine-readable worker status (`IDLE`, `RUNNING`, `PAUSED`, `GATE_FAILED`, etc.). |
-| `nightshift/code-index.toml` | Tree-sitter index scope configuration (project vs. tool boundaries). |
+| `nightshift/config.json` | Tree-sitter index scope configuration (project vs. tool boundaries). |
 | `nightshift/adapters/` | Protocol adapters for Codex, AgY, and generic JSON agents. |
 | `nightshift/tools/` | Multi-language Tree-sitter indexing tool with private virtualenv. |
 | `nightshift/.scratch/` | Runtime scratch space: attempt snapshots, code index database, pressure reviews. |

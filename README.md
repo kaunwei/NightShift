@@ -10,7 +10,7 @@ The intended workflow can run continuously, but the runtime does not start or su
 - `.agents/skills/nightshift/planner/` defines ticket planning, dispatch, acceptance, and recovery.
 - `.agents/skills/nightshift/explore/` defines read-only seam research and report handoff.
 - `.skills/universal-build-verify.md` defines Worker execution, verification, and closeout expectations.
-- `nightshift/.scratch/code-index/INDEX.md` is the bounded agent navigation map; `nightshift/tools/` owns the reusable Tree-sitter index CLI and parser registry. The consuming project owns the source selection and `tool`/`project` scope labels in `nightshift/code-index.toml`.
+- `nightshift/.scratch/code-index/INDEX.md` is the bounded agent navigation map; `nightshift/tools/` owns the reusable Tree-sitter index CLI and parser registry. The consuming project owns the source selection and `tool`/`project` scope labels in `nightshift/config.json`.
 - `nightshift/tasks.txt` is the FIFO queue. The runtime claims one ticket at a time and executes it sequentially. Dependency ordering and dispatch choices belong to the Planner; the runtime does not schedule a dependency graph or run a Planner.
 - `nightshift/progress.log`, `nightshift/tasks.done`, `nightshift/worker.status`, `nightshift/.worker.log`, and `nightshift/.worker-score.json` record runtime outcomes, current state, diagnostics, and shared reliability feedback. Attempt snapshots and failed-task recovery files live under `nightshift/.scratch/`. Worker checks their sizes without reading logs and queues one internal review when attempts or failures reach 100 MiB, or failure archives reach 20 directories. The Worker reviews deletion evidence and overwrites `nightshift/.scratch/review/last-review.json` (at most 1 KiB); Planner has no additional reading step.
 - Source-only `nightshift/docs/` contains the behavior spec, source-to-spec coverage, deployment guide, and NightShift operating guides. Root `docs/` remains available for project documentation and agent metadata.
@@ -27,7 +27,7 @@ Run the same installer again to update an existing deployment. The installed cop
 
 The installer also creates `nightshift/tools/.venv` and installs the parser dependencies with pip. Generated maps and script cache stay in the ignored `nightshift/.scratch/code-index/` directory.
 
-Worker-wide runtime settings are configured at the top of `nightshift/worker.sh`. Agent registrations live in `nightshift/adapters/agents.json`, keyed by agent name. The installer preserves an existing registry. The `nightshift/` folder contains NightShift-owned code and state; `.agents/skills/` retains the skill entry points required by agent hosts.
+Agent registrations, acceptance, and code-index settings live in `nightshift/config.json`. Restart `nightshift/worker.sh` to reload changes. Process controls such as `RUN_ONCE` remain environment variables. The installer preserves existing config. Each agent must define positive `worker.step_base` values for L1, L2, and L3. The `nightshift/` folder contains NightShift-owned code and state; `.agents/skills/` retains the skill entry points required by agent hosts.
 
 ## Run and inspect
 

@@ -2,7 +2,7 @@
 """Portable, testable operations behind the nightshift/worker.sh entry point.
 
 Worker settings come from the launcher environment; agent registrations are read
-from nightshift/adapters/agents.json.
+from nightshift/config.json.
 Each command receives explicit inputs so callers and tests exercise the same seam.
 """
 
@@ -31,6 +31,7 @@ import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import scratch_review
+import project_config
 def _import_nightshift_module(name):
     try:
         return importlib.import_module(name)
@@ -639,18 +640,10 @@ def parse_agent_registry(raw, defaults=None):
 def load_agent_registry(config_file):
     """Load the shared agent-name map and order default registrations first."""
     path = Path(config_file)
-    if not path.is_file():
-        return []
-    profiles = json.loads(path.read_text(encoding="utf-8"))
+    profiles = project_config.read(path)
+    profiles = profiles.get("agents", {})
     if not isinstance(profiles, dict):
         raise ValueError(f"{path} must contain an object keyed by agent name")
-    if "agents" in profiles and isinstance(profiles["agents"], dict):
-        profiles = profiles["agents"]
-    elif "acceptance" in profiles or "code_index" in profiles or "version" in profiles:
-        for fallback in [path.parent / "adapters" / "agents.json", path.parent / "agents.json"]:
-            if fallback.is_file():
-                return load_agent_registry(fallback)
-        return []
     normalized = []
     for name, profile in profiles.items():
         if not isinstance(name, str) or not name.strip() or not isinstance(profile, dict):
@@ -664,7 +657,7 @@ def load_agent_registry(config_file):
         agent = profile.get("agent")
         if not isinstance(worker, dict):
             raise ValueError(f"agent {name} worker config must be an object")
-        worker_unknown = set(worker) - {"task_timeout_seconds", "research_step_budget"}
+        worker_unknown = set(worker) - {"task_timeout_seconds", "research_step_budget", "step_base"}
         if worker_unknown:
             raise ValueError(f"agent {name} worker config has unknown fields: {', '.join(sorted(worker_unknown))}")
         timeout = worker.get("task_timeout_seconds")
@@ -675,6 +668,9 @@ def load_agent_registry(config_file):
         if research_budget is not None and (isinstance(research_budget, bool) or not isinstance(research_budget, int)
                                             or research_budget <= 0):
             raise ValueError(f"agent {name} worker.research_step_budget must be a positive integer")
+        ladder = worker.get("step_base")
+        if not isinstance(ladder, dict) or set(ladder) != {"L1", "L2", "L3"} or any(type(value) is not int or value <= 0 for value in ladder.values()):
+            raise ValueError(f"agent {name} worker.step_base requires positive integers L1, L2, L3")
         if not isinstance(agent, dict):
             raise ValueError(f"agent {name} requires an agent config object")
         agent_unknown = set(agent) - {"adapter", "command", "args", "env", "config"}
@@ -1010,6 +1006,16 @@ def execute_registered_agents(args, agents, state_path, rollback):
                 attempt.step_budget = getattr(args, "research_step_budget")
             else:
                 attempt.step_budget = int(os.environ.get("RESEARCH_STEP_BUDGET", "100"))
+        if hasattr(args, "target_file_count"):
+            base = agent["worker"]["step_base"][f"L{args.level}"]
+            if not is_research:
+                attempt.step_budget = base + args.target_file_count * args.step_per_file
+            attempt.step_base = base
+            Path(attempt.prompt_file).write_text(build_task_prompt(
+                args.title, args.task_id, args.level, args.target, args.verify,
+                task_field(args.title, "FORBIDDEN_SHORTCUTS"), task_field(args.title, "CONSTRAINTS"),
+                attempt.step_budget, args.target_file_count, base, args.step_per_file, args.progress_file),
+                encoding="utf-8")
         attempt.model = agent.get("model", "")
         attempt.extra_args = agent.get("args", [])
         attempt.agent_env = agent.get("env", {})
@@ -1143,17 +1149,15 @@ def poll_next(args):
             research_budget = getattr(args, "research_step_budget", 0) or int(os.environ.get("RESEARCH_STEP_BUDGET", "100"))
             fields[15] = str(research_budget)
         else:
-            base = args.step_base
-            if base == 22:
-                ladder = {"1": 60, "2": 40, "3": 20}
-                cfg_path = Path(args.work_dir) / "nightshift/config.json"
-                if cfg_path.is_file():
-                    try:
-                        cfg_json = json.loads(cfg_path.read_text(encoding="utf-8"))
-                        ladder = cfg_json.get("step_base", ladder)
-                    except Exception:
-                        pass
-                base = ladder.get(f"L{fields[9]}", ladder.get(fields[9], 20)) if isinstance(ladder, dict) else (ladder if isinstance(ladder, int) else 20)
+            config_path = Path(args.work_dir) / "nightshift/config.json"
+            try:
+                agents = load_agent_registry(config_path)
+                if not agents:
+                    raise ValueError("config.json requires at least one agent")
+                base = agents[0]["worker"]["step_base"][f"L{fields[9]}"]
+            except (ValueError, KeyError):
+                insert_task_front(args.tasks, raw)
+                raise
             fields[15] = str(base + file_count * args.step_per_file)
     return fields
 
@@ -1438,7 +1442,7 @@ def _finalize_structured_adapter_result(args, result):
     message = result.get("commit_message")
     if not isinstance(message, str) or not message.strip():
         return 126
-    has_hot_config = (Path(args.work_dir) / "nightshift/config.json").is_file() or (Path(args.work_dir) / "nightshift/acceptance.json").is_file()
+    has_hot_config = (Path(args.work_dir) / "nightshift/config.json").is_file()
     if has_hot_config and not is_research_task(args.title) and not scratch_review.is_review(args.title):
         try:
             result["hot"] = acceptance.hot(args, result, run_verify)
@@ -1568,7 +1572,6 @@ def run_adapter_ghost(args, main_request, main_status, main_result):
     except ValueError:
         wiring = set()
     wiring.add("nightshift/config.json")
-    wiring.add("nightshift/acceptance.json")
     request = {
         **main_request,
         "kind": "closeout",
@@ -1895,7 +1898,7 @@ def git_audit(args):
     if diagnostic and any(re.match(r"^(Sources|src|app|lib)/", name, re.I) for name in changed):
         return 4, "Diagnostic Violation: Modifying production code in [DIAGNOSTIC] is strictly forbidden. Only tests and .reports/ allowed."
 
-    has_hot_config = (Path(args.work_dir) / "nightshift/config.json").is_file() or (Path(args.work_dir) / "nightshift/acceptance.json").is_file()
+    has_hot_config = (Path(args.work_dir) / "nightshift/config.json").is_file()
     if not diagnostic and not research and not has_hot_config:
         tests = [name for name in changed if re.search(r"(^tests/|^Tests/|^test/|Test\.[a-z]+$|_test\.[a-z]+$)", name, re.I)]
         if tests:

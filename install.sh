@@ -37,18 +37,6 @@ fi
 printf 'NightShift %s: %s\n' "$([ "$IS_UPDATE" -eq 1 ] && echo update || echo install)" "$TARGET_DIR"
 
 mkdir -p "$TARGET_DIR/nightshift/adapters"
-# Migrate consumer configuration before retiring legacy locations.
-if [ ! -f "$TARGET_DIR/nightshift/adapters/agents.json" ]; then
-  for registry in "$TARGET_DIR/scripts/adapters/agents.json" "$TARGET_DIR/agents/agents.json"; do
-    if [ -f "$registry" ]; then
-      cp "$registry" "$TARGET_DIR/nightshift/adapters/agents.json"
-      break
-    fi
-  done
-fi
-if [ ! -f "$TARGET_DIR/nightshift/code-index.toml" ] && [ -f "$TARGET_DIR/.nightshift/code-index.toml" ]; then
-  cp "$TARGET_DIR/.nightshift/code-index.toml" "$TARGET_DIR/nightshift/code-index.toml"
-fi
 # Deploy only listed runtime files, never the source bundle or its development docs.
 "$PYTHON_BIN" - "$BUNDLE_SOURCE" "$TARGET_DIR/nightshift" <<'PYDEPLOY'
 import json
@@ -73,24 +61,7 @@ for script in worker.sh extract_skeleton.sh probe_line.sh reorder_queue.sh statu
   chmod +x "$TARGET_DIR/nightshift/$script"
 done
 
-# Move old root-level project settings/state into the NightShift-owned folder.
-if [ ! -f "$TARGET_DIR/nightshift/code-index.toml" ]; then
-  cp "$BUNDLE_SOURCE/code-index.toml" "$TARGET_DIR/nightshift/code-index.toml"
-fi
-"$PYTHON_BIN" - "$TARGET_DIR/nightshift/code-index.toml" <<'PY'
-from pathlib import Path
-import sys
-path = Path(sys.argv[1])
-text = path.read_text(encoding="utf-8")
-text = text.replace("tools/nightshift-code-index/**", "nightshift/tools/**")
-path.write_text(text, encoding="utf-8")
-PY
-rm -f "$TARGET_DIR/.nightshift/code-index.toml"
-rmdir "$TARGET_DIR/.nightshift" 2>/dev/null || true
-if [ ! -f "$TARGET_DIR/nightshift/adapters/agents.json" ] && [ -f "$TARGET_DIR/scripts/adapters/agents.json" ]; then
-  mkdir -p "$TARGET_DIR/nightshift/adapters"
-  mv "$TARGET_DIR/scripts/adapters/agents.json" "$TARGET_DIR/nightshift/adapters/agents.json"
-fi
+# Move old root-level runtime state into the NightShift-owned folder.
 state_files=(tasks.txt tasks.done progress.log worker.status .worker.log .worker.pid .worker.notes.md \
   .worker-score.json .worker-agent-events.jsonl .worker-agent-events.cursor.json .worker-agent-events.acks.jsonl \
   .worker-dispatch-gate.json .worker-agent-state.default.json .worker-ghost-state.default.json PAUSE)
@@ -154,7 +125,7 @@ fi
 rm -f "$TARGET_DIR/worker.sh" "$TARGET_DIR/update.sh" "$TARGET_DIR/.worker.env.example" \
   "$TARGET_DIR/scripts/worker_runtime.py" "$TARGET_DIR/scripts/adapters/agy.py" \
   "$TARGET_DIR/scripts/adapters/codex.py" "$TARGET_DIR/scripts/adapters/generic.py" \
-  "$TARGET_DIR/scripts/adapters/agents.json" "$TARGET_DIR/scripts/extract_skeleton.sh" \
+  "$TARGET_DIR/scripts/extract_skeleton.sh" \
   "$TARGET_DIR/scripts/probe_line.sh" "$TARGET_DIR/scripts/reorder_queue.sh" \
   "$TARGET_DIR/scripts/status.sh" "$TARGET_DIR/scripts/watch_worker.sh"
 rm -rf "$TARGET_DIR/tools/nightshift-code-index" "$TARGET_DIR/test/nightshift_worker"
@@ -163,71 +134,12 @@ rmdir "$TARGET_DIR/nightshift/tools/bin" 2>/dev/null || true
 rmdir "$TARGET_DIR/scripts/adapters" 2>/dev/null || true
 rmdir "$TARGET_DIR/.nightshift" 2>/dev/null || true
 
-# Preserve existing configurations; otherwise the bundled default is ready to use.
-if [ ! -f "$TARGET_DIR/nightshift/config.json" ] && [ -f "$BUNDLE_SOURCE/config.json" ]; then
+# Preserve project configuration on update.
+if [ ! -f "$TARGET_DIR/nightshift/config.json" ]; then
   cp "$BUNDLE_SOURCE/config.json" "$TARGET_DIR/nightshift/config.json"
 fi
-# Deploy PORTING_GUIDE.md for new projects; never overwrite if already present or porting is completed.
-if [ -f "$BUNDLE_SOURCE/PORTING_GUIDE.md" ]; then
-  if [ ! -f "$TARGET_DIR/nightshift/PORTING_GUIDE.md" ] && [ ! -f "$TARGET_DIR/nightshift/.ported" ]; then
-    cp "$BUNDLE_SOURCE/PORTING_GUIDE.md" "$TARGET_DIR/nightshift/PORTING_GUIDE.md"
-  fi
-fi
-if [ ! -f "$TARGET_DIR/nightshift/adapters/agents.json" ]; then
-  mkdir -p "$TARGET_DIR/nightshift/adapters"
-  cp "$BUNDLE_SOURCE/adapters/agents.json" "$TARGET_DIR/nightshift/adapters/agents.json"
-fi
-"$PYTHON_BIN" - "$TARGET_DIR/nightshift/adapters/agents.json" <<'PY'
-import json
-from pathlib import Path
-import sys
-registry = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-if not isinstance(registry, dict):
-    raise SystemExit("agent registry must be a JSON object keyed by agent name")
-migrated = False
-for name, profile in registry.items():
-    if not isinstance(profile, dict) or "agent" in profile:
-        continue
-    if not {"adapter", "command"}.intersection(profile):
-        continue
-    config = profile.get("config", {})
-    if not isinstance(config, dict):
-        raise SystemExit(f"legacy agent {name} config must be an object")
-    config = dict(config)
-    adapter = profile.get("adapter", "")
-    old_launcher = (Path(profile.get("command", "")).name in ("python", "python3")
-                    and bool(profile.get("args"))
-                    and Path(profile["args"][0]).name == f"{adapter}.py")
-    command = config.pop("executable", None) or profile.get("command", "")
-    if old_launcher and command == profile.get("command", ""):
-        command = adapter
-    args = config.pop("args", [] if old_launcher else profile.get("args", []))
-    env = config.pop("env", profile.get("env", {}))
-    worker = profile.get("worker", {"task_timeout_seconds": 1800})
-    registry[name] = {"default": bool(profile.get("default", False)), "worker": worker,
-                      "agent": {"adapter": adapter, "command": command, "args": args,
-                                "env": env, "config": config}}
-    migrated = True
-if migrated:
-    Path(sys.argv[1]).write_text(json.dumps(registry, indent=2, ensure_ascii=False) + "\n",
-                                 encoding="utf-8")
-PY
-if [ -f "$TARGET_DIR/nightshift/config.json" ] && [ -f "$TARGET_DIR/nightshift/adapters/agents.json" ]; then
-  "$PYTHON_BIN" - "$TARGET_DIR/nightshift/config.json" "$TARGET_DIR/nightshift/adapters/agents.json" <<'PYMERGE'
-import json
-from pathlib import Path
-import sys
-cfg_path, agents_path = Path(sys.argv[1]), Path(sys.argv[2])
-try:
-    cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
-    agents = json.loads(agents_path.read_text(encoding="utf-8"))
-    if isinstance(cfg, dict) and isinstance(agents, dict) and agents:
-        if "agents" not in cfg or set(agents.keys()) != {"codex-main", "agy-backup"}:
-            cfg["agents"] = agents
-            cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-except Exception:
-    pass
-PYMERGE
+if [ -f "$BUNDLE_SOURCE/PORTING_GUIDE.md" ] && [ ! -f "$TARGET_DIR/nightshift/PORTING_GUIDE.md" ] && [ ! -f "$TARGET_DIR/nightshift/.ported" ]; then
+  cp "$BUNDLE_SOURCE/PORTING_GUIDE.md" "$TARGET_DIR/nightshift/PORTING_GUIDE.md"
 fi
 
 # Skill sources and installed skills share the host-discovered root layout.

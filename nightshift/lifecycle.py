@@ -57,7 +57,7 @@ def diagnose(root, runtime, active, result):
     gate.save(directory / "report.json", report)
     (directory / "REPORT.md").write_text(
         "# Task failure\n\n" + json.dumps(report, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
-    if (root / "nightshift/config.json").is_file() or (root / "nightshift/acceptance.json").is_file():
+    if (root / "nightshift/config.json").is_file():
         gate.pause(root, active["task_id"], f"{detail}; report={directory / 'REPORT.md'}")
     return directory
 
@@ -108,20 +108,8 @@ def run(root, runtime):
     score = path("WORKER_SCORE_FILE", ".worker-score.json")
     agent_scores = path("WORKER_AGENT_SCORES_DIR", ".worker-agent-scores")
     agent_state_file = path("AI_AGENT_STATE_FILE", f".worker-agent-state.{os.environ.get('WORKER_ID', 'default')}.json")
-    registry = path("AGENT_CONFIG_FILE", "config.json")
-    if not registry.is_file():
-        for candidate in (owned / "config.json", root / "nightshift/config.json",
-                          owned / "adapters/agents.json", owned / "agents.json",
-                          root / "nightshift/adapters/agents.json", root / "nightshift/agents.json",
-                          root / "scripts/adapters/agents.json"):
-            if candidate.is_file():
-                registry = candidate
-                break
-    agents = []
-    if os.environ.get("AI_AGENTS_JSON"):
-        agents = runtime.parse_agent_registry(os.environ["AI_AGENTS_JSON"])
-    elif registry.is_file():
-        agents = runtime.load_agent_registry(registry)
+    registry = owned / "config.json"
+    agents = runtime.load_agent_registry(registry)
     protect_runtime(root, (tasks, done, progress, status, log_file, pause, dispatch_gate, score,
                            agent_scores, agent_state_file, owned / ".scratch", owned / ".worker-ghosts"))
     for file in (tasks, done, progress, log_file):
@@ -183,11 +171,11 @@ def run(root, runtime):
     waiting_for_response = False
 
     def fail(active, result):
-        if not ((root / "nightshift/config.json").is_file() or (root / "nightshift/acceptance.json").is_file()) and active.get("attempt_baseline"):
+        if not ((root / "nightshift/config.json").is_file()) and active.get("attempt_baseline"):
             try:
                 runtime.rollback_failed_task(
                     root, root, active["task_id"],
-                    (tasks, done, progress, status, log_file, pause, dispatch_gate, score, agent_scores, registry, owned / "config.json", owned / "acceptance.json", owned / "code-index.toml"),
+                    (tasks, done, progress, status, log_file, pause, dispatch_gate, score, agent_scores, registry),
                     baseline_snapshot=active["attempt_baseline"],
                     attempt_id=active.get("event", ""))
             except Exception:
@@ -373,13 +361,12 @@ def run(root, runtime):
             args = None
             result = {}
             try:
-                if (root / "nightshift/config.json").is_file() or (root / "nightshift/acceptance.json").is_file():
+                if (root / "nightshift/config.json").is_file():
                     gate.clean(root)
                 runtime.refresh_active_reports(root, root)
                 stale = state / "tasks" / (gate.key(active["task_id"], raw) + ".json")
                 stale.unlink(missing_ok=True)
-                agents = (runtime.parse_agent_registry(os.environ["AI_AGENTS_JSON"])
-                          if os.environ.get("AI_AGENTS_JSON") else runtime.load_agent_registry(registry))
+                agents = runtime.load_agent_registry(registry)
                 if not agents:
                     raise gate.GateError("no executable adapter registration")
                 target = runtime.task_field(raw, "TARGET")
@@ -388,24 +375,15 @@ def run(root, runtime):
                 verify = runtime.task_field(raw, "VERIFY")
                 file_count = sum(max(1, sum(item.is_file() for item in (root / part.strip()).rglob("*")))
                                  if (root / part.strip()).is_dir() else 1 for part in target.split(",") if part.strip())
-                cfg_path = root / "nightshift/config.json"
-                cfg_obj = gate.load(cfg_path) if cfg_path.is_file() else {}
-                step_ladder = cfg_obj.get("step_base", {})
-                default_base = step_ladder.get(f"L{level}", {"1": 60, "2": 40, "3": 20}.get(level, 20)) if isinstance(step_ladder, dict) else (step_ladder if isinstance(step_ladder, int) else 20)
-                env_base = os.environ.get("STEP_BASE", "").strip()
-                step_base = int(env_base) if env_base else int(default_base)
                 step_per_file = int(os.environ.get("STEP_PER_FILE", "5"))
-                budget = step_base + max(1, file_count) * step_per_file
+                file_count = max(1, file_count)
                 directory = state / "runs" / active["event"]
                 directory.mkdir(parents=True)
                 prompt = directory / "prompt.txt"
-                prompt.write_text(runtime.build_task_prompt(raw, active["task_id"], level, target, verify,
-                    runtime.task_field(raw, "FORBIDDEN_SHORTCUTS"), runtime.task_field(raw, "CONSTRAINTS"),
-                    budget, max(1, file_count), step_base, step_per_file, progress))
                 args = argparse.Namespace(
                     work_dir=str(root), prompt_file=str(prompt), output_file=str(directory / "output.json"),
                     result_file=str(directory / "result.json"), timeout=float(os.environ.get("TASK_TIMEOUT", "1800")),
-                    step_budget=budget, research_step_budget=int(os.environ.get("RESEARCH_STEP_BUDGET", "100")),
+                    step_budget=0, target_file_count=file_count, step_per_file=step_per_file, research_step_budget=int(os.environ.get("RESEARCH_STEP_BUDGET", "100")),
                     worker_port=os.environ.get("WORKER_PORT", "3001"), task_id=active["task_id"],
                     title=raw, target=target, level=level, verify=verify, base=active["base"],
                     required_cases=runtime.task_field(raw, "CASES"), progress_file=str(progress),
@@ -417,7 +395,7 @@ def run(root, runtime):
                     try:
                         runtime.rollback_failed_task(
                             root, root, active["task_id"],
-                            (tasks, done, progress, status, log_file, pause, dispatch_gate, score, agent_scores, agent_state_file, registry, owned / "config.json", owned / "acceptance.json", owned / "code-index.toml"),
+                            (tasks, done, progress, status, log_file, pause, dispatch_gate, score, agent_scores, agent_state_file, registry),
                             baseline_snapshot=snapshot, attempt_id=attempt_id)
                     except Exception as error:
                         args.recovery_failed = True

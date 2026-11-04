@@ -23,8 +23,7 @@ Track `nightshift/config.json` with the project's acceptance and agent commands:
     "primary": {
       "default": true,
       "worker": {
-        "step_base": 22,
-        "step_per_file": 5,
+        "step_base": {"L1": 60, "L2": 40, "L3": 20},
         "task_timeout_seconds": 1800,
         "research_step_budget": 100
       },
@@ -40,7 +39,7 @@ Track `nightshift/config.json` with the project's acceptance and agent commands:
 }
 ```
 
-Legacy standalone `nightshift/acceptance.json` and `nightshift/adapters/agents.json` remain supported for backward compatibility.
+Runtime reads persistent settings only from `nightshift/config.json`. Each agent must define positive `worker.step_base` values for L1, L2, and L3. Restart the Worker after editing configuration.
 
 Commands run from project root. `cold_every` is optional: absent means no periodic
 insertion; a manually queued cold still requires `cold`. Set a positive integer
@@ -77,7 +76,7 @@ By default, NightShift executes `hot` and `cold` commands via bash with `NIGHTSH
        return CustomRunner()
    ```
 
-2. **Via `runner` in `nightshift/acceptance.json`**:
+2. **Via `acceptance.runner` in `nightshift/config.json`**:
    Specify a custom runner entry point: `"runner": "my_module:CustomRunner"`.
 
 Keep generated queues/status/scores untracked. Installer ignores them; if an old

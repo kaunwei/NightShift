@@ -19,6 +19,7 @@
     "tools/setup.sh",
     "tools/setup.ps1",
     "install-manifest.json",
+    "project_config.py",
     "acceptance.py",
     "lifecycle.py",
     "unittest_hot.py",

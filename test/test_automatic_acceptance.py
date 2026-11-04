@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -72,19 +73,25 @@ else:
  if p.get('outside'): (root/'outside.txt').write_text('unexpected')
 pathlib.Path(os.environ['NIGHTSHIFT_RESULT_FILE']).write_text(json.dumps(result))
 ''')
-        registry = {"fixture": {"default": True, "worker": {"task_timeout_seconds": 8},
+        registry = {"fixture": {"default": True, "worker": {"task_timeout_seconds": 8, "step_base": {"L1": 60, "L2": 40, "L3": 20}},
                                 "agent": {"adapter": "generic", "command": sys.executable,
                                           "args": [str(self.wrapper)], "env": {"FIXTURE_PLAN": str(self.plan)},
                                           "config": {"initial_score": 3}}}}
-        (self.root / "nightshift/adapters/agents.json").write_text(json.dumps(registry))
-        self.git("add", "nightshift/adapters/agents.json")
+        config_path = self.root / "nightshift/config.json"
+        config = json.loads(config_path.read_text())
+        config["agents"] = registry
+        config_path.write_text(json.dumps(config))
+        self.git("add", "nightshift/config.json")
         self.git("commit", "-qm", "register fixture")
         self.base = self.git("rev-parse", "HEAD")
         self.env = {**os.environ, "RUN_ONCE": "1", "POLL_INTERVAL": "0.01",
                     "WORKER_GHOST_TIMEOUT": "3", "PYTHONDONTWRITEBYTECODE": "1"}
 
     def write_config(self):
-        (self.root / "nightshift/acceptance.json").write_text(json.dumps(self.cfg))
+        path = self.root / "nightshift/config.json"
+        config = json.loads(path.read_text()) if path.exists() else {}
+        config.update(version=1, acceptance=dict(self.cfg))
+        path.write_text(json.dumps(config))
 
     def git(self, *args):
         process = subprocess.run(["git", "-C", str(self.root), *args], text=True, capture_output=True)
@@ -106,6 +113,40 @@ pathlib.Path(os.environ['NIGHTSHIFT_RESULT_FILE']).write_text(json.dumps(result)
 
     def state(self, name):
         return acceptance.load(acceptance.state_dir(self.root) / name)
+
+    def test_worker_restart_uses_changed_agent_budget_and_timeout(self):
+        launcher = self.root / "nightshift/worker.sh"
+        shutil.copy2(ROOT / "nightshift/worker.sh", launcher)
+        (self.root / "nightshift/worker_runtime.py").symlink_to(RUNTIME)
+        config_path = self.root / "nightshift/config.json"
+        config = json.loads(config_path.read_text())
+        config["agents"]["fixture"]["worker"].update(
+            task_timeout_seconds=11, step_base={"L1": 41, "L2": 31, "L3": 21})
+        config_path.write_text(json.dumps(config))
+        self.plan.write_text(json.dumps({}))
+        (self.root / "nightshift/tasks.txt").write_text(
+            "TASK-A [CODE: FIX] | LEVEL: 3 | TARGET: value.txt,test,hot.json,extra_test.py | VERIFY: true\n")
+        env = {**self.env, "STEP_BASE": "999"}
+        first = subprocess.run(["bash", str(launcher)], cwd=self.root, env=env,
+                               capture_output=True, text=True, timeout=30)
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        request = acceptance.load(acceptance.state_dir(self.root) / "last-adapter.json")["request"]
+        self.assertEqual(request["limits"]["execution_timeout_seconds"], 11)
+        self.assertEqual(request["limits"]["action_limit"], 41)
+        self.assertIn("(21+4", Path(request["prompt_path"]).read_text())
+        config = json.loads(config_path.read_text())
+        config["agents"]["fixture"]["worker"].update(
+            task_timeout_seconds=13, step_base={"L1": 42, "L2": 32, "L3": 22})
+        config_path.write_text(json.dumps(config))
+        (self.root / "nightshift/tasks.txt").write_text(
+            "TASK-B [CODE: FIX] | LEVEL: 2 | TARGET: value.txt,test,hot.json,extra_test.py | VERIFY: true\n")
+        second = subprocess.run(["bash", str(launcher)], cwd=self.root, env=env,
+                                capture_output=True, text=True, timeout=30)
+        self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
+        request = acceptance.load(acceptance.state_dir(self.root) / "last-adapter.json")["request"]
+        self.assertEqual(request["limits"]["execution_timeout_seconds"], 13)
+        self.assertEqual(request["limits"]["action_limit"], 52)
+        self.assertIn("(32+4", Path(request["prompt_path"]).read_text())
 
     def test_success_commits_scores_and_stays_on_branch(self):
         self.task()
@@ -163,7 +204,7 @@ pathlib.Path(os.environ['NIGHTSHIFT_RESULT_FILE']).write_text(json.dumps(result)
     def test_cold_cadence_silent_success_and_no_score(self):
         self.cfg["cold_every"] = 2
         self.write_config()
-        self.git("add", "nightshift/acceptance.json")
+        self.git("add", "nightshift/config.json")
         self.git("commit", "-qm", "cold cadence")
         self.task()
         self.assertNotIn("[COLD]", (self.root / "nightshift/tasks.txt").read_text())
@@ -183,7 +224,7 @@ pathlib.Path(os.environ['NIGHTSHIFT_RESULT_FILE']).write_text(json.dumps(result)
     def test_cold_failure_diagnoses_without_historical_score_change(self):
         self.cfg.update(cold_every=1, cold="echo COLD_ERROR; exit 2")
         self.write_config()
-        self.git("add", "nightshift/acceptance.json")
+        self.git("add", "nightshift/config.json")
         self.git("commit", "-qm", "cold failure")
         self.task()
         scores = [(p, p.read_bytes()) for p in (self.root / "nightshift/.worker-agent-scores").glob("*.json")]
@@ -197,7 +238,7 @@ pathlib.Path(os.environ['NIGHTSHIFT_RESULT_FILE']).write_text(json.dumps(result)
     def test_score_replay_and_cold_deduplication(self):
         self.cfg["cold_every"] = 1
         self.write_config()
-        self.git("add", "nightshift/acceptance.json")
+        self.git("add", "nightshift/config.json")
         self.git("commit", "-qm", "cadence")
         self.task()
         record_path = next((acceptance.state_dir(self.root) / "tasks").glob("*.json"))
@@ -230,7 +271,7 @@ pathlib.Path(os.environ['NIGHTSHIFT_RESULT_FILE']).write_text(json.dumps(result)
             "agents": {
                 "fixture-agent": {
                     "default": True,
-                    "worker": {"task_timeout_seconds": 1200},
+                    "worker": {"task_timeout_seconds": 1200, "step_base": {"L1": 60, "L2": 40, "L3": 20}},
                     "agent": {"adapter": "generic", "command": "custom_agent"}
                 }
             },

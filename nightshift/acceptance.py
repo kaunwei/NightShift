@@ -1,6 +1,7 @@
 """Project-owned tests; runtime-owned evidence and durable lifecycle state."""
 
 from contextlib import contextmanager
+import project_config
 import hashlib
 import json
 import math
@@ -64,21 +65,14 @@ def workspace(root):
 
 def config(root):
     path = Path(root) / "nightshift/config.json"
-    value = None
-    if path.is_file() and not path.is_symlink():
-        raw = load(path)
-        if isinstance(raw, dict):
-            if "acceptance" in raw and isinstance(raw["acceptance"], dict):
-                value = dict(raw["acceptance"])
-                value.setdefault("version", raw.get("version", 1))
-            elif "hot" in raw or "cold" in raw:
-                value = dict(raw)
-    if value is None:
-        path = Path(root) / "nightshift/acceptance.json"
-        if path.is_file() and not path.is_symlink():
-            value = load(path)
-    if value is None:
-        raise GateError("migration required: configure nightshift/config.json or nightshift/acceptance.json; see acceptance.md")
+    try:
+        raw = project_config.read(path)
+    except ValueError as error:
+        raise GateError(str(error)) from error
+    value = raw.get("acceptance")
+    if isinstance(value, dict):
+        value = dict(value)
+        value.setdefault("version", raw["version"])
     if not isinstance(value, dict) or value.get("version") != 1:
         raise GateError("acceptance config requires version 1")
     timeout = value.get("timeout", 180)
@@ -151,7 +145,7 @@ class DefaultAcceptanceRunner(AcceptanceRunner):
         root = Path(args.work_dir)
         print(f"\n[HOT_GATE] >>> Starting Hot Acceptance Gate for task: {args.task_id}", flush=True)
         cfg = config(root)
-        config_file = "nightshift/config.json" if (root / "nightshift/config.json").is_file() else "nightshift/acceptance.json"
+        config_file = "nightshift/config.json"
         for name in [config_file, *cfg.get("wiring", [])]:
             if subprocess.run(["git", "-C", str(root), "check-ignore", "-q", "--", name]).returncode == 0:
                 raise GateError(f"persistent hot wiring must be delivered in Git: {name}")
@@ -242,7 +236,7 @@ def get_runner(root, cfg=None):
     """Resolve the acceptance runner for the project.
 
     A project can customize how hot and cold are executed by:
-    1. Specifying 'runner' in nightshift/acceptance.json as 'module:Class' or 'module:function'.
+    1. Specifying 'acceptance.runner' in nightshift/config.json as 'module:Class' or 'module:function'.
     2. Placing nightshift/acceptance_runner.py in the project, exporting 'get_runner()' or 'Runner'.
     """
     if cfg is None:
@@ -285,8 +279,7 @@ def clean(root):
     preserved = {}
     for name in ("tasks.txt", "nightshift/tasks.txt", "tasks.done", "nightshift/tasks.done",
                  "progress.log", "nightshift/progress.log",
-                 "nightshift/config.json", "nightshift/acceptance.json",
-                 "nightshift/code-index.toml", "nightshift/adapters/agents.json",
+                 "nightshift/config.json",
                  "nightshift/PORTING_GUIDE.md", "nightshift/.ported"):
         target = Path(root) / name
         if target.is_file():

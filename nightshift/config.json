@@ -12,7 +12,12 @@
       "default": true,
       "worker": {
         "task_timeout_seconds": 1800,
-        "research_step_budget": 100
+        "research_step_budget": 100,
+        "step_base": {
+          "L1": 60,
+          "L2": 40,
+          "L3": 20
+        }
       },
       "agent": {
         "adapter": "codex",
@@ -32,7 +37,12 @@
       "default": false,
       "worker": {
         "task_timeout_seconds": 1800,
-        "research_step_budget": 100
+        "research_step_budget": 100,
+        "step_base": {
+          "L1": 60,
+          "L2": 40,
+          "L3": 20
+        }
       },
       "agent": {
         "adapter": "agy",
@@ -48,9 +58,15 @@
     }
   },
   "code_index": {
-    "include": ["**/*"],
+    "include": [
+      "**/*"
+    ],
     "exclude": [],
-    "tool": ["nightshift/tools/**"],
-    "project": ["**/*"]
+    "tool": [
+      "nightshift/tools/**"
+    ],
+    "project": [
+      "**/*"
+    ]
   }
 }

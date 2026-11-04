@@ -23,20 +23,9 @@ except ImportError:  # Windows
     import msvcrt
 
 TOOL_ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(TOOL_ROOT.parent))
+import project_config as project_config_file
 
-try:
-    import tomllib
-except ModuleNotFoundError:  # Python 3.9 and 3.10
-    try:
-        import tomli as tomllib
-    except ModuleNotFoundError:
-        for sp in TOOL_ROOT.glob(".venv/lib/python*/site-packages"):
-            if str(sp) not in sys.path:
-                sys.path.insert(0, str(sp))
-        try:
-            import tomli as tomllib
-        except ModuleNotFoundError:
-            from pip._vendor import tomli as tomllib
 
 try:
     from tree_sitter_language_pack import get_parser
@@ -110,39 +99,22 @@ def summary_location(root: Path) -> Path:
 
 def project_config(root: Path) -> dict:
     config_json = root / "nightshift" / "config.json"
-    if config_json.is_file():
-        try:
-            parsed = json.loads(config_json.read_text(encoding="utf-8"))
-            if isinstance(parsed, dict) and ("code_index" in parsed or "code-index" in parsed):
-                ci = parsed.get("code_index") or parsed.get("code-index", {})
-                project = ci.get("project", {}) if isinstance(ci.get("project"), dict) else ci
-                scope = ci.get("scope", {}) if isinstance(ci.get("scope"), dict) else ci
-                return {
-                    "include": project.get("include", ["*", "**/*"]),
-                    "exclude": project.get("exclude", []),
-                    "tool_paths": scope.get("tool", ci.get("tool", [])),
-                    "project_paths": scope.get("project", ci.get("project", ["*", "**/*"])),
-                }
-        except (OSError, ValueError) as exc:
-            raise IndexErrorMessage(f"project config is invalid: {config_json}: {exc}") from exc
-    path = root / "nightshift" / "code-index.toml"
-    legacy_path = root / ".nightshift" / "code-index.toml"
-    if not path.is_file() and legacy_path.is_file():
-        path = legacy_path
-    if not path.is_file():
-        return {"include": ["*", "**/*"], "exclude": [], "tool_paths": [], "project_paths": ["*", "**/*"]}
     try:
-        parsed = tomllib.loads(path.read_text(encoding="utf-8"))
-    except (OSError, tomllib.TOMLDecodeError) as exc:
-        raise IndexErrorMessage(f"project config is invalid: {path}: {exc}") from exc
-    project = parsed.get("project", {})
-    scope = parsed.get("scope", {})
-    return {
-        "include": project.get("include", ["*", "**/*"]),
-        "exclude": project.get("exclude", []),
-        "tool_paths": scope.get("tool", []),
-        "project_paths": scope.get("project", ["*", "**/*"]),
-    }
+        parsed = project_config_file.read(config_json)
+        ci = parsed.get("code_index", {})
+        if not isinstance(ci, dict):
+            raise ValueError("code_index must be an object")
+        project = ci.get("project", {}) if isinstance(ci.get("project"), dict) else ci
+        scope = ci.get("scope", {}) if isinstance(ci.get("scope"), dict) else ci
+        return {
+            "include": project.get("include", ["*", "**/*"]),
+            "exclude": project.get("exclude", []),
+            "tool_paths": scope.get("tool", ci.get("tool", [])),
+            "project_paths": scope.get("project", ci.get("project", ["*", "**/*"])),
+        }
+    except (OSError, ValueError) as exc:
+        raise IndexErrorMessage(f"project config is invalid: {config_json}: {exc}") from exc
+
 
 
 def language_for_path(path: Path) -> str | None:
@@ -402,7 +374,7 @@ def configuration_sha256(root: Path) -> str:
             "Cargo.toml", "go.mod", "requirements.txt", "code-index.toml", "config.json",
         } or path.suffix in {".xcconfig", ".xcscheme"}:
             candidates.add(path)
-    for cfg_candidate in (root / "nightshift/config.json", root / "nightshift/code-index.toml", root / ".nightshift/code-index.toml"):
+    for cfg_candidate in (root / "nightshift/config.json",):
         if cfg_candidate.is_file():
             candidates.add(cfg_candidate)
     for path in sorted(candidates):
