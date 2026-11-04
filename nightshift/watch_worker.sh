@@ -325,6 +325,17 @@ while true; do
     fi
   fi
 
+  # Queue-wide failures require Planner even if already paused at startup.
+  # Initial-state suppression applies only to ordinary progress observations.
+  if [ -z "$EXPECTED_TASK_ID" ] && [ "$ACTIVE_TASK" -eq 0 ]; then
+    case "$STATE" in
+      PAUSED_FOR_PLANNER)
+        echo "[BLOCKED] [SENTINEL_PAUSED_FOR_PLANNER] Worker requires Planner (State: $STATE, Remaining: $REMAINING_TASKS)."
+        exit 1
+        ;;
+    esac
+  fi
+
   # Running/verification and an unrelated task's status cannot wake Planner.
   STATUS_RELEVANT=1
   if [ -z "$EXPECTED_TASK_ID" ] && [ "$STATE|$CURRENT_TASK" = "$INITIAL_STATE|$INITIAL_TASK" ]; then
