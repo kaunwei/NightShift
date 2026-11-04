@@ -15,6 +15,28 @@ else
 fi
 cd "$PROJECT_ROOT" || exit 1
 
+# Explicit planner routing; legacy positional invocation remains stdout-only.
+if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+  echo "Usage: $0 [--agent codex|agy --planner-id ID] [timeout_seconds [interval_seconds [task_id]]]"
+  echo "--agent selects the Planner notification target, independently of Worker agent."
+  echo "Codex: queue --thread ID --resume; AgY: --conversation ID -p EVENT."
+  echo "Without --agent, events are emitted on stdout for an existing host integration."
+  exit 0
+fi
+if [ "${1:-}" = "--agent" ]; then
+  PLANNER_AGENT="${2:-}"
+  case "$PLANNER_AGENT" in codex|agy) ;; *) echo "[SENTINEL_ERROR] Expected --agent codex|agy" >&2; exit 1 ;; esac
+  if [ "${3:-}" != "--planner-id" ] || [ -z "${4:-}" ]; then
+    echo "[SENTINEL_ERROR] --agent requires --planner-id ID" >&2
+    exit 1
+  fi
+  PLANNER_TARGET="$4"
+  shift 4
+  exec python3 "$NIGHTSHIFT_DIR/sentinel_relay.py" --root "$PROJECT_ROOT" \
+    --agent "$PLANNER_AGENT" --planner-id "$PLANNER_TARGET" \
+    --wait "${1:-0}" --interval "${2:-5}" --task "${3:-}"
+fi
+
 TASKS_FILE="${TASKS_FILE:-$NIGHTSHIFT_DIR/tasks.txt}"
 TASKS_DONE_FILE="${TASKS_DONE_FILE:-$NIGHTSHIFT_DIR/tasks.done}"
 STATUS_FILE="${STATUS_FILE:-$NIGHTSHIFT_DIR/worker.status}"

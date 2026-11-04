@@ -8,6 +8,7 @@
     "reorder_queue.sh",
     "status.sh",
     "watch_worker.sh",
+    "sentinel_relay.py",
     "adapters/codex.py",
     "adapters/agy.py",
     "adapters/generic.py",
