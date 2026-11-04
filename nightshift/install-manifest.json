@@ -49,26 +49,5 @@
     "productivity",
     "misc",
     "in-progress"
-  ],
-  "retired_files": [
-    "local_tdd.py",
-    "tools/README.md",
-    "skills/universal-build-verify.md",
-    "skills/nightshift/planner/SKILL.md",
-    "skills/nightshift/explore/SKILL.md",
-    "docs/PORTING_GUIDE.md",
-    "docs/DETERMINISTIC_EXPLORE_STRATEGY.md",
-    "docs/DETERMINISTIC_EXPLORE_RESULTS.md",
-    "docs/NIGHTSHIFT_SPEC.md",
-    "docs/NIGHTSHIFT_SOURCE_COVERAGE.md",
-    "docs/LOCAL_TDD.md",
-    "docs/experiments/deterministic-explore/LUNA-LOW-REPORT.md",
-    "docs/experiments/deterministic-explore/LUNA-LOW-SCORECARD.md",
-    "docs/experiments/deterministic-explore/PORTED-03-micro.md",
-    "docs/experiments/deterministic-explore/PORTED-SCORECARD.md",
-    "docs/experiments/deterministic-explore/PORTED-SUMMARY.md",
-    "docs/experiments/deterministic-explore/README.md",
-    "docs/experiments/deterministic-explore/SMALL-CONTEXT-SCORECARD.md",
-    "docs/experiments/deterministic-explore/STATIC-LEDGER-SCORECARD.md"
   ]
 }

@@ -39,6 +39,7 @@ printf 'NightShift %s: %s\n' "$([ "$IS_UPDATE" -eq 1 ] && echo update || echo in
 mkdir -p "$TARGET_DIR/nightshift/adapters"
 # Deploy only listed runtime files, never the source bundle or its development docs.
 "$PYTHON_BIN" - "$BUNDLE_SOURCE" "$TARGET_DIR/nightshift" <<'PYDEPLOY'
+import filecmp
 import json
 from pathlib import Path
 import shutil
@@ -50,6 +51,8 @@ for relative in manifest["runtime"]:
     if origin.resolve() == destination.resolve():
         continue
     if relative == "PORTING_GUIDE.md" and (destination.exists() or (destination.parent / ".ported").exists()):
+        continue
+    if destination.is_file() and filecmp.cmp(origin, destination, shallow=False):
         continue
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(origin, destination)
@@ -88,51 +91,7 @@ for state_dir in tasks.txt.lock .worker-score.json.lock .worker-dispatch-gate.js
   fi
 done
 
-# Older Worker versions wrote snapshots to the project root. Keep their history
-# when upgrading, but move it into the NightShift-owned runtime directory.
-if [ -d "$TARGET_DIR/.scratch" ]; then
-  mkdir -p "$TARGET_DIR/nightshift/.scratch"
-  "$PYTHON_BIN" - "$TARGET_DIR/.scratch" "$TARGET_DIR/nightshift/.scratch" <<'PY'
-import shutil
-import sys
-from pathlib import Path
-
-source, target = map(Path, sys.argv[1:])
-for child in source.iterdir():
-    destination = target / child.name
-    if child.is_dir() and not child.is_symlink():
-        if destination.exists() and destination.is_dir():
-            shutil.copytree(child, destination, dirs_exist_ok=True)
-            shutil.rmtree(child)
-        elif not destination.exists():
-            child.rename(destination)
-        else:
-            child.rename(target / f"legacy-root-{child.name}")
-    elif destination.exists():
-        alternate = target / f"legacy-root-{child.name}"
-        index = 2
-        while alternate.exists():
-            alternate = target / f"legacy-root-{index}-{child.name}"
-            index += 1
-        child.rename(alternate)
-    else:
-        child.rename(destination)
-source.rmdir()
-PY
-fi
-
-# Remove only exact legacy NightShift files after their user data has been moved.
-rm -f "$TARGET_DIR/worker.sh" "$TARGET_DIR/update.sh" "$TARGET_DIR/.worker.env.example" \
-  "$TARGET_DIR/scripts/worker_runtime.py" "$TARGET_DIR/scripts/adapters/agy.py" \
-  "$TARGET_DIR/scripts/adapters/codex.py" "$TARGET_DIR/scripts/adapters/generic.py" \
-  "$TARGET_DIR/scripts/extract_skeleton.sh" \
-  "$TARGET_DIR/scripts/probe_line.sh" "$TARGET_DIR/scripts/reorder_queue.sh" \
-  "$TARGET_DIR/scripts/status.sh" "$TARGET_DIR/scripts/watch_worker.sh"
-rm -rf "$TARGET_DIR/tools/nightshift-code-index" "$TARGET_DIR/test/nightshift_worker"
-rm -f "$TARGET_DIR/nightshift/tools/bin/code-index" "$TARGET_DIR/nightshift/tools/bin/code-index.cmd"
-rmdir "$TARGET_DIR/nightshift/tools/bin" 2>/dev/null || true
-rmdir "$TARGET_DIR/scripts/adapters" 2>/dev/null || true
-rmdir "$TARGET_DIR/.nightshift" 2>/dev/null || true
+# Existing legacy files may contain project changes; leave them in place.
 
 # Preserve project configuration on update.
 if [ ! -f "$TARGET_DIR/nightshift/config.json" ]; then
@@ -144,6 +103,7 @@ fi
 
 # Skill sources and installed skills share the host-discovered root layout.
 "$PYTHON_BIN" - "$BUNDLE_SOURCE" "$SOURCE_ROOT" "$TARGET_DIR" <<'PYSKILLS'
+import filecmp
 import json
 from pathlib import Path
 import shutil
@@ -152,6 +112,8 @@ bundle, root, target = map(Path, sys.argv[1:])
 manifest = json.loads((bundle / "install-manifest.json").read_text(encoding="utf-8"))
 def copy_asset(origin, destination):
     if origin.resolve() == destination.resolve():
+        return
+    if destination.is_file() and filecmp.cmp(origin, destination, shallow=False):
         return
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(origin, destination)
@@ -168,20 +130,7 @@ for category in manifest["shared_skill_categories"]:
 catalog = root / ".agents/skills.json"
 if catalog.is_file() and not (target / ".agents/skills.json").exists():
     copy_asset(catalog, target / ".agents/skills.json")
-# Exact retired assets only: keep project notes, queues, registries and scratch data.
-parents = set()
-for relative in manifest["retired_files"]:
-    path = target / "nightshift" / relative
-    if path.is_file() or path.is_symlink():
-        path.unlink()
-    parents.update(path.parents)
-for directory in sorted(parents, key=lambda path: len(path.parts), reverse=True):
-    if directory == target / "nightshift" or target / "nightshift" not in directory.parents:
-        continue
-    try:
-        directory.rmdir()
-    except OSError:
-        pass
+
 PYSKILLS
 
 # Create NightShift state only when missing; existing queues and history survive updates.
@@ -207,27 +156,8 @@ IGNORE_ENTRIES=(
   "nightshift/.worker-score*.json" "nightshift/.worker-agent-scores/" "nightshift/.worker-agent-events*.json*"
   "nightshift/.worker-dispatch-gate.json" "nightshift/.worker*.lock/" "nightshift/PAUSE" "nightshift/tasks.txt.lock/"
   "nightshift/.worker-ghosts/" "nightshift/.worker-ghost-state*.json" "nightshift/.scratch/" "nightshift/tools/.venv/"
-  ".trials/"
+  ".trials/" ".gitignore"
 )
-LEGACY_IGNORE_ENTRIES=(
-  "worker*.status" ".worker*.log" ".worker*.pid" "PAUSE" ".scratch/"
-  "tasks.txt.lock/" ".worker-agent-state*.json" ".worker-score*.json"
-  ".worker-score*.json.lock/" "tasks.done" "tasks.done.*" ".worker-agent-scores/"
-  ".worker-agent-events.jsonl" ".worker-agent-events.jsonl.lock/" ".worker-agent-events*.json*"
-  ".worker-dispatch-gate.json" ".worker-dispatch-gate.json.lock/"
-  ".worker-ghost-state*.json" ".worker-ghost-state*.json.lock/" ".worker-ghosts/"
-)
-if [ "${#LEGACY_IGNORE_ENTRIES[@]}" -gt 0 ]; then
-  "$PYTHON_BIN" - "$TARGET_DIR/.gitignore" "${LEGACY_IGNORE_ENTRIES[@]}" <<'PY'
-from pathlib import Path
-import sys
-path = Path(sys.argv[1])
-legacy = set(sys.argv[2:])
-if path.exists():
-    lines = path.read_text(encoding="utf-8").splitlines()
-    path.write_text("".join(line + "\n" for line in lines if line not in legacy), encoding="utf-8")
-PY
-fi
 if ! grep -qxF "$IGNORE_HEADER" "$TARGET_DIR/.gitignore"; then
   [ ! -s "$TARGET_DIR/.gitignore" ] || [ "$(tail -c 1 "$TARGET_DIR/.gitignore")" = $'\n' ] || printf '\n' >> "$TARGET_DIR/.gitignore"
   printf '%s\n' "$IGNORE_HEADER" >> "$TARGET_DIR/.gitignore"
