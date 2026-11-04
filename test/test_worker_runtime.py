@@ -3366,6 +3366,8 @@ class InstallerIntegrationTests(unittest.TestCase):
             self.assertTrue((target / "nightshift/PORTING_GUIDE.md").is_file())
             self.assertTrue((target / ".agents/skills/engineering/tdd/tests.md").is_file())
             self.assertTrue((target / ".agents/skills/nightshift/planner/SKILL.md").is_file())
+            sentinel = target / ".agents/skills/nightshift/sentinel/SKILL.md"
+            self.assertEqual(sentinel.read_text(), (ROOT / ".agents/skills/nightshift/sentinel/SKILL.md").read_text())
             self.assertTrue((target / ".skills/universal-build-verify.md").is_file())
             self.assertTrue((target / "scripts/build_app.sh").is_file())
             self.assertTrue((target / "docs/APP_GUIDE.md").is_file())
@@ -3374,9 +3376,15 @@ class InstallerIntegrationTests(unittest.TestCase):
             agent_registry = target / "nightshift/adapters/agents.json"
             custom_registry = '{"custom":{"default":true,"worker":{},"agent":{"adapter":"opaque","command":"custom","args":[],"env":{},"config":{}}}}\n'
             agent_registry.write_text(custom_registry)
+            sentinel.unlink()
+            upgrade = subprocess.run(["bash", str(ROOT / "install.sh"), str(target)],
+                                     cwd=target, capture_output=True, text=True, timeout=60)
+            self.assertEqual(upgrade.returncode, 0, upgrade.stdout + upgrade.stderr)
+            self.assertTrue(sentinel.is_file())
             update = subprocess.run(["bash", str(target / "nightshift/install.sh"), str(target)],
                                     cwd=target, capture_output=True, text=True, timeout=60)
             self.assertEqual(update.returncode, 0, update.stdout + update.stderr)
+            self.assertTrue(sentinel.is_file())
             self.assertEqual(agent_registry.read_text(), custom_registry)
             self.assertEqual((target / "nightshift/tasks.txt").read_text(), "TASK-OLD | ACTION: preserve queue\n")
             self.assertTrue((target / "scripts/build_app.sh").is_file())

@@ -34,6 +34,10 @@
       "target": ".agents/skills/nightshift/explore/SKILL.md"
     },
     {
+      "source": ".agents/skills/nightshift/sentinel/SKILL.md",
+      "target": ".agents/skills/nightshift/sentinel/SKILL.md"
+    },
+    {
       "source": ".skills/universal-build-verify.md",
       "target": ".skills/universal-build-verify.md"
     }

@@ -38,16 +38,8 @@ commits and scores on the same current branch. Successful tasks need no manual r
 
 ## Supervise
 
-Delegate queue monitoring to Queue Sentinel and end the turn. Never poll status or chat loops.
-
-    WORKER_INACTIVE_REPEAT=1 bash nightshift/watch_worker.sh 0 5
-
-Worker owns execution and drains tasks autonomously. Wake Planner **only** on:
-- `[SENTINEL_COMPLETED]`: Entire queue drained (`IDLE`).
-- `[BLOCKED]` / `PAUSED_FOR_PLANNER`: Unrecoverable failure or needs decomposition.
-- `[SENTINEL_INACTIVE]`: Stale heartbeat (relay note and keep waiting).
-
-Normal task completions and heartbeats require zero Planner intervention. Stale timeout is not task failure—require fresh evidence before acting.
+Use [Queue Sentinel](../sentinel/SKILL.md) to monitor the queue, then end the turn.
+On a blocker, follow Recover; on completion, deliver the result.
 
 ## Recover
 

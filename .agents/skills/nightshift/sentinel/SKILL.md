@@ -17,12 +17,12 @@ Worker drains `tasks.txt` sequentially. Individual task completions (`[DONE]`, `
 
 ## Wakeup Triggers
 
-Host notifications wake Planner **only** on:
+Host notifications wake Planner on:
 - `[SENTINEL_COMPLETED]`: Entire queue is empty (`IDLE`).
-- `[BLOCKED]` / `PAUSED_FOR_PLANNER` / `[SCOPE_BLOCKED]`: Unrecoverable blocker or decomposition required.
+- `[SENTINEL_BLOCKED]`, `[SENTINEL_SCOPE_BLOCKED]`, `[SENTINEL_PAUSED_FOR_PLANNER]`, `[SENTINEL_AGENT_NO_RESPONSE]`, `[SENTINEL_WORKER_DIED]`, or `[SENTINEL_PLANNER_REVIEW_REQUIRED]`: Inspect and recover.
 - `[SENTINEL_INACTIVE]`: Stale heartbeat across periods (alert user and keep waiting).
 
 ## Anti-patterns
 - **Per-task watching**: Passing `TASK-ID` during batch runs causes unnecessary Planner wakeups. Pass `TASK-ID` only for manual single-ticket diagnosis.
 - **Heartbeat polling**: Querying `worker.status` in a chat loop burns context tokens. Trust the sentinel.
-- **Timeout as failure**: Stale observer timeout is not proof of task failure—require task-scoped audit evidence.
+- **Timeout as failure**: Stale observer timeout is not proof of task failure; require task-scoped audit evidence.
