@@ -75,4 +75,19 @@ export AGENT_DISPATCH_GATE_FILE STATUS_FILE LOG_FILE PID_FILE TASK_TIMEOUT STEP_
 export POLL_INTERVAL RUN_ONCE WORKER_PORT
 
 mkdir -p "$NIGHTSHIFT_DIR"
-exec "$PYTHON_BIN" "$RUNTIME_PATH" daemon --root "$PROJECT_ROOT"
+CONFIG_ARGS=()
+has_config=0
+for arg in "$@"; do
+  if [ "$arg" = "--config" ]; then
+    has_config=1
+    break
+  fi
+done
+if [ "$has_config" -eq 0 ]; then
+  if [ -f "$NIGHTSHIFT_DIR/config.json" ]; then
+    CONFIG_ARGS=(--config "$NIGHTSHIFT_DIR/config.json")
+  elif [ -f "$PROJECT_ROOT/config.json" ]; then
+    CONFIG_ARGS=(--config "$PROJECT_ROOT/config.json")
+  fi
+fi
+exec "$PYTHON_BIN" "$RUNTIME_PATH" daemon --root "$PROJECT_ROOT" ${CONFIG_ARGS[@]+"${CONFIG_ARGS[@]}"} "$@"

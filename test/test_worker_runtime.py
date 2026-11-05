@@ -14,7 +14,7 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 
 ROOT = next(parent for parent in Path(__file__).resolve().parents
-            if (parent / "install.sh").exists())
+            if (parent / "nightshift/worker.sh").exists())
 RUNTIME = ROOT / "nightshift/worker_runtime.py"
 sys.path.insert(0, str(ROOT / "nightshift"))
 import worker_runtime as runtime_module

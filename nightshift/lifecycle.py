@@ -57,7 +57,7 @@ def diagnose(root, runtime, active, result):
     gate.save(directory / "report.json", report)
     (directory / "REPORT.md").write_text(
         "# Task failure\n\n" + json.dumps(report, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
-    if (root / "nightshift/config.json").is_file():
+    if os.environ.get("NIGHTSHIFT_CONFIG_FILE") or (root / "nightshift/config.json").is_file():
         gate.pause(root, active["task_id"], f"{detail}; report={directory / 'REPORT.md'}")
     return directory
 
@@ -94,24 +94,31 @@ def daemon(root, runtime):
 
 def run(root, runtime):
     state = gate.state_dir(root)
-    owned = root / "nightshift" if (root / "nightshift").is_dir() else root
+    external = bool(os.environ.get("NIGHTSHIFT_CONFIG_FILE"))
+    owned = (Path(os.environ["NIGHTSHIFT_STATE_DIR"]) if external else
+             root / "nightshift" if (root / "nightshift").is_dir() else root)
     def path(name, default):
-        value = Path(os.environ.get(name, str(owned / default)))
+        value = Path(str(owned / default) if external else os.environ.get(name, str(owned / default)))
         return value if value.is_absolute() else root / value
     tasks = path("TASKS_FILE", "tasks.txt")
     done = path("TASKS_DONE_FILE", "tasks.done")
     progress = path("PROGRESS_FILE", "progress.log")
-    status = path("STATUS_FILE", "worker.status")
-    log_file = path("LOG_FILE", ".worker.log")
+    worker_id = os.environ.get("WORKER_ID", "default")
+    suffix = "" if worker_id == "default" else "." + worker_id
+    status = path("STATUS_FILE", f"worker{suffix}.status")
+    log_file = path("LOG_FILE", f".worker{suffix}.log")
     pause = path("PAUSE_FILE", "PAUSE")
     dispatch_gate = path("AGENT_DISPATCH_GATE_FILE", ".worker-dispatch-gate.json")
     score = path("WORKER_SCORE_FILE", ".worker-score.json")
     agent_scores = path("WORKER_AGENT_SCORES_DIR", ".worker-agent-scores")
     agent_state_file = path("AI_AGENT_STATE_FILE", f".worker-agent-state.{os.environ.get('WORKER_ID', 'default')}.json")
-    registry = owned / "config.json"
+    agent_state_file.unlink(missing_ok=True)
+    agent_state = {"version": 1, "active_agent_id": "", "consecutive_no_response": 0, "task_exclusions": {}}
+    registry = Path(os.environ.get("NIGHTSHIFT_CONFIG_FILE") or owned / "config.json")
     agents = runtime.load_agent_registry(registry)
-    protect_runtime(root, (tasks, done, progress, status, log_file, pause, dispatch_gate, score,
-                           agent_scores, agent_state_file, owned / ".scratch", owned / ".worker-ghosts"))
+    if not external:
+        protect_runtime(root, (tasks, done, progress, status, log_file, pause, dispatch_gate, score,
+                               agent_scores, agent_state_file, owned / ".scratch", owned / ".worker-ghosts"))
     for file in (tasks, done, progress, log_file):
         file.parent.mkdir(parents=True, exist_ok=True)
         file.touch(exist_ok=True)
@@ -236,8 +243,8 @@ def run(root, runtime):
                     f"[MECHANICAL_AUDIT] Status: PASS | Task: {active['task_id']} | Verify_Exit: 0 | Whitelist: PASS | Tree: CLEAN | Attempts: {attempts} | Audit_NS: {active['event']} | Acceptance: automatic")
         append_once(done, token, f"[DONE] {active['raw']} [Audit_NS: {active['event']}]")
         print(f"[COMMIT] Committing verified changes for {active['task_id']} ({commit[:8] if commit else 'no-commit'})...", flush=True)
-        runtime.settle_invalid_reports(root, root, accepted=True)
-        runtime.refresh_active_reports(root, root)
+        runtime.settle_invalid_reports(owned if external else root, root, accepted=True)
+        runtime.refresh_active_reports(owned if external else root, root)
         journal.update(phase="accepted", commit=commit, result=result, event=active["event"])
         gate.save(journal_path, journal)
         active_path.unlink(missing_ok=True)
@@ -261,6 +268,17 @@ def run(root, runtime):
                     return 0
                 stopped.wait(poll)
                 continue
+            if external and not active_path.exists() and tasks.is_file() and any(
+                    line.strip() and not line.lstrip().startswith("#")
+                    for line in tasks.read_text(encoding="utf-8").splitlines()):
+                if gate.git(root, "status", "--porcelain", "--untracked-files=all"):
+                    if once:
+                        raise gate.GateError("project has pre-existing changes; queue left unchanged")
+                    if running.get("state") != "WAITING_CLEAN_WORKTREE":
+                        print("[WORKER] Project worktree has pre-existing uncommitted changes; waiting for clean worktree...", flush=True)
+                    update("WAITING_CLEAN_WORKTREE")
+                    stopped.wait(poll)
+                    continue
             active = gate.load(active_path)
             if active:
                 # The queue claim was persisted before removal. Dedup a claim interrupted there.
@@ -318,8 +336,7 @@ def run(root, runtime):
                 else:
                     continue
             if waiting_for_response and not pause.is_file():
-                state_data = runtime.read_agent_state(agent_state_file)
-                if state_data.get("consecutive_no_response", 0) >= len(agents):
+                if agent_state.get("consecutive_no_response", 0) >= len(agents):
                     update("AGENT_NO_RESPONSE", "Waiting for agent response")
                     stopped.wait(poll)
                     continue
@@ -361,9 +378,19 @@ def run(root, runtime):
             args = None
             result = {}
             try:
-                if (root / "nightshift/config.json").is_file():
+                if external:
+                    dirty = gate.git(root, "status", "--porcelain", "--untracked-files=all")
+                    if dirty:
+                        if once:
+                            raise gate.GateError("project has pre-existing changes; use a clean worktree")
+                        if running.get("state") != "WAITING_CLEAN_WORKTREE":
+                            print("[WORKER] Project worktree has pre-existing uncommitted changes; waiting for clean worktree...", flush=True)
+                        update("WAITING_CLEAN_WORKTREE")
+                        stopped.wait(poll)
+                        continue
+                elif (root / "nightshift/config.json").is_file():
                     gate.clean(root)
-                runtime.refresh_active_reports(root, root)
+                runtime.refresh_active_reports(owned if external else root, root)
                 stale = state / "tasks" / (gate.key(active["task_id"], raw) + ".json")
                 stale.unlink(missing_ok=True)
                 agents = runtime.load_agent_registry(registry)
@@ -401,7 +428,7 @@ def run(root, runtime):
                         args.recovery_failed = True
                         update("RECOVERY_FAILED", active["task_id"])
                         raise RuntimeError(f"attempt recovery failed: {error}")
-                code, _ = runtime.execute_registered_agents(args, agents, agent_state_file, recover_before_switch)
+                code, _ = runtime.execute_registered_agents(args, agents, agent_state, recover_before_switch)
                 active["attempt_baseline"] = getattr(args, "attempt_baseline", "")
                 result = gate.load(args.result_file, {})
                 result["registration_id"] = getattr(args, "executed_agent_id", "")
@@ -431,7 +458,7 @@ def run(root, runtime):
                     stopped.wait(poll)
                     continue
                 if getattr(args, "awaiting_agent", False):
-                    msg = f"[AGENT_UNAVAILABLE] {active['task_id']}: no eligible registration remains for this task; task returned to {tasks}. After fixing the adapter issue, remove this task from task_exclusions in {agent_state_file} to retry."
+                    msg = f"[AGENT_UNAVAILABLE] {active['task_id']}: no eligible registration remains for this task; task returned to {tasks}. Restart worker or update configuration to retry."
                     append_once(progress, f"agent_unavailable:{active['task_id']}", msg)
                     runtime.insert_task_front(tasks, raw)
                     active_path.unlink(missing_ok=True)
@@ -469,7 +496,10 @@ def run(root, runtime):
                     print(f"[RECOVERY_HALTED] {active['task_id']}: baseline could not be restored; task requeued.", flush=True)
                     runtime.insert_task_front(tasks, raw)
                     active_path.unlink(missing_ok=True)
-                    return 0
+                    if once:
+                        return 0
+                    stopped.wait(poll)
+                    continue
                 result.setdefault("runtime_error", {"phase": "lifecycle", "message": str(error)})
                 score_once(active, result, False)
                 fail(active, result)

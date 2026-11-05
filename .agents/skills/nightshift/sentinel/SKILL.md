@@ -9,8 +9,10 @@ Choose the Planner agent and exact conversation ID, independently of Worker.
 Save tokens: keep monitoring in the background script; wake the LLM only for
 actionable events. Run one watcher per queue, then end the turn:
 
-    bash nightshift/watch_worker.sh --agent codex --planner-id THREAD_ID 0 5
-    bash nightshift/watch_worker.sh --agent agy --planner-id CONVERSATION_ID 0 5
+    bash "$NIGHTSHIFT_CORE/nightshift/watch_worker.sh" --agent codex --planner-id THREAD_ID 0 5
+    bash "$NIGHTSHIFT_CORE/nightshift/watch_worker.sh" --agent agy --planner-id CONVERSATION_ID 0 5
+
+(In sourced shell: `ns-watch --agent codex --planner-id THREAD_ID 0 5`).
 
 Codex uses `queue --thread ID --message EVENT --resume`.
 AgY uses `--conversation ID -p EVENT`; keep that conversation idle.

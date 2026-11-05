@@ -13,8 +13,25 @@ if [ "$(basename "$SCRIPT_DIR")" = "scripts" ]; then
 else
   NIGHTSHIFT_DIR="$SCRIPT_DIR"
 fi
+PROJECT_ROOT="$(cd "$NIGHTSHIFT_DIR/.." && pwd)"
+if [ "${1:-}" = "--project" ]; then
+  [ -n "${2:-}" ] || { echo "--project requires a name" >&2; exit 2; }
+  PROJECT_SELECTION="$2"
+  shift 2
+else
+  PROJECT_SELECTION="${NIGHTSHIFT_PROJECT_NAME:-}"
+fi
+CONFIG_FILE="${NIGHTSHIFT_CONFIG_FILE:-$NIGHTSHIFT_DIR/config.json}"
+if [ -f "$CONFIG_FILE" ]; then
+  PROJECT_CONTEXT=$("${PYTHON_BIN:-python3}" "$NIGHTSHIFT_DIR/project_config.py" --config "$CONFIG_FILE" --root "$PROJECT_ROOT" ${PROJECT_SELECTION:+--project "$PROJECT_SELECTION"}) || exit $?
+  eval "$PROJECT_CONTEXT"
+elif [ -n "$PROJECT_SELECTION" ]; then
+  echo "Missing NightShift config: $CONFIG_FILE" >&2
+  exit 2
+fi
 
 TASKS_FILE="${TASKS_FILE:-$NIGHTSHIFT_DIR/tasks.txt}"
+[ -z "${NIGHTSHIFT_STATE_DIR:-}" ] || mkdir -p "$(dirname "$TASKS_FILE")"
 LOCK_DIR="${TASKS_FILE}.lock"
 LOCK_MAX_RETRIES=50
 LOCK_RETRY=0

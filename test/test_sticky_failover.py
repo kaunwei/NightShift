@@ -7,7 +7,7 @@ import sys
 import tempfile
 import unittest
 
-ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "install.sh").exists())
+ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "nightshift/worker.sh").exists())
 
 
 class StickyFailoverTests(unittest.TestCase):

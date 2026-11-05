@@ -90,7 +90,9 @@ def repository_root(repository: Path) -> Path:
 
 
 def index_location(root: Path) -> Path:
-    return root / "nightshift" / ".scratch" / "code-index" / "index.json"
+    state = os.environ.get("NIGHTSHIFT_STATE_DIR")
+    return (Path(state) / "code-index" / "index.json" if state else
+            root / "nightshift" / ".scratch" / "code-index" / "index.json")
 
 
 def summary_location(root: Path) -> Path:
@@ -98,10 +100,12 @@ def summary_location(root: Path) -> Path:
 
 
 def project_config(root: Path) -> dict:
-    config_json = root / "nightshift" / "config.json"
+    config_json = Path(os.environ.get("NIGHTSHIFT_CONFIG_FILE") or root / "nightshift" / "config.json")
     try:
         parsed = project_config_file.read(config_json)
-        ci = parsed.get("code_index", {})
+        name = os.environ.get("NIGHTSHIFT_PROJECT_NAME")
+        entry = parsed.get("projects", {}).get(name, {}) if name else {}
+        ci = entry.get("code_index", parsed.get("code_index", {}))
         if not isinstance(ci, dict):
             raise ValueError("code_index must be an object")
         project = ci.get("project", {}) if isinstance(ci.get("project"), dict) else ci
@@ -380,6 +384,11 @@ def configuration_sha256(root: Path) -> str:
     for path in sorted(candidates):
         digest.update(path.relative_to(root).as_posix().encode() + b"\0")
         digest.update(hashlib.sha256(path.read_bytes()).digest())
+    external_config = os.environ.get("NIGHTSHIFT_CONFIG_FILE")
+    if external_config:
+        digest.update(b"external-config\0")
+        digest.update(hashlib.sha256(Path(external_config).read_bytes()).digest())
+        digest.update(os.environ.get("NIGHTSHIFT_PROJECT_NAME", "").encode())
     language_registry = TOOL_ROOT / "languages.json"
     digest.update(b"tool:languages.json\0")
     digest.update(hashlib.sha256(language_registry.read_bytes()).digest())
@@ -628,14 +637,14 @@ def ensure_index(root: Path) -> tuple[dict, bool]:
     require_clean_index_inputs(root)
     revision = git_output(root, "rev-parse", "HEAD")
     cached = cached_index(location)
-    if cached is not None and cached.get("root") == str(root) and cached.get("revision") == revision:
+    if cached is not None and cached.get("root") == str(root) and cached.get("revision") == revision and cached.get("configuration_sha256") == configuration_sha256(root):
         write_summary(summary_location(root), cached)
         return cached, False
     with locked(location):
         require_clean_index_inputs(root)
         revision = git_output(root, "rev-parse", "HEAD")
         cached = cached_index(location)
-        if cached is not None and cached.get("root") == str(root) and cached.get("revision") == revision:
+        if cached is not None and cached.get("root") == str(root) and cached.get("revision") == revision and cached.get("configuration_sha256") == configuration_sha256(root):
             write_summary(summary_location(root), cached)
             return cached, False
         data, _ = build_data(root)

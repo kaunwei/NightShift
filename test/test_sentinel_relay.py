@@ -40,3 +40,19 @@ class RelayTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 relay_module.relay('[SENTINEL_BLOCKED] paused', 'id', 'context', agent='unknown')
             run.assert_not_called()
+
+
+class ExternalWatcherContextTests(unittest.TestCase):
+    def test_nested_watcher_receives_selected_external_config_and_project(self):
+        from unittest.mock import MagicMock
+        process = MagicMock()
+        process.stdout = []
+        process.wait.return_value = 0
+        environment = {"NIGHTSHIFT_CONFIG_FILE": "/runner/ArtStudio/config.json",
+                       "NIGHTSHIFT_PROJECT_NAME": "ArtStudio"}
+        with patch.dict(relay_module.os.environ, environment, clear=True), \
+             patch.object(relay_module.sys, "argv", ["relay", "--root", "/tmp", "--planner-id", "thread"]), \
+             patch.object(relay_module.subprocess, "Popen", return_value=process) as popen:
+            self.assertEqual(relay_module.main(), 0)
+        command = popen.call_args.args[0]
+        self.assertEqual(command[2:6], ["--config", "/runner/ArtStudio/config.json", "--project", "ArtStudio"])

@@ -4,10 +4,10 @@ Runtime owns Git writes, hot acceptance, scores and task state. Work on the curr
 
 ## Before and during work
 
-- For indexed navigation, run `python3 nightshift/worker_runtime.py code-index ensure`, then
-  read `nightshift/.scratch/code-index/INDEX.md` only after script approval. Use compact queries
+- For indexed navigation, run `python3 "$NIGHTSHIFT_CORE/nightshift/worker_runtime.py" code-index ensure`, then
+  read `$NIGHTSHIFT_STATE_DIR/code-index/INDEX.md` only after script approval. Use compact queries
   for details; `index.json` is script-owned cache. Dirty-input recovery follows Explore's code index.
-- Read `nightshift/.worker.notes.md` and the ticket. Stay within TARGET.
+- Read `$NIGHTSHIFT_STATE_DIR/.worker.notes.md` and the ticket. Stay within TARGET.
   Applicable skills under `.agents/skills/`: [`tdd`](../.agents/skills/engineering/tdd/SKILL.md) for `[CODE]`; [`diagnosing-bugs`](../.agents/skills/engineering/diagnosing-bugs/SKILL.md) for `[DIAGNOSTIC]`; [`research`](../.agents/skills/engineering/research/SKILL.md) and [`explore`](../.agents/skills/nightshift/explore/SKILL.md) for `[RESEARCH]`. The ticket is the pre-agreed seam: proceed autonomously unless an ambiguity changes scope or expected behavior. The Planner owns acceptance and independent review.
 - [CODE]: use .agents/skills/engineering/tdd/SKILL.md. Add or update real tests;
   keep them in permanent hot discovery after this task ends. Include test and hot
@@ -47,5 +47,5 @@ Return exactly one JSON object with no text before or after it: outcome, commit_
 - On failure, report exact command, output and scope. Planner reschedules issues
   and explicitly restarts. Keep progress and queue records runtime-owned.
 
-Migration/configuration: read nightshift/acceptance.md when setting up hot/cold,
+Migration/configuration: read `$NIGHTSHIFT_CORE/nightshift/acceptance.md` when setting up hot/cold,
 adding a framework adapter, or diagnosing missing case evidence.

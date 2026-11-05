@@ -16,10 +16,46 @@ else
   PROJECT_ROOT="$(cd "$NIGHTSHIFT_DIR/.." && pwd)"
   RUNTIME_PATH="$NIGHTSHIFT_DIR/worker_runtime.py"
 fi
+CONFIG_FILE=""
+PROJECT_SELECTION=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --config)
+      [ -n "${2:-}" ] || { echo "--config requires a path" >&2; exit 2; }
+      CONFIG_FILE="$2"
+      shift 2
+      ;;
+    --project)
+      [ -n "${2:-}" ] || { echo "--project requires a name" >&2; exit 2; }
+      PROJECT_SELECTION="$2"
+      shift 2
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+if [ -z "$CONFIG_FILE" ]; then
+  if [ -f "$NIGHTSHIFT_DIR/config.json" ]; then
+    CONFIG_FILE="$NIGHTSHIFT_DIR/config.json"
+  elif [ -n "${NIGHTSHIFT_CONFIG_FILE:-}" ]; then
+    CONFIG_FILE="$NIGHTSHIFT_CONFIG_FILE"
+  fi
+fi
+if [ -z "$PROJECT_SELECTION" ] && [ -n "${NIGHTSHIFT_PROJECT_NAME:-}" ]; then
+  PROJECT_SELECTION="$NIGHTSHIFT_PROJECT_NAME"
+fi
+if [ -f "$CONFIG_FILE" ]; then
+  PROJECT_CONTEXT=$("${PYTHON_BIN:-python3}" "$NIGHTSHIFT_DIR/project_config.py" --config "$CONFIG_FILE" --root "$PROJECT_ROOT" ${PROJECT_SELECTION:+--project "$PROJECT_SELECTION"}) || exit $?
+  eval "$PROJECT_CONTEXT"
+elif [ -n "$PROJECT_SELECTION" ]; then
+  echo "Missing NightShift config: $CONFIG_FILE" >&2
+  exit 2
+fi
 cd "$PROJECT_ROOT" || exit 1
 STATUS_FILE="${STATUS_FILE:-$NIGHTSHIFT_DIR/worker.status}"
 if [ "${WORKER_ID:-default}" != "default" ]; then
-  STATUS_FILE="$NIGHTSHIFT_DIR/worker.${WORKER_ID}.status"
+  STATUS_FILE="$(dirname "$STATUS_FILE")/worker.${WORKER_ID}.status"
 fi
 PROGRESS_FILE="${PROGRESS_FILE:-$NIGHTSHIFT_DIR/progress.log}"
 TASKS_FILE="${TASKS_FILE:-$NIGHTSHIFT_DIR/tasks.txt}"

@@ -15,41 +15,65 @@ The intended workflow can run continuously, but the runtime does not start or su
 - `nightshift/progress.log`, `nightshift/tasks.done`, `nightshift/worker.status`, `nightshift/.worker.log`, and `nightshift/.worker-score.json` record runtime outcomes, current state, diagnostics, and shared reliability feedback. Attempt snapshots and failed-task recovery files live under `nightshift/.scratch/`. Worker checks their sizes without reading logs and queues one internal review when attempts or failures reach 100 MiB, or failure archives reach 20 directories. The Worker reviews deletion evidence and overwrites `nightshift/.scratch/review/last-review.json` (at most 1 KiB); Planner has no additional reading step.
 - Source-only `nightshift/docs/` contains the behavior spec, source-to-spec coverage, deployment guide, and NightShift operating guides. Root `docs/` remains available for project documentation and agent metadata.
 
-## Setup
+## External Workspace Architecture (Zero Footprint)
 
-Install into another existing repository:
+NightShift supports a Three-Tier external architecture where **target project repositories contain zero NightShift files**:
+
+1. **NightShift Core**: Reusable runtime engine and skill registry (`/opt/NightShift` or cloned path).
+2. **Runner Workspace**: State and queue directory per project (e.g. `~/nightshift-workspace/projects/<project>/`).
+3. **Target Project**: The consumer codebase (clean Git working tree, zero pollution).
+
+For detailed setup, see the [Porting Guide](PORTING_GUIDE.md).
+
+### Environment Activation (`env.sh`)
+
+Similar to Python virtual environments (`source venv/bin/activate`), each project workspace in the runner provides an `env.sh` script to fix the Planner and developer terminal context without modifying the target repository:
 
 ```sh
-./install.sh /path/to/target-project
+# Activate project context:
+source /path/to/runner/projects/my-app/env.sh
 ```
 
-Run the same installer again to update an existing deployment. The installed copy is `nightshift/install.sh`.
-
-The installer also creates `nightshift/tools/.venv` and installs the parser dependencies with pip. Generated maps and script cache stay in the ignored `nightshift/.scratch/code-index/` directory.
-
-Agent registrations, acceptance, and code-index settings live in `nightshift/config.json`. Restart `nightshift/worker.sh` to reload changes. Process controls such as `RUN_ONCE` remain environment variables. The installer preserves existing config. Each agent must define positive `worker.step_base` values for L1, L2, and L3. The `nightshift/` folder contains NightShift-owned code and state; `.agents/skills/` retains the skill entry points required by agent hosts.
+When activated:
+- Automatically switches directory (`cd`) to the target project code root.
+- Exports all standard NightShift variables (`$TASKS_FILE`, `$NIGHTSHIFT_STATE_DIR`, `$PROGRESS_FILE`, `$STATUS_FILE`).
+- Updates terminal prompt indicator to `(ns:my-app)`.
+- Injects quick command helpers:
+  - `ns-status`: Display real-time worker status & queue progress dashboard.
+  - `ns-worker`: Run the project worker daemon (`run_worker.sh`).
+  - `ns-watch`: Stream live worker events and audit triggers.
+  - `ns-pause` / `ns-resume`: Safely pause before claiming the next task, or resume.
+  - `deactivate-ns`: Deactivate project context and restore shell environment.
 
 ## Run and inspect
 
-Start the persistent worker:
+Start the project worker daemon:
 
 ```sh
-./nightshift/worker.sh
+# Via runner workspace project script:
+./projects/my-app/run_worker.sh
+
+# Or when env.sh is activated:
+ns-worker
 ```
 
 Run until the queue is empty:
 
 ```sh
-RUN_ONCE=1 ./nightshift/worker.sh
+RUN_ONCE=1 ./projects/my-app/run_worker.sh
 ```
 
 Useful controls:
 
 ```sh
-./nightshift/status.sh
-./nightshift/reorder_queue.sh prepared-queue.txt  # replace queue from a prepared file
-touch nightshift/PAUSE                           # pause before the next ticket
-rm nightshift/PAUSE                              # resume
+# Status dashboard
+./projects/my-app/status.sh   # or `ns-status` in activated shell
+
+# Pause before next ticket
+touch /path/to/my-app/PAUSE   # or `ns-pause`
+
+# Resume
+rm -f /path/to/my-app/PAUSE   # or `ns-resume`
 ```
 
 The queue reorder helper accepts a complete replacement queue from a file or standard input; it has no `prepend` subcommand. Worker tasks execute directly in the project directory. Trial deliveries go under `.trials/<TASK-ID>/` after their staged copy passes the runnable check; previous deliveries remain separate from development build outputs. Upgrades preserve old `.worker-tree`, branches, and `.preview` contents so you can inspect or migrate unfinished work manually. Runtime hot acceptance commits and scores automatically. Planner handles failed tasks and explicitly restarts; see [hot/cold migration](nightshift/acceptance.md).

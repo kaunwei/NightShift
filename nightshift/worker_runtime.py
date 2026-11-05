@@ -31,7 +31,6 @@ import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import scratch_review
-import project_config
 def _import_nightshift_module(name):
     try:
         return importlib.import_module(name)
@@ -43,6 +42,8 @@ def _import_nightshift_module(name):
             Path.cwd() / "nightshift" / f"{name}.py",
         ]:
             if candidate.exists():
+                if str(candidate.parent) not in sys.path:
+                    sys.path.insert(0, str(candidate.parent))
                 spec = importlib.util.spec_from_file_location(name, str(candidate))
                 mod = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(mod)
@@ -51,6 +52,7 @@ def _import_nightshift_module(name):
         return None
 
 acceptance = _import_nightshift_module("acceptance")
+project_config = _import_nightshift_module("project_config")
 
 
 FIELD_NAMES = (
@@ -640,7 +642,10 @@ def parse_agent_registry(raw, defaults=None):
 def load_agent_registry(config_file):
     """Load the shared agent-name map and order default registrations first."""
     path = Path(config_file)
-    profiles = project_config.read(path)
+    if project_config is not None:
+        profiles = project_config.read(path)
+    else:
+        profiles = read_config(path)
     profiles = profiles.get("agents", {})
     if not isinstance(profiles, dict):
         raise ValueError(f"{path} must contain an object keyed by agent name")
@@ -903,14 +908,17 @@ def should_failover_agent(exit_code, result_text):
     return status in ("no_response", "execution_timeout", "callback_timeout")
 
 
-def read_agent_state(path):
-    path = Path(path)
-    if not path.exists():
-        return {"version": 1, "active_agent_id": "", "consecutive_no_response": 0, "task_exclusions": {}}
-    try:
-        state = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {"version": 1, "active_agent_id": "", "consecutive_no_response": 0, "task_exclusions": {}}
+def read_agent_state(path_or_state):
+    if isinstance(path_or_state, dict):
+        state = path_or_state
+    else:
+        path = Path(path_or_state)
+        if not path.exists():
+            return {"version": 1, "active_agent_id": "", "consecutive_no_response": 0, "task_exclusions": {}}
+        try:
+            state = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {"version": 1, "active_agent_id": "", "consecutive_no_response": 0, "task_exclusions": {}}
     if not isinstance(state, dict):
         state = {}
     state.setdefault("version", 1)
@@ -947,6 +955,12 @@ def agent_supports_task(agent, title, constraints=""):
 
 def execute_registered_agents(args, agents, state_path, rollback):
     state = read_agent_state(state_path)
+    is_memory = isinstance(state_path, dict)
+
+    def persist():
+        if not is_memory and state_path:
+            atomic_write(state_path, json.dumps(state, ensure_ascii=False, indent=2) + "\n")
+
     task_exclusions = state.get("task_exclusions", {}).get(args.task_id, [])
     task_agents = [agent for agent in agents
                    if agent_supports_task(agent, getattr(args, "title", ""),
@@ -1064,7 +1078,7 @@ def execute_registered_agents(args, agents, state_path, rollback):
             state["active_agent_id"] = agent["id"]
             if state.get("task_exclusions", {}).pop(args.task_id, None) is not None:
                 pass
-            atomic_write(state_path, json.dumps(state, ensure_ascii=False, indent=2) + "\n")
+            persist()
             return code, False
 
         try:
@@ -1086,12 +1100,12 @@ def execute_registered_agents(args, agents, state_path, rollback):
                          if candidate["id"] not in task_exclusions]
             if not available:
                 args.awaiting_agent = True
-                atomic_write(state_path, json.dumps(state, ensure_ascii=False, indent=2) + "\n")
+                persist()
                 return 0, False
             current_index = 0
             next_agent = available[current_index]
         state["active_agent_id"] = next_agent["id"]
-        atomic_write(state_path, json.dumps(state, ensure_ascii=False, indent=2) + "\n")
+        persist()
 
         max_no_response = len(available)
         if is_no_response and consecutive_no_response >= max_no_response:
@@ -1442,7 +1456,7 @@ def _finalize_structured_adapter_result(args, result):
     message = result.get("commit_message")
     if not isinstance(message, str) or not message.strip():
         return 126
-    has_hot_config = (Path(args.work_dir) / "nightshift/config.json").is_file()
+    has_hot_config = bool(os.environ.get("NIGHTSHIFT_CONFIG_FILE")) or (Path(args.work_dir) / "nightshift/config.json").is_file()
     if has_hot_config and not is_research_task(args.title) and not scratch_review.is_review(args.title):
         try:
             result["hot"] = acceptance.hot(args, result, run_verify)
@@ -1769,9 +1783,16 @@ def build_task_prompt(task, task_id, level, target, verify, forbidden, constrain
     budget_rule = (f"- Budget: {max_steps} actions for research report; reserve 3 for closeout. Per-invocation timeout."
                    if is_research else
                    f"- Budget: {max_steps} actions ({step_base}+{target_file_count}×{step_per_file}); reserve 3 for verify/closeout. Per-invocation timeout. Emit `[EXEC] <action>` when required; no fabricated markers, bundled actions, or budget evasion.")
+    project_context = ""
+    if os.environ.get("NIGHTSHIFT_PROJECT_ROOT"):
+        skills = Path(__file__).resolve().parent.parent / ".agents/skills"
+        project_context = (f"Project: {os.environ['NIGHTSHIFT_PROJECT_NAME']}\n"
+                           f"Project root: {os.environ['NIGHTSHIFT_PROJECT_ROOT']}\n"
+                           f"NightShift skills: {skills}\n"
+                           "TARGET paths are relative to the project root.\n")
     return f"""Execute one NightShift ticket unattended. The ticket and launcher contract govern.
 
-TASK_ID: {task_id} | LEVEL: {level or '1'}
+{project_context}TASK_ID: {task_id} | LEVEL: {level or '1'}
 {task}
 
 START
@@ -1832,8 +1853,11 @@ def acquire_worker_lock(path, pid):
 
 def worker_daemon(root):
     root = Path(root).resolve()
-    owned = root / "nightshift" if (root / "nightshift").is_dir() else root
-    pid_file = Path(os.environ.get("PID_FILE", owned / ".worker.pid"))
+    external_state = os.environ.get("NIGHTSHIFT_STATE_DIR")
+    owned = Path(external_state) if external_state else root / "nightshift" if (root / "nightshift").is_dir() else root
+    worker_id = os.environ.get("WORKER_ID", "default")
+    suffix = "" if worker_id == "default" else "." + worker_id
+    pid_file = Path(owned / f".worker{suffix}.pid" if external_state else os.environ.get("PID_FILE", owned / ".worker.pid"))
     if not pid_file.is_absolute():
         pid_file = root / pid_file
     if not acquire_worker_lock(pid_file, os.getpid()):
@@ -1846,13 +1870,13 @@ def worker_daemon(root):
             pid_file.unlink(missing_ok=True)
         except OSError:
             pass
-        status_file = Path(os.environ.get("STATUS_FILE", owned / "worker.status"))
+        status_file = Path(owned / f"worker{suffix}.status" if external_state else os.environ.get("STATUS_FILE", owned / "worker.status"))
         if not status_file.is_absolute():
             status_file = root / status_file
         try:
             if status_file.is_file():
                 status_data = json.loads(status_file.read_text(encoding="utf-8"))
-                if status_data.get("state") not in ("BLOCKED", "PAUSED", "PAUSED_FOR_PLANNER", "AGENT_NO_RESPONSE", "RECOVERY_FAILED", "WAITING_FOR_AGENT"):
+                if status_data.get("state") not in ("BLOCKED", "PAUSED", "PAUSED_FOR_PLANNER", "AGENT_NO_RESPONSE", "RECOVERY_FAILED", "WAITING_FOR_AGENT", "WAITING_CLEAN_WORKTREE"):
                     status_data["state"] = "STOPPED"
                     atomic_write(status_file, json.dumps(status_data) + "\n")
         except Exception:
@@ -1898,7 +1922,7 @@ def git_audit(args):
     if diagnostic and any(re.match(r"^(Sources|src|app|lib)/", name, re.I) for name in changed):
         return 4, "Diagnostic Violation: Modifying production code in [DIAGNOSTIC] is strictly forbidden. Only tests and .reports/ allowed."
 
-    has_hot_config = (Path(args.work_dir) / "nightshift/config.json").is_file()
+    has_hot_config = bool(os.environ.get("NIGHTSHIFT_CONFIG_FILE")) or (Path(args.work_dir) / "nightshift/config.json").is_file()
     if not diagnostic and not research and not has_hot_config:
         tests = [name for name in changed if re.search(r"(^tests/|^Tests/|^test/|Test\.[a-z]+$|_test\.[a-z]+$)", name, re.I)]
         if tests:
@@ -2600,6 +2624,8 @@ def main(argv=None):
     scratch.add_argument("--root", required=True)
     scratch.add_argument("--stats-only", action="store_true")
     code_index = commands.add_parser("code-index")
+    code_index.add_argument("--config", default="")
+    code_index.add_argument("--project", default=None)
     code_index.add_argument("indexer_args", nargs=argparse.REMAINDER)
     audit = commands.add_parser("git-audit")
     audit.add_argument("--work-dir", required=True)
@@ -2648,15 +2674,37 @@ def main(argv=None):
     poll.add_argument("--research-step-budget", type=int, default=100)
     restart = commands.add_parser("restart")
     restart.add_argument("--root", required=True)
+    restart.add_argument("--config", default="")
+    restart.add_argument("--project", default=None)
+    info = commands.add_parser("project-info")
+    info.add_argument("--root", required=True)
+    info.add_argument("--config", required=True)
+    info.add_argument("--project", default=None)
     daemon = commands.add_parser("daemon")
     daemon.add_argument("--root", required=True)
+    daemon.add_argument("--config", default="")
+    daemon.add_argument("--project", default=None)
     daemon.add_argument("--research-step-budget", type=int, default=100)
     args = parser.parse_args(argv)
     if args.command == "score-read":
         state = (read_agent_score_state(args.state, args.agent_id) if args.agent_id
                  else read_score_state(args.state))
         print(json.dumps(score_summary(state), ensure_ascii=False))
+    elif args.command == "project-info":
+        name, root, state = project_config.resolve_project(args.config, args.project, args.root)
+        print(json.dumps({"name": name, "root": str(root), "state": str(state) if state else None,
+                          "skills": str(Path(__file__).resolve().parent.parent / ".agents/skills"),
+                          "index": str(state / "code-index/INDEX.md") if state else str(root / "nightshift/.scratch/code-index/INDEX.md")}))
     elif args.command == "restart":
+        if args.config:
+            name, root, state = project_config.resolve_project(args.config, args.project, args.root)
+            if name is not None:
+                os.environ.update(NIGHTSHIFT_CONFIG_FILE=str(Path(args.config).resolve()),
+                                  NIGHTSHIFT_PROJECT_ROOT=str(root), NIGHTSHIFT_PROJECT_NAME=name,
+                                  NIGHTSHIFT_STATE_DIR=str(state))
+                args.root = str(root)
+        elif args.project:
+            raise ValueError("--project requires --config")
         (acceptance.state_dir(args.root) / "paused.json").unlink(missing_ok=True)
         print("[RESTART] Planner released failure pause; next Worker starts clean.")
     elif args.command == "score-record":
@@ -2722,7 +2770,17 @@ def main(argv=None):
                   scratch_review.check(runtime, runtime / "tasks.txt", insert_task_front, atomic_write))
         print(json.dumps(result))
     elif args.command == "code-index":
-        result = run_code_index(Path.cwd(), args.indexer_args)
+        index_root = Path.cwd()
+        if args.config:
+            name, root, state = project_config.resolve_project(args.config, args.project, index_root)
+            if name is not None:
+                os.environ.update(NIGHTSHIFT_CONFIG_FILE=str(Path(args.config).resolve()),
+                                  NIGHTSHIFT_PROJECT_ROOT=str(root), NIGHTSHIFT_PROJECT_NAME=name,
+                                  NIGHTSHIFT_STATE_DIR=str(state))
+                index_root = root
+        elif args.project:
+            raise ValueError("--project requires --config")
+        result = run_code_index(index_root, args.indexer_args)
         return result.returncode
     elif args.command == "git-audit":
         code, reason = git_audit(args)
@@ -2748,6 +2806,15 @@ def main(argv=None):
     elif args.command == "poll-next":
         sys.stdout.buffer.write(("\0".join(poll_next(args)) + "\0").encode("utf-8"))
     elif args.command == "daemon":
+        if args.config:
+            name, root, state = project_config.resolve_project(args.config, args.project, args.root)
+            if name is not None:
+                os.environ.update(NIGHTSHIFT_CONFIG_FILE=str(Path(args.config).resolve()),
+                                  NIGHTSHIFT_PROJECT_ROOT=str(root), NIGHTSHIFT_PROJECT_NAME=name,
+                                  NIGHTSHIFT_STATE_DIR=str(state))
+                args.root = str(root)
+        elif args.project:
+            raise ValueError("--project requires --config")
         return worker_daemon(args.root)
     else:
         write_status(args)

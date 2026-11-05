@@ -45,7 +45,15 @@ def main():
         parser.error('wait must be nonnegative and interval positive')
     environment = dict(os.environ)
     environment.setdefault('WORKER_INACTIVE_REPEAT', '1')
-    process = subprocess.Popen(['bash', str(args.root / 'nightshift/watch_worker.sh'), str(args.wait), str(args.interval), args.task],
+    watcher = ['bash', str(Path(__file__).resolve().parent / 'watch_worker.sh')]
+    # Carry the selected external context across the relay's nested watcher.
+    # Otherwise the core's own config.json takes precedence over the environment.
+    if environment.get('NIGHTSHIFT_CONFIG_FILE'):
+        watcher.extend(['--config', environment['NIGHTSHIFT_CONFIG_FILE']])
+    if environment.get('NIGHTSHIFT_PROJECT_NAME'):
+        watcher.extend(['--project', environment['NIGHTSHIFT_PROJECT_NAME']])
+    watcher.extend([str(args.wait), str(args.interval), args.task])
+    process = subprocess.Popen(watcher,
                                cwd=args.root, env=environment, stdout=subprocess.PIPE,
                                stderr=subprocess.STDOUT, text=True)
     try:

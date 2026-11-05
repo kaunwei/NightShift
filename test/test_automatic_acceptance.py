@@ -114,6 +114,54 @@ pathlib.Path(os.environ['NIGHTSHIFT_RESULT_FILE']).write_text(json.dumps(result)
     def state(self, name):
         return acceptance.load(acceptance.state_dir(self.root) / name)
 
+    def test_external_worker_executes_and_commits_only_project_changes(self):
+        import project_config
+        external = self.directory / "external-config.json"
+        cfg = json.loads((self.root / "nightshift/config.json").read_text())
+        checks = self.directory / "checks"
+        checks.mkdir()
+        (checks / "hot.sh").write_text("test \"$PWD\" = \"$NIGHTSHIFT_PROJECT_ROOT\" || exit 9\nexec " + shlex.join([sys.executable, str(HOT)]) + "\n")
+        cfg["projects"] = {"company": {"path": "project", "acceptance": {
+            "hot_script": "checks/hot.sh", "cold": "true"}}}
+        external.write_text(json.dumps(cfg))
+        _, _, state = project_config.resolve_project(external, "company", self.root)
+        state.mkdir(parents=True)
+        (state / "tasks.txt").write_text(
+            "TASK-EXTERNAL [CODE: FIX] | LEVEL: 3 | TARGET: value.txt,test,hot.json,extra_test.py | VERIFY: true\n")
+        self.plan.write_text("{}")
+        process = subprocess.run([sys.executable, str(RUNTIME), "daemon", "--root", str(self.directory),
+                                  "--config", str(external), "--project", "company"],
+                                 env=self.env, text=True, capture_output=True, timeout=30)
+        self.assertEqual(process.returncode, 0, process.stdout + process.stderr)
+        self.assertNotEqual(self.git("rev-parse", "HEAD"), self.base, process.stdout + process.stderr)
+        self.assertEqual(self.git("show", "HEAD:value.txt"), "TASK-EXTERNAL")
+        changed = set(self.git("diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD").splitlines())
+        self.assertEqual(changed, {"value.txt", "test/test_behavior.py"})
+        self.assertFalse((self.root / ".reports").exists())
+        self.assertEqual(self.git("status", "--porcelain"), "")
+        self.assertTrue((state / "lifecycle/last-adapter.json").is_file())
+        self.assertIn("Project: company", next((state / "lifecycle/runs").glob("*/prompt.txt")).read_text())
+
+    @unittest.skipUnless((ROOT / "nightshift/tools/.venv/bin/python").is_file(), "parser environment required")
+    def test_external_index_uses_private_config_and_storage(self):
+        import project_config
+        external = self.directory / "external-config.json"
+        cfg = json.loads((self.root / "nightshift/config.json").read_text())
+        cfg["projects"] = {"company": {"path": "project", "code_index": {
+            "include": ["test/**"], "exclude": [], "tool": [], "project": ["test/**"]}}}
+        external.write_text(json.dumps(cfg))
+        _, _, state = project_config.resolve_project(external, "company", self.root)
+        process = subprocess.run([sys.executable, str(RUNTIME), "code-index", "--config", str(external),
+                                  "--project", "company", "ensure"], cwd=self.directory,
+                                 env=self.env, text=True, capture_output=True, timeout=30)
+        self.assertEqual(process.returncode, 0, process.stdout + process.stderr)
+        result = json.loads(process.stdout)
+        self.assertEqual(Path(result["index_path"]), state / "code-index/index.json")
+        self.assertTrue((state / "code-index/INDEX.md").is_file())
+        self.assertFalse((self.root / "nightshift/.scratch/code-index").exists())
+        data = json.loads((state / "code-index/index.json").read_text())
+        self.assertTrue(any(entry["path"] == "test/test_behavior.py" for entry in data["files"]))
+
     def test_worker_restart_uses_changed_agent_budget_and_timeout(self):
         launcher = self.root / "nightshift/worker.sh"
         shutil.copy2(ROOT / "nightshift/worker.sh", launcher)

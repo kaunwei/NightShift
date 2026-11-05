@@ -1,7 +1,18 @@
 """Project-owned tests; runtime-owned evidence and durable lifecycle state."""
 
 from contextlib import contextmanager
-import project_config
+try:
+    import project_config
+except ImportError:
+    import sys
+    from pathlib import Path
+    _ns_dir = str(Path(__file__).resolve().parent)
+    if _ns_dir not in sys.path:
+        sys.path.insert(0, _ns_dir)
+    try:
+        import project_config
+    except ImportError:
+        project_config = None
 import hashlib
 import json
 import math
@@ -24,6 +35,11 @@ def git(root, *args):
 
 
 def state_dir(root):
+    selected = os.environ.get("NIGHTSHIFT_STATE_DIR")
+    if selected:
+        path = Path(selected) / "lifecycle"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
     try:
         path = Path(git(root, "rev-parse", "--git-path", "nightshift"))
         path = path if path.is_absolute() else Path(root) / path
@@ -52,7 +68,13 @@ def load(path, default=None):
 def workspace(root):
     # OS locks release on exit/crash; all Worker IDs share this checkout lock.
     import fcntl
-    with (state_dir(root) / "workspace.lock").open("a") as stream:
+    if os.environ.get("NIGHTSHIFT_STATE_DIR"):
+        identity = hashlib.sha256(str(Path(root).resolve()).encode()).hexdigest()
+        lock = Path(os.environ["NIGHTSHIFT_STATE_DIR"]).parent / ".locks" / (identity + ".lock")
+        lock.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        lock = state_dir(root) / "workspace.lock"
+    with lock.open("a") as stream:
         try:
             fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as error:
@@ -64,12 +86,58 @@ def workspace(root):
 
 
 def config(root):
-    path = Path(root) / "nightshift/config.json"
+    explicit = os.environ.get("NIGHTSHIFT_CONFIG_FILE")
+    local_path = Path(root) / "nightshift/config.json"
+    path = None
+    if explicit:
+        explicit_path = Path(explicit)
+        if explicit_path.is_file():
+            try:
+                raw_test = project_config.read(explicit_path) if project_config is not None else json.loads(explicit_path.read_text(encoding="utf-8"))
+                root_resolved = Path(root).resolve()
+                name = os.environ.get("NIGHTSHIFT_PROJECT_NAME")
+                if name and name in raw_test.get("projects", {}):
+                    p_entry = raw_test["projects"][name]
+                    if isinstance(p_entry, dict) and "path" in p_entry:
+                        p_path = (explicit_path.parent / p_entry["path"]).resolve()
+                        if p_path == root_resolved:
+                            path = explicit_path
+                if path is None:
+                    for p_entry in raw_test.get("projects", {}).values():
+                        if isinstance(p_entry, dict) and "path" in p_entry:
+                            p_path = (explicit_path.parent / p_entry["path"]).resolve()
+                            if p_path == root_resolved:
+                                path = explicit_path
+                                break
+            except Exception:
+                pass
+    if path is None:
+        path = Path(explicit) if (explicit and not local_path.is_file()) else local_path
     try:
-        raw = project_config.read(path)
+        raw = project_config.read(path) if project_config is not None else (json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {})
     except ValueError as error:
         raise GateError(str(error)) from error
     value = raw.get("acceptance")
+    name = os.environ.get("NIGHTSHIFT_PROJECT_NAME")
+    if name:
+        entry = raw.get("projects", {}).get(name, {})
+        override = entry.get("acceptance", {})
+        if not isinstance(override, dict):
+            raise GateError(f"project {name!r} acceptance must be an object")
+        value = {**(value if isinstance(value, dict) else {}), **override}
+        for kind in ("hot", "cold"):
+            script = override.get(kind + "_script")
+            if script is not None:
+                if not isinstance(script, str) or not script:
+                    raise GateError(f"project {name!r} acceptance.{kind}_script must be a path")
+                candidate = Path(script).expanduser()
+                if candidate.is_absolute():
+                    script_path = candidate
+                elif (Path(root) / candidate).is_file():
+                    script_path = Path(root) / candidate
+                else:
+                    script_path = path.parent / candidate
+                value[kind] = "bash " + shlex.quote(str(script_path.resolve()))
     if isinstance(value, dict):
         value = dict(value)
         value.setdefault("version", raw["version"])
@@ -105,7 +173,7 @@ class AcceptanceRunner:
     def run_hot(self, args, result, run):
         raise NotImplementedError
 
-    def run_cold(self, root, run):
+    def run_cold(self, root, run_id=None):
         raise NotImplementedError
 
 
@@ -119,7 +187,8 @@ class DefaultAcceptanceRunner(AcceptanceRunner):
         environment = {"NIGHTSHIFT_PHASE": phase, "NIGHTSHIFT_RESULT": str(output.resolve()),
                        "NIGHTSHIFT_RUN": nonce, "NIGHTSHIFT_BASE": base,
                        "NIGHTSHIFT_TASK": task, "NIGHTSHIFT_REQUIRED": json.dumps(list(required)),
-                       "PYTHONDONTWRITEBYTECODE": "1", "PYTHONPYCACHEPREFIX": str(output.with_suffix(".cache"))}
+                       "PYTHONDONTWRITEBYTECODE": "1", "PYTHONPYCACHEPREFIX": str(output.with_suffix(".cache")),
+                       "NIGHTSHIFT_PROJECT_ROOT": str(root.resolve())}
         # Discover permanent membership with no ticket context.
         if phase == "discover":
             environment.update(NIGHTSHIFT_TASK="", NIGHTSHIFT_REQUIRED="[]")
@@ -145,8 +214,7 @@ class DefaultAcceptanceRunner(AcceptanceRunner):
         root = Path(args.work_dir)
         print(f"\n[HOT_GATE] >>> Starting Hot Acceptance Gate for task: {args.task_id}", flush=True)
         cfg = config(root)
-        config_file = "nightshift/config.json"
-        for name in [config_file, *cfg.get("wiring", [])]:
+        for name in cfg.get("wiring", []):
             if subprocess.run(["git", "-C", str(root), "check-ignore", "-q", "--", name]).returncode == 0:
                 raise GateError(f"persistent hot wiring must be delivered in Git: {name}")
         declarations = result.get("tdd_cases")
@@ -203,8 +271,13 @@ class DefaultAcceptanceRunner(AcceptanceRunner):
         print(f"[HOT_GATE] <<< Hot Acceptance Gate PASSED cleanly for {args.task_id}!\n", flush=True)
         return {"cases": sorted(executed), "evidence": evidence}
 
-    def run_cold(self, root, run):
-        print(f"\n[COLD_REGRESSION] >>> Starting Periodic Cold Regression Suite...", flush=True)
+    def run_cold(self, root, run_verify=None, **kwargs):
+        runner = run_verify if callable(run_verify) else kwargs.get("run")
+        if runner is None or not callable(runner):
+            def default_runner(cmd, cwd, port, timeout):
+                proc = subprocess.run(cmd, cwd=cwd, shell=True, capture_output=True, text=True, timeout=timeout)
+                return proc.returncode, proc.stdout + proc.stderr
+            runner = default_runner
         cfg = config(root)
         head = git(root, "rev-parse", "HEAD")
         path = state_dir(root) / "cold.json"
@@ -212,7 +285,6 @@ class DefaultAcceptanceRunner(AcceptanceRunner):
         if state.get("passed") == head:
             state.update(commits=[], pending=False)
             save(path, state)
-            print(f"[COLD_REGRESSION] Already passed for HEAD {head[:8]}.", flush=True)
             return
         ignored = re.compile(r"(?:^|/)(?:nightshift/)?(?:progress\.log|tasks\.txt|tasks\.done|worker\..*\.status|\.preview|\.reports|\.worker.*|\.scratch)")
         def product_status():
@@ -222,14 +294,12 @@ class DefaultAcceptanceRunner(AcceptanceRunner):
         before = product_status()
         if before:
             raise GateError("cold requires a clean product tree")
-        print(f"[COLD_REGRESSION] Running cold test command at HEAD {head[:8]}...", flush=True)
-        code, output = run(command(cfg, "cold"), str(root), "3001", cfg.get("timeout", 180))
+        code, output = runner(command(cfg, "cold"), str(root), "3001", cfg.get("timeout", 180))
         after = product_status()
         if code or before != after or git(root, "rev-parse", "HEAD") != head:
             raise GateError(f"cold failed or changed product files (exit {code}) at {head}\n{output[-16384:]}")
         state.update(passed=head, commits=[], pending=False)
         save(path, state)
-        print(f"[COLD_REGRESSION] <<< Cold Regression Suite PASSED cleanly for HEAD {head[:8]}!\n", flush=True)
 
 
 def get_runner(root, cfg=None):
