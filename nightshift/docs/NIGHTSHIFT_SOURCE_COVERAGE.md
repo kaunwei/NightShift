@@ -14,7 +14,6 @@ For every later simplification, compare the changed source hashes and each affec
 | [.agents/skills/nightshift/explore/SKILL.md](../../.agents/skills/nightshift/explore/SKILL.md) | 381637e3f90d82fa0fdb9ddcfb30c4103a5f3c200dadf978353c06b5d0c3e997 |
 | [.agents/skills/nightshift/planner/SKILL.md](../../.agents/skills/nightshift/planner/SKILL.md) | d5b91113051cfad6a1071c5416c92646b1b663a4480b257a6b5e5980cd8b0fee |
 | [.skills/universal-build-verify.md](../../.skills/universal-build-verify.md) | e48ea16cd6f0db848007ee6ac84802d84bf3fa56389affd2f9c0242db2b00719 |
-| [nightshift/code-index.toml](../code-index.toml) | fbc96e3391801fe826f77c1aa0a5d8a1ce0100eb6493f964b5d8406325e46f30 |
 | [nightshift/adapters/agents.json](../adapters/agents.json) | 1dcce30d5fe2ebe49fa57c4ea108cab7e90f5d50a24ac97117183fe13608d2ea |
 | [nightshift/adapters/agy.py](../adapters/agy.py) | 1af2f11c3143d5f6185ee7d8ee67aba11b28076e7d9c1e05e0c3c086601a4eaa |
 | [nightshift/adapters/codex.py](../adapters/codex.py) | 4a3b8ce67ff6ae807ac2487676f6e28bc7f20d25af6719fb6f337e634e210af8 |

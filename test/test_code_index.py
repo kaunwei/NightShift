@@ -64,14 +64,19 @@ app: main.c
 add_executable(tracker main.cpp)
 ''')
         self.write("generated/ignored.py", "class IgnoredTracker: pass\n")
-        self.write("nightshift/code-index.toml", '''[project]
-include = ["src/**"]
-exclude = ["src/**/vendor/**"]
-
-[scope]
-tool = ["src/javascript/**"]
-project = ["src/**"]
-''')
+        self.write("nightshift/config.json", json.dumps({
+            "version": 1,
+            "code_index": {
+                "project": {
+                    "include": ["src/**"],
+                    "exclude": ["src/**/vendor/**"]
+                },
+                "scope": {
+                    "tool": ["src/javascript/**"],
+                    "project": ["src/**"]
+                }
+            }
+        }))
         subprocess.run(["git", "-C", str(self.root), "add", "src", "generated", "nightshift"], check=True)
         subprocess.run(
             ["git", "-C", str(self.root), "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "fixture"],
@@ -210,7 +215,7 @@ project = ["src/**"]
         self.assertNotEqual(payload["revision"], first["revision"])
 
     def test_dirty_tracked_source_and_settings_block_build(self):
-        for name in ("src/python/tracker.py", "nightshift/code-index.toml"):
+        for name in ("src/python/tracker.py", "nightshift/config.json"):
             with self.subTest(path=name):
                 original = (self.root / name).read_text()
                 self.write(name, original + "\n# pending change\n")

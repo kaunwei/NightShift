@@ -2344,7 +2344,9 @@ def _runtime_state_root(root):
 
 
 def _scratch_state_root(root):
-    """Keep Worker attempt and recovery artifacts inside the installed bundle."""
+    """Keep external attempt/recovery artifacts in the selected runner state."""
+    if os.environ.get("NIGHTSHIFT_STATE_DIR"):
+        return Path(os.environ["NIGHTSHIFT_STATE_DIR"]).expanduser().resolve() / ".scratch"
     return _runtime_state_root(root) / ".scratch"
 
 

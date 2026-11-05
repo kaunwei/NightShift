@@ -1,6 +1,6 @@
 # NightShift Code Index
 
-This directory owns the reusable index CLI, parser registry, and its runtime dependencies. A consuming repository owns `nightshift/code-index.toml`, which selects source paths and labels tool-owned code separately from product code. Generated artifacts live under the ignored `nightshift/.scratch/code-index/` directory.
+This directory owns the reusable index CLI, parser registry, and its runtime dependencies. Configuration in `nightshift/config.json` (or external project config) selects source paths and labels tool-owned code separately from product code. Generated artifacts live under the ignored `nightshift/.scratch/code-index/` directory (or the project's runner state).
 
 ## Supported parsers
 
