@@ -35,10 +35,11 @@ def _import_nightshift_module(name):
     try:
         return importlib.import_module(name)
     except ImportError:
-        repo_dir = Path("/Volumes/Vault500G/workspace/NightShift/nightshift")
+        repo_dir = Path("/Volumes/Vault500G/workspace/NightShift/scripts")
         for candidate in [
             Path(__file__).resolve().parent / f"{name}.py",
             repo_dir / f"{name}.py",
+            Path.cwd() / "scripts" / f"{name}.py",
             Path.cwd() / "nightshift" / f"{name}.py",
         ]:
             if candidate.exists():
@@ -476,6 +477,7 @@ def workspace_snapshot(work_dir, base):
     paths = {os.fsdecode(item) for item in changed.split(b"\0") + untracked.split(b"\0") if item}
     paths = {name for name in paths
              if not name.startswith((".worker-ghosts/", ".worker-ghost-state",
+                                     "scripts/.worker-ghosts/", "scripts/.worker-ghost-state",
                                      "nightshift/.worker-ghosts/", "nightshift/.worker-ghost-state"))}
     snapshot = {}
     for name in paths:
@@ -1163,15 +1165,20 @@ def poll_next(args):
             research_budget = getattr(args, "research_step_budget", 0) or int(os.environ.get("RESEARCH_STEP_BUDGET", "100"))
             fields[15] = str(research_budget)
         else:
-            config_path = Path(args.work_dir) / "nightshift/config.json"
-            try:
-                agents = load_agent_registry(config_path)
-                if not agents:
-                    raise ValueError("config.json requires at least one agent")
-                base = agents[0]["worker"]["step_base"][f"L{fields[9]}"]
-            except (ValueError, KeyError):
-                insert_task_front(args.tasks, raw)
-                raise
+            config_candidate = (Path(args.work_dir) / "scripts/config.json"
+                                if (Path(args.work_dir) / "scripts/config.json").is_file()
+                                else Path(args.work_dir) / "nightshift/config.json")
+            if config_candidate.is_file():
+                try:
+                    agents = load_agent_registry(config_candidate)
+                    if not agents:
+                        raise ValueError("config.json requires at least one agent")
+                    base = agents[0]["worker"]["step_base"][f"L{fields[9]}"]
+                except (ValueError, KeyError):
+                    insert_task_front(args.tasks, raw)
+                    raise
+            else:
+                base = args.step_base
             fields[15] = str(base + file_count * args.step_per_file)
     return fields
 
@@ -1331,7 +1338,9 @@ def code_index_inputs(work_dir, paths):
         path = Path(name)
         if (path.suffix.lower() in extensions or path.name.lower() in special
                 or path.suffix.lower() in settings_suffixes
-                or name in {"nightshift/tools/index.py", "nightshift/tools/languages.json",
+                or name in {"scripts/tools/index.py", "scripts/tools/languages.json",
+                            "scripts/tools/requirements.txt",
+                            "nightshift/tools/index.py", "nightshift/tools/languages.json",
                             "nightshift/tools/requirements.txt"}):
             return True
     return False
@@ -1444,7 +1453,7 @@ def _finalize_structured_adapter_result(args, result):
             untracked = subprocess.run(["git", "-C", args.work_dir, "ls-files", "--others",
                                         "--exclude-standard"], capture_output=True, text=True,
                                        check=False).stdout.splitlines()
-        runtime_file = re.compile(r"(?:^|/)(?:nightshift/)?(?:progress\.log|tasks\.txt|tasks\.done|worker\..*\.status|\.worker.*|\.preview(?:/|$)|\.reports(?:/|$))")
+        runtime_file = re.compile(r"(?:^|/)(?:scripts/|nightshift/)?(?:progress\.log|tasks\.txt|tasks\.done|worker\..*\.status|\.worker.*|\.preview(?:/|$)|\.reports(?:/|$))")
         changes = [name for name in tracked + untracked if not runtime_file.search(name)]
         if changes:
             raise ValueError("no_change result conflicts with workspace changes")
@@ -1456,7 +1465,12 @@ def _finalize_structured_adapter_result(args, result):
     message = result.get("commit_message")
     if not isinstance(message, str) or not message.strip():
         return 126
-    has_hot_config = bool(os.environ.get("NIGHTSHIFT_CONFIG_FILE")) or (Path(args.work_dir) / "nightshift/config.json").is_file()
+    has_hot_config = False
+    try:
+        cfg = acceptance.config(args.work_dir)
+        has_hot_config = bool(cfg.get("hot") or cfg.get("hot_script"))
+    except Exception:
+        has_hot_config = False
     if has_hot_config and not is_research_task(args.title) and not scratch_review.is_review(args.title):
         try:
             result["hot"] = acceptance.hot(args, result, run_verify)
@@ -1585,6 +1599,7 @@ def run_adapter_ghost(args, main_request, main_status, main_result):
         wiring = set(acceptance.config(args.work_dir).get("wiring", []))
     except ValueError:
         wiring = set()
+    wiring.add("scripts/config.json")
     wiring.add("nightshift/config.json")
     request = {
         **main_request,
@@ -1854,7 +1869,7 @@ def acquire_worker_lock(path, pid):
 def worker_daemon(root):
     root = Path(root).resolve()
     external_state = os.environ.get("NIGHTSHIFT_STATE_DIR")
-    owned = Path(external_state) if external_state else root / "nightshift" if (root / "nightshift").is_dir() else root
+    owned = Path(external_state) if external_state else root / "scripts" if (root / "scripts").is_dir() else root / "nightshift" if (root / "nightshift").is_dir() else root
     worker_id = os.environ.get("WORKER_ID", "default")
     suffix = "" if worker_id == "default" else "." + worker_id
     pid_file = Path(owned / f".worker{suffix}.pid" if external_state else os.environ.get("PID_FILE", owned / ".worker.pid"))
@@ -1890,7 +1905,7 @@ def git_audit(args):
                               check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout
 
     trees = attempt_audit_trees(args)
-    ignored = re.compile(r"(?:^|/)(?:nightshift/)?(?:progress\.log|tasks\.txt|tasks\.done|worker\..*\.status|\.preview|\.reports|\.worker.*)")
+    ignored = re.compile(r"(?:^|/)(?:scripts/|nightshift/)?(?:progress\.log|tasks\.txt|tasks\.done|worker\..*\.status|\.preview|\.reports|\.worker.*)")
     if trees:
         changed = changed_tree_paths(args.work_dir, *trees)
         dirty = set(changed_tree_paths(args.work_dir, "HEAD", trees[1])).intersection(changed)
@@ -1922,7 +1937,7 @@ def git_audit(args):
     if diagnostic and any(re.match(r"^(Sources|src|app|lib)/", name, re.I) for name in changed):
         return 4, "Diagnostic Violation: Modifying production code in [DIAGNOSTIC] is strictly forbidden. Only tests and .reports/ allowed."
 
-    has_hot_config = bool(os.environ.get("NIGHTSHIFT_CONFIG_FILE")) or (Path(args.work_dir) / "nightshift/config.json").is_file()
+    has_hot_config = bool(os.environ.get("NIGHTSHIFT_CONFIG_FILE")) or (Path(args.work_dir) / "scripts/config.json").is_file() or (Path(args.work_dir) / "nightshift/config.json").is_file()
     if not diagnostic and not research and not has_hot_config:
         tests = [name for name in changed if re.search(r"(^tests/|^Tests/|^test/|Test\.[a-z]+$|_test\.[a-z]+$)", name, re.I)]
         if tests:
@@ -1954,12 +1969,14 @@ def git_audit(args):
     if args.target and not re.search(r"unrestricted|multi-interface", args.constraints, re.I) and not (diagnostic or research):
         targets = [item.strip().rstrip("/").casefold() for item in args.target.split(",") if item.strip()]
         exempt = {"progress.log", "tasks.txt", "tasks.done", "worker.status", ".gitignore", ".worker.notes.md",
+                  "scripts/progress.log", "scripts/tasks.txt", "scripts/tasks.done",
+                  "scripts/worker.status", "scripts/.worker.notes.md",
                   "nightshift/progress.log", "nightshift/tasks.txt", "nightshift/tasks.done",
                   "nightshift/worker.status", "nightshift/.worker.notes.md"}
         for name in changed:
             if (name in exempt or name.startswith((".reports/", "docs/reports/", ".worker-ghosts/",
-                                                   "nightshift/.worker-ghosts/"))
-                    or re.fullmatch(r"(?:nightshift/)?\.worker-ghost-state(?:\.[A-Za-z0-9_.-]+)?\.json", name)):
+                                                   "scripts/.worker-ghosts/", "nightshift/.worker-ghosts/"))
+                    or re.fullmatch(r"(?:scripts/|nightshift/)?\.worker-ghost-state(?:\.[A-Za-z0-9_.-]+)?\.json", name)):
                 continue
             lowered = name.casefold()
             if not any(lowered == target or lowered.startswith(target + "/") for target in targets):
@@ -2340,7 +2357,11 @@ def _git_path_state(path):
 
 def _runtime_state_root(root):
     root = Path(root)
-    return root / "nightshift" if (root / "nightshift").is_dir() else root
+    if (root / "scripts").is_dir():
+        return root / "scripts"
+    if (root / "nightshift").is_dir():
+        return root / "nightshift"
+    return root
 
 
 def _scratch_state_root(root):
@@ -2432,7 +2453,7 @@ def recover_attempt_baseline(work_dir, snapshot_path, archive_path, runtime_path
     baseline_untracked = set(metadata.get("untracked", []))
     runtime_resolved = set(runtime_states)
     for relative in _git_names(work_dir, "ls-files", "--others", "--exclude-standard", "-z"):
-        if relative in baseline_untracked or relative.startswith((".scratch/", "nightshift/.scratch/", ".worker-ghosts/", "nightshift/.worker-ghosts/")):
+        if relative in baseline_untracked or relative.startswith((".scratch/", "scripts/.scratch/", "nightshift/.scratch/", ".worker-ghosts/", "scripts/.worker-ghosts/", "nightshift/.worker-ghosts/")):
             continue
         p = work_dir / relative
         if str(p.resolve()) in runtime_resolved:
@@ -2498,7 +2519,7 @@ def rollback_failed_task(root, work_dir, task_id, runtime_paths, baseline_snapsh
 
     subprocess.run(["git", "-C", str(work_dir), "reset", "--hard", "HEAD"],
                    check=False, capture_output=True)
-    subprocess.run(["git", "-C", str(work_dir), "clean", "-fd", "-e", ".scratch", "-e", ".worker*", "-e", "nightshift/"],
+    subprocess.run(["git", "-C", str(work_dir), "clean", "-fd", "-e", ".scratch", "-e", ".worker*", "-e", "scripts/", "-e", "nightshift/"],
                    check=False, capture_output=True)
 
     for path_str, content in runtime_states.items():
@@ -2696,7 +2717,7 @@ def main(argv=None):
         name, root, state = project_config.resolve_project(args.config, args.project, args.root)
         print(json.dumps({"name": name, "root": str(root), "state": str(state) if state else None,
                           "skills": str(Path(__file__).resolve().parent.parent / ".agents/skills"),
-                          "index": str(state / "code-index/INDEX.md") if state else str(root / "nightshift/.scratch/code-index/INDEX.md")}))
+                          "index": str(state / "code-index/INDEX.md") if state else str(root / "scripts/.scratch/code-index/INDEX.md" if (root / "scripts").is_dir() else root / "nightshift/.scratch/code-index/INDEX.md")}))
     elif args.command == "restart":
         if args.config:
             name, root, state = project_config.resolve_project(args.config, args.project, args.root)
@@ -2767,7 +2788,7 @@ def main(argv=None):
         return run_with_timeout(args.seconds, command)
     elif args.command == "scratch-review-check":
         project = Path(args.root).resolve()
-        runtime = project / "nightshift" if (project / "nightshift").is_dir() else project
+        runtime = project / "scripts" if (project / "scripts").is_dir() else project / "nightshift" if (project / "nightshift").is_dir() else project
         result = (scratch_review.inventory(runtime) if args.stats_only else
                   scratch_review.check(runtime, runtime / "tasks.txt", insert_task_front, atomic_write))
         print(json.dumps(result))

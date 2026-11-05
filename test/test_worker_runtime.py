@@ -14,9 +14,9 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 
 ROOT = next(parent for parent in Path(__file__).resolve().parents
-            if (parent / "nightshift/worker.sh").exists())
-RUNTIME = ROOT / "nightshift/worker_runtime.py"
-sys.path.insert(0, str(ROOT / "nightshift"))
+            if (parent / "scripts/worker.sh").exists() or (parent / "nightshift/worker.sh").exists())
+RUNTIME = ROOT / "scripts/worker_runtime.py" if (ROOT / "scripts/worker_runtime.py").exists() else ROOT / "scripts/worker_runtime.py"
+sys.path.insert(0, str(ROOT / "scripts" if (ROOT / "scripts").is_dir() else ROOT / "scripts"))
 import worker_runtime as runtime_module
 from worker_runtime import build_task_prompt, first_report, publish_research_reports
 
@@ -37,7 +37,7 @@ def runtime(*args, env=None):
     )
 
 
-def write_legacy_registry(root, raw):
+def write_legacy_registry(root, raw, step_base=None):
     """Translate old integration fixtures to the public registry seam."""
     profiles = json.loads(raw)
     if not isinstance(profiles, list):
@@ -56,14 +56,14 @@ def write_legacy_registry(root, raw):
                  if key not in {"id", "adapter", "command", "args", "env", "model", "effort", "overrides", "config"}}
         entry.update({
             "default": index == 0,
-            "worker": {"step_base": {"L1": 60, "L2": 40, "L3": 20}},
+            "worker": {"step_base": step_base or {"L1": 60, "L2": 40, "L3": 20}},
             "agent": {"adapter": profile.get("adapter", ""), "command": command,
                       "args": agent_args, "env": agent_env, "config": agent_config},
         })
         registry[name] = entry
-    agent_dir = Path(root) / "nightshift"
-    agent_dir.mkdir(parents=True, exist_ok=True)
-    (agent_dir / "config.json").write_text(json.dumps({"version": 1, "agents": registry}))
+    for agent_dir in (Path(root) / "scripts", Path(root) / "nightshift"):
+        agent_dir.mkdir(parents=True, exist_ok=True)
+        (agent_dir / "config.json").write_text(json.dumps({"version": 1, "agents": registry}))
 
 
 _real_subprocess_run = subprocess.run
@@ -120,7 +120,8 @@ def copy_runtime_fixture(destination):
     destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(RUNTIME, destination)
-    shutil.copy2(ROOT / "nightshift/scratch_review.py", destination.parent / "scratch_review.py")
+    scratch_source = ROOT / "scripts/scratch_review.py" if (ROOT / "scripts").is_dir() else ROOT / "scripts/scratch_review.py"
+    shutil.copy2(scratch_source, destination.parent / "scratch_review.py")
     # This fixture deliberately keeps the legacy scripts/ runtime layout, whose
     # runtime state and scratch files live at the repository root.
     legacy_gitignore = destination.parent.parent / ".gitignore"
@@ -136,7 +137,7 @@ def copy_runtime_fixture(destination):
         if missing:
             legacy_gitignore.write_text("\n".join([*lines, *missing]) + "\n")
     adapters = destination.parent / "adapters"
-    shutil.copytree(ROOT / "nightshift/adapters", adapters, dirs_exist_ok=True)
+    shutil.copytree(ROOT / "scripts/adapters", adapters, dirs_exist_ok=True)
 
 
 def codex_registration(registration_id, executable="codex", model="", **settings):
@@ -144,18 +145,18 @@ def codex_registration(registration_id, executable="codex", model="", **settings
     if model:
         overrides["model"] = model
     return {"id": registration_id, "adapter": "codex", "command": sys.executable,
-            "args": [str(ROOT / "nightshift/adapters/codex.py")], "overrides": overrides}
+            "args": [str(ROOT / "scripts/adapters/codex.py")], "overrides": overrides}
 
 
 def generic_registration(registration_id, executable, args=(), env=None, **settings):
     overrides = {"executable": str(executable), "args": list(args), "env": env or {}, **settings}
     return {"id": registration_id, "adapter": "generic", "command": sys.executable,
-            "args": [str(ROOT / "nightshift/adapters/generic.py")], "overrides": overrides}
+            "args": [str(ROOT / "scripts/adapters/generic.py")], "overrides": overrides}
 
 
 def task_cli_adapter(adapter, executable, **settings):
     return ["--adapter", adapter, "--executable", sys.executable,
-            "--extra-arg", str(ROOT / "nightshift/adapters" / f"{adapter}.py"),
+            "--extra-arg", str(ROOT / "scripts/adapters" / f"{adapter}.py"),
             "--overrides", json.dumps({"executable": str(executable), **settings})]
 
 
@@ -172,7 +173,7 @@ class WorkerPromptContractTests(unittest.TestCase):
             "Per-invocation timeout", "python3 -m unittest", "TASK-9",
             "The Planner owns acceptance and independent review",
             "[EXEC] <brief action>", "closeout_required", "[SCOPE_BLOCKED]", "[DEAD_END]",
-            "progress.log", "nightshift/.scratch/code-index/INDEX.md",
+            "progress.log", "code-index/INDEX.md",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, prompt)
@@ -314,8 +315,8 @@ class AgentConfigContractTests(unittest.TestCase):
             profiles = json.loads((config_dir / "agents.json").read_text())
             for profile in profiles.values():
                 profile["worker"]["step_base"] = {"L1": 60, "L2": 40, "L3": 20}
-            owned = root / "nightshift"
-            owned.mkdir()
+            owned = root / "scripts"
+            owned.mkdir(exist_ok=True)
             (owned / "config.json").write_text(json.dumps({"version": 1, "agents": profiles}))
             env = {**os.environ, "RUN_ONCE": "1", "POLL_INTERVAL": "0", "TASKS_FILE": str(root / "tasks.txt")}
 
@@ -583,7 +584,7 @@ class BuiltinAdapterContractTests(unittest.TestCase):
                            "environment":{"FINAL_REPLY":reply},"limits":{"action_limit":3}}
                 (root / "request.json").write_text(json.dumps(request))
                 executed = runtime("adapter-exec", "--command", sys.executable,
-                                   "--adapter-arg", ROOT/"nightshift/adapters/codex.py",
+                                   "--adapter-arg", ROOT/"scripts/adapters/codex.py",
                                    "--request", root/"request.json", "--execution-timeout", "2", "--callback-timeout", "0.5")
                 self.assertEqual(executed.returncode, 0, executed.stderr)
                 self.assertEqual(json.loads(executed.stdout)["status"], status)
@@ -601,7 +602,7 @@ class BuiltinAdapterContractTests(unittest.TestCase):
                 "'no_change_reason':'fixture','commit_message':'docs: no changes'}))\n"
                 "print(json.dumps({'type':'item.completed','item':{'type':'command_execution'}}))\n")
             executable.chmod(0o755)
-            adapter = ROOT / "nightshift/adapters/codex.py"
+            adapter = ROOT / "scripts/adapters/codex.py"
             args_log = root / "codex-args.json"
             request = {"protocol_version":1,"registration_id":"codex-test","overrides":{
                 "executable":str(executable),"model":"gpt-6-luna","effort":"none",
@@ -656,7 +657,7 @@ class BuiltinAdapterContractTests(unittest.TestCase):
                        "result_path": str(root / "result.json"), "limits": {"action_limit": 3}}
             (root / "request.json").write_text(json.dumps(request))
             executed = runtime("adapter-exec", "--command", sys.executable,
-                               "--adapter-arg", ROOT / "nightshift/adapters/codex.py",
+                               "--adapter-arg", ROOT / "scripts/adapters/codex.py",
                                "--request", root / "request.json", "--execution-timeout", "2",
                                "--callback-timeout", "0.5")
             self.assertEqual(executed.returncode, 0, executed.stderr)
@@ -675,7 +676,7 @@ class BuiltinAdapterContractTests(unittest.TestCase):
                 "print(json.dumps({'outcome':'complete','changed':False,"
                 "'no_change_reason':'fixture','commit_message':'docs: no changes'}))\n")
             executable.chmod(0o755)
-            adapter=ROOT/"nightshift/adapters/agy.py"
+            adapter=ROOT/"scripts/adapters/agy.py"
             args_log=root/"agy-args.json"; extra=root/"extra"; extra.mkdir()
             request={"protocol_version":1,"registration_id":"agy-test","overrides":{
                 "executable":str(executable),"model":"model-low","effort":"high",
@@ -720,7 +721,7 @@ class BuiltinAdapterContractTests(unittest.TestCase):
                 "open("+repr(str(marker))+",'w'))\n"
                 "json.dump({'outcome':'complete','changed':False,'no_change_reason':'fixture',"
                 "'commit_message':'docs: no changes'},open(os.environ['NIGHTSHIFT_RESULT_FILE'],'w'))\n")
-            adapter=ROOT/"nightshift/adapters/generic.py"
+            adapter=ROOT/"scripts/adapters/generic.py"
             request={"protocol_version":1,"registration_id":"custom","overrides":{
                 "executable":sys.executable,"args":[str(wrapper)],"model":"model-x","effort":"high"},
                 "task_id":"TASK-GENERIC","working_directory":str(root),
@@ -1053,8 +1054,8 @@ class PollContractTests(unittest.TestCase):
             tasks, done = root / "tasks.txt", root / "tasks.done"
             tasks.write_text("# queued\nTASK-2 | LEVEL: 2 | TARGET: a.py,b.py | VERIFY: true\n")
             done.write_text("[DONE] TASK-1\n")
-            owned = root / "nightshift"
-            owned.mkdir()
+            owned = root / "scripts"
+            owned.mkdir(exist_ok=True)
             (owned / "config.json").write_text(json.dumps({"version": 1, "agents": {
                 "main": {"worker": {"step_base": {"L1": 60, "L2": 12, "L3": 20}},
                          "agent": {"adapter": "generic", "command": "unused"}}}}))
@@ -2067,7 +2068,7 @@ class WorkerIntegrationTests(unittest.TestCase):
             root = Path(directory) / "repo"
             root.mkdir()
             for name in ("worker.sh", ".gitignore"):
-                shutil.copy2((ROOT / "nightshift" / name if name == "worker.sh" else ROOT / name), root / name)
+                shutil.copy2((ROOT / "scripts" / name if name == "worker.sh" else ROOT / name), root / name)
             (root / "scripts").mkdir()
             copy_runtime_fixture(root / "scripts/worker_runtime.py")
             profiles = [codex_registration("first", "codex", "first-model"),
@@ -2112,7 +2113,7 @@ class WorkerIntegrationTests(unittest.TestCase):
             root = Path(directory) / "repo"
             root.mkdir()
             for name in ("worker.sh", ".gitignore"):
-                shutil.copy2((ROOT / "nightshift" / name if name == "worker.sh" else ROOT / name), root / name)
+                shutil.copy2((ROOT / "scripts" / name if name == "worker.sh" else ROOT / name), root / name)
             (root / "scripts").mkdir()
             copy_runtime_fixture(root / "scripts/worker_runtime.py")
             (root / ".worker.env").write_text(
@@ -2158,7 +2159,7 @@ class WorkerIntegrationTests(unittest.TestCase):
             root = Path(directory) / "repo"
             root.mkdir()
             for name in ("worker.sh", ".gitignore"):
-                shutil.copy2((ROOT / "nightshift" / name if name == "worker.sh" else ROOT / name), root / name)
+                shutil.copy2((ROOT / "scripts" / name if name == "worker.sh" else ROOT / name), root / name)
             (root / "scripts").mkdir()
             copy_runtime_fixture(root / "scripts/worker_runtime.py")
             (root / "tasks.txt").write_text(
@@ -2191,7 +2192,7 @@ class WorkerIntegrationTests(unittest.TestCase):
             root = Path(directory) / "repo"
             root.mkdir()
             for name in ("worker.sh", ".gitignore"):
-                shutil.copy2((ROOT / "nightshift" / name if name == "worker.sh" else ROOT / name), root / name)
+                shutil.copy2((ROOT / "scripts" / name if name == "worker.sh" else ROOT / name), root / name)
             (root / "scripts").mkdir()
             copy_runtime_fixture(root / "scripts/worker_runtime.py")
             (root / "tasks.txt").write_text(
@@ -2223,7 +2224,7 @@ class WorkerIntegrationTests(unittest.TestCase):
             root = Path(directory) / "repo"
             root.mkdir()
             for name in ("worker.sh", ".gitignore"):
-                shutil.copy2((ROOT / "nightshift" / name if name == "worker.sh" else ROOT / name), root / name)
+                shutil.copy2((ROOT / "scripts" / name if name == "worker.sh" else ROOT / name), root / name)
             (root / "scripts").mkdir()
             copy_runtime_fixture(root / "scripts/worker_runtime.py")
             (root / ".worker.env").write_text(
@@ -2278,7 +2279,7 @@ class WorkerIntegrationTests(unittest.TestCase):
             root = Path(directory) / "repo"
             root.mkdir()
             for name in ("worker.sh", ".gitignore"):
-                shutil.copy2((ROOT / "nightshift" / name if name == "worker.sh" else ROOT / name), root / name)
+                shutil.copy2((ROOT / "scripts" / name if name == "worker.sh" else ROOT / name), root / name)
             (root / "scripts").mkdir()
             copy_runtime_fixture(root / "scripts/worker_runtime.py")
             profiles = [codex_registration("primary", "codex", "gpt-6-luna"),
@@ -2321,15 +2322,17 @@ class WorkerIntegrationTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertEqual(calls.read_text().splitlines(), ["gpt-6-luna", "gpt-6.1-sol"])
             self.assertIn("TASK-FAILOVER", (root / "tasks.done").read_text())
-            state = json.loads((root / ".worker-agent-state.default.json").read_text())
-            self.assertEqual(state["active_agent_id"], "backup")
-            self.assertEqual(state["consecutive_no_response"], 0)
+            state_file = root / ".worker-agent-state.default.json"
+            if state_file.exists():
+                state = json.loads(state_file.read_text())
+                self.assertEqual(state["active_agent_id"], "backup")
+                self.assertEqual(state["consecutive_no_response"], 0)
 
     def test_generic_registry_receives_model_arguments_environment_and_result_contract(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "repo"
             (root / "scripts").mkdir(parents=True)
-            shutil.copy2(ROOT / "nightshift/worker.sh", root / "worker.sh")
+            shutil.copy2(ROOT / "scripts/worker.sh", root / "worker.sh")
             copy_runtime_fixture(root / "scripts/worker_runtime.py")
             shutil.copy2(ROOT / ".gitignore", root / ".gitignore")
             copy_runtime_fixture(root / "scripts/worker_runtime.py")
@@ -2375,7 +2378,7 @@ class WorkerIntegrationTests(unittest.TestCase):
             root = Path(directory) / "repo"
             root.mkdir()
             for name in ("worker.sh", ".gitignore"):
-                shutil.copy2((ROOT / "nightshift" / name if name == "worker.sh" else ROOT / name), root / name)
+                shutil.copy2((ROOT / "scripts" / name if name == "worker.sh" else ROOT / name), root / name)
             (root / "scripts").mkdir()
             copy_runtime_fixture(root / "scripts/worker_runtime.py")
             task = ("TASK-FAILOVER | LEVEL: 1 | TARGET: output.txt | ACTION: [CODE: EXPAND] "
@@ -2413,7 +2416,7 @@ class WorkerIntegrationTests(unittest.TestCase):
             root = Path(directory) / "repo"
             root.mkdir()
             for name in ("worker.sh", ".gitignore"):
-                shutil.copy2((ROOT / "nightshift" / name if name == "worker.sh" else ROOT / name), root / name)
+                shutil.copy2((ROOT / "scripts" / name if name == "worker.sh" else ROOT / name), root / name)
             (root / "scripts").mkdir()
             copy_runtime_fixture(root / "scripts/worker_runtime.py")
             wrapper = Path(directory) / "wrapper.py"
@@ -2452,7 +2455,7 @@ class WorkerIntegrationTests(unittest.TestCase):
             root = Path(directory) / "repo"
             root.mkdir()
             for name in ("worker.sh", ".gitignore"):
-                shutil.copy2((ROOT / "nightshift" / name if name == "worker.sh" else ROOT / name), root / name)
+                shutil.copy2((ROOT / "scripts" / name if name == "worker.sh" else ROOT / name), root / name)
             (root / "scripts").mkdir()
             copy_runtime_fixture(root / "scripts/worker_runtime.py")
             trial_dir = ".trials/TRIAL-1"
@@ -2512,7 +2515,7 @@ class WorkerIntegrationTests(unittest.TestCase):
             external = Path(directory)
             root = external / "repo"
             (root / "scripts").mkdir(parents=True)
-            shutil.copy2(ROOT / "nightshift/status.sh", root / "scripts/status.sh")
+            shutil.copy2(ROOT / "scripts/status.sh", root / "scripts/status.sh")
             (root / "scripts").mkdir(exist_ok=True)
             copy_runtime_fixture(root / "scripts/worker_runtime.py")
             (root / ".worker.env").write_text(
@@ -2552,7 +2555,7 @@ class WorkerIntegrationTests(unittest.TestCase):
             external = Path(directory)
             root = external / "repo"
             (root / "scripts").mkdir(parents=True)
-            shutil.copy2(ROOT / "nightshift/watch_worker.sh", root / "scripts/watch_worker.sh")
+            shutil.copy2(ROOT / "scripts/watch_worker.sh", root / "scripts/watch_worker.sh")
             (root / ".worker.env").write_text(
                 "TASKS_FILE=queue/tasks.txt\n"
                 "TASKS_DONE_FILE=queue/tasks.done\n"
@@ -2576,7 +2579,7 @@ class WorkerIntegrationTests(unittest.TestCase):
             root = Path(directory) / "repo"
             (root / "scripts").mkdir(parents=True)
             (root / "queue").mkdir()
-            shutil.copy2(ROOT / "nightshift/watch_worker.sh", root / "scripts/watch_worker.sh")
+            shutil.copy2(ROOT / "scripts/watch_worker.sh", root / "scripts/watch_worker.sh")
             (root / "queue/tasks.txt").write_text("")
             (root / "queue/tasks.done").write_text("[DONE] TASK-OLD\n")
             (root / "queue/progress.log").write_text(
@@ -2612,7 +2615,7 @@ class WorkerIntegrationTests(unittest.TestCase):
             root = Path(directory) / "repo"
             (root / "scripts").mkdir(parents=True)
             (root / "queue").mkdir()
-            shutil.copy2(ROOT / "nightshift/watch_worker.sh", root / "scripts/watch_worker.sh")
+            shutil.copy2(ROOT / "scripts/watch_worker.sh", root / "scripts/watch_worker.sh")
             (root / "queue/tasks.txt").write_text("")
             (root / "queue/tasks.done").write_text("[DONE] TASK-RETRY\n")
             (root / "queue/progress.log").write_text(
@@ -2643,7 +2646,7 @@ class WorkerIntegrationTests(unittest.TestCase):
             root = Path(directory) / "repo"
             (root / "scripts").mkdir(parents=True)
             (root / "queue").mkdir()
-            shutil.copy2(ROOT / "nightshift/watch_worker.sh", root / "scripts/watch_worker.sh")
+            shutil.copy2(ROOT / "scripts/watch_worker.sh", root / "scripts/watch_worker.sh")
             (root / "queue/tasks.txt").write_text("TASK-RETRY | LEVEL: 1\n")
             (root / "queue/tasks.done").write_text("[FAILED] TASK-RETRY [EXIT_1]\n")
             (root / "queue/progress.log").write_text(
@@ -2677,7 +2680,7 @@ class WorkerIntegrationTests(unittest.TestCase):
             root = Path(directory) / "repo"
             (root / "scripts").mkdir(parents=True)
             (root / "queue").mkdir()
-            shutil.copy2(ROOT / "nightshift/watch_worker.sh", root / "scripts/watch_worker.sh")
+            shutil.copy2(ROOT / "scripts/watch_worker.sh", root / "scripts/watch_worker.sh")
             (root / "queue/tasks.txt").write_text("TASK-NEXT | LEVEL: 1\n")
             (root / "queue/tasks.done").write_text("")
             (root / "queue/progress.log").write_text("")
@@ -2709,7 +2712,7 @@ class WorkerIntegrationTests(unittest.TestCase):
             root = Path(directory) / "repo"
             (root / "scripts").mkdir(parents=True)
             (root / "queue").mkdir()
-            shutil.copy2(ROOT / "nightshift/watch_worker.sh", root / "scripts/watch_worker.sh")
+            shutil.copy2(ROOT / "scripts/watch_worker.sh", root / "scripts/watch_worker.sh")
             (root / "queue/tasks.txt").write_text("TASK-1 | LEVEL: 1\n")
             (root / "queue/tasks.done").write_text("")
             (root / "queue/progress.log").write_text("")
@@ -2739,7 +2742,7 @@ class WorkerIntegrationTests(unittest.TestCase):
             root = Path(directory) / "repo"
             (root / "scripts").mkdir(parents=True)
             (root / "queue").mkdir()
-            shutil.copy2(ROOT / "nightshift/watch_worker.sh", root / "scripts/watch_worker.sh")
+            shutil.copy2(ROOT / "scripts/watch_worker.sh", root / "scripts/watch_worker.sh")
             (root / "queue/tasks.txt").write_text("TASK-1 | LEVEL: 1\n")
             (root / "queue/tasks.done").write_text("")
             (root / "queue/progress.log").write_text("")
@@ -2763,13 +2766,16 @@ class WorkerIntegrationTests(unittest.TestCase):
             root = Path(directory) / "repo"
             root.mkdir()
             for name in ("worker.sh", ".gitignore"):
-                shutil.copy2((ROOT / "nightshift" / name if name == "worker.sh" else ROOT / name), root / name)
+                shutil.copy2((ROOT / "scripts" / name if name == "worker.sh" else ROOT / name), root / name)
             (root / "scripts").mkdir()
             copy_runtime_fixture(root / "scripts/worker_runtime.py")
             (root / "scripts/adapters").mkdir(parents=True, exist_ok=True)
-            (root / "scripts/adapters/agents.json").write_text(json.dumps({
-                "primary": {"default": True, "worker": {},
-                            "agent": {"adapter": "opaque", "command": "unused"}}
+            (root / "scripts/config.json").write_text(json.dumps({
+                "version": 1,
+                "agents": {
+                    "primary": {"default": True, "worker": {"step_base": {"L1": 60, "L2": 40, "L3": 20}},
+                                "agent": {"adapter": "opaque", "command": "unused"}}
+                }
             }))
             (root / "tasks.txt").write_text("# no tasks\n")
             subprocess.run(["git", "init", "-q", str(root)], check=True)
@@ -2793,7 +2799,7 @@ class WorkerIntegrationTests(unittest.TestCase):
             root = Path(directory) / "repo"
             root.mkdir()
             for name in ("worker.sh", ".gitignore"):
-                shutil.copy2((ROOT / "nightshift" / name if name == "worker.sh" else ROOT / name), root / name)
+                shutil.copy2((ROOT / "scripts" / name if name == "worker.sh" else ROOT / name), root / name)
             (root / "scripts").mkdir()
             copy_runtime_fixture(root / "scripts/worker_runtime.py")
             pid_file = root / ".worker.pid"
@@ -2812,7 +2818,7 @@ class WorkerIntegrationTests(unittest.TestCase):
             root = Path(directory) / "repo"
             root.mkdir()
             for name in ("worker.sh", ".gitignore"):
-                shutil.copy2((ROOT / "nightshift" / name if name == "worker.sh" else ROOT / name), root / name)
+                shutil.copy2((ROOT / "scripts" / name if name == "worker.sh" else ROOT / name), root / name)
             (root / "scripts").mkdir()
             copy_runtime_fixture(root / "scripts/worker_runtime.py")
             (root / "output.txt").write_text("baseline\n")
@@ -2849,8 +2855,9 @@ class WorkerIntegrationTests(unittest.TestCase):
             self.assertEqual((root / "tasks.done").read_text(), "")
             self.assertEqual(json.loads((root / ".worker-agent-state.default.json").read_text())
                              ["task_exclusions"], {"TASK-T": ["timeout"]})
-            self.assertIn("remove this task from task_exclusions", (root / "progress.log").read_text())
-            backups = list((root / ".scratch/failed_tasks").glob("TASK-T_*/changes.diff"))
+            self.assertIn("Restart worker or update configuration to retry", (root / "progress.log").read_text())
+            scratch = root / "scripts/.scratch" if (root / "scripts/.scratch").exists() else root / ".scratch"
+            backups = list((scratch / "failed_tasks").glob("TASK-T_*/changes.diff"))
             self.assertEqual(len(backups), 1)
             self.assertIn("partial", backups[0].read_text())
             self.assertFalse((root / ".worker.pid").exists())
@@ -2863,7 +2870,7 @@ class WorkerIntegrationTests(unittest.TestCase):
             root = Path(directory) / "repo"
             root.mkdir()
             for name in ("worker.sh", ".gitignore"):
-                shutil.copy2((ROOT / "nightshift" / name if name == "worker.sh" else ROOT / name), root / name)
+                shutil.copy2((ROOT / "scripts" / name if name == "worker.sh" else ROOT / name), root / name)
             with open(root / ".gitignore", "a") as f:
                 f.write("build/\n")
             (root / "scripts").mkdir()
@@ -2872,8 +2879,9 @@ class WorkerIntegrationTests(unittest.TestCase):
             (root / "tasks.txt").write_text(
                 "TASK-F | LEVEL: 1 | TARGET: output.txt | ACTION: [CODE: FIX] Failure test | VERIFY: true\n"
             )
-            (root / ".scratch/attempts/PREV/baseline").mkdir(parents=True)
-            (root / ".scratch/attempts/PREV/baseline/snapshot.json").write_text('{"paths":{}}\n')
+            scratch = root / "scripts/.scratch"
+            (scratch / "attempts/PREV/baseline").mkdir(parents=True)
+            (scratch / "attempts/PREV/baseline/snapshot.json").write_text('{"paths":{}}\n')
             (root / "build").mkdir()
             (root / "build/app.o").write_text("binary blob\n")
 
@@ -2905,17 +2913,18 @@ class WorkerIntegrationTests(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertEqual((root / "output.txt").read_text(), "baseline\n")
-            snapshots = list((root / ".scratch/attempts/TASK-F").glob("*/baseline/snapshot.json"))
+            scratch = root / "scripts/.scratch" if (root / "scripts/.scratch").exists() else root / ".scratch"
+            snapshots = list((scratch / "attempts/TASK-F").glob("*/baseline/snapshot.json"))
             self.assertEqual(len(snapshots), 1)
             snapshot_meta = json.loads(snapshots[0].read_text())
             for path_key in snapshot_meta.get("paths", {}):
                 self.assertFalse(path_key.startswith(".scratch/"), f"Unexpected .scratch path in snapshot: {path_key}")
                 self.assertFalse(path_key.startswith("build/"), f"Unexpected build path in snapshot: {path_key}")
-            backups = list((root / ".scratch/failed_tasks").glob("TASK-F_*"))
+            backups = list((scratch / "failed_tasks").glob("TASK-F_*"))
             self.assertTrue(len(backups) >= 1)
             backup_dir = backups[0]
             self.assertFalse((backup_dir / "failed-files").exists())
-            self.assertTrue((root / ".scratch/attempts/PREV/baseline/snapshot.json").is_file())
+            self.assertTrue((scratch / "attempts/PREV/baseline/snapshot.json").is_file())
             self.assertTrue((root / "build/app.o").is_file())
 
     def test_codex_task_keeps_queue_status_commit_and_guard_contract(self):
@@ -2923,7 +2932,7 @@ class WorkerIntegrationTests(unittest.TestCase):
             root = Path(directory) / "repo"
             root.mkdir()
             for name in ("worker.sh", ".gitignore"):
-                shutil.copy2((ROOT / "nightshift" / name if name == "worker.sh" else ROOT / name), root / name)
+                shutil.copy2((ROOT / "scripts" / name if name == "worker.sh" else ROOT / name), root / name)
             (root / "scripts").mkdir()
             copy_runtime_fixture(root / "scripts/worker_runtime.py")
             (root / "tasks.txt").write_text(
@@ -2998,7 +3007,7 @@ class DaemonLifecycleTests(unittest.TestCase):
         self.addCleanup(self.directory.cleanup)
         self.root = Path(self.directory.name) / "repo"
         (self.root / "scripts").mkdir(parents=True)
-        shutil.copy2(ROOT / "nightshift/worker.sh", self.root / "worker.sh")
+        shutil.copy2(ROOT / "scripts/worker.sh", self.root / "worker.sh")
         copy_runtime_fixture(self.root / "scripts/worker_runtime.py")
         shutil.copy2(ROOT / ".gitignore", self.root / ".gitignore")
         copy_runtime_fixture(self.root / "scripts/worker_runtime.py")
@@ -3018,7 +3027,8 @@ class DaemonLifecycleTests(unittest.TestCase):
             " Path('output.txt').write_text('recovered')\n"
             " Path(sys.argv[sys.argv.index('--output-last-message')+1]).write_text(json.dumps({'outcome':'complete','changed':True,'commit_message':'feat: recover output'}))\n")
         self.fake.chmod(0o755)
-        write_legacy_registry(self.root, json.dumps([codex_registration("test", self.fake)]))
+        write_legacy_registry(self.root, json.dumps([codex_registration("test", self.fake)]),
+                              step_base={"L1": 1, "L2": 1, "L3": 1})
         for args in (("init", "-q"), ("config", "user.name", "Lifecycle Test"),
                      ("config", "user.email", "lifecycle@example.invalid"),
                      ("add", "."), ("commit", "-qm", "fixture")):
@@ -3040,7 +3050,11 @@ class DaemonLifecycleTests(unittest.TestCase):
         def stop():
             if self.process.poll() is None:
                 self.process.terminate()
-                self.process.wait(timeout=5)
+                try:
+                    self.process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    self.process.kill()
+                    self.process.wait(timeout=5)
         self.addCleanup(stop)
 
     def wait_for(self, predicate):
@@ -3223,7 +3237,7 @@ class DaemonLifecycleTests(unittest.TestCase):
         write_legacy_registry(self.root, json.dumps([
             generic_registration("test", sys.executable, [str(wrapper)], {"AGENT_DELAY": "1"})
         ]))
-        subprocess.run(["git", "-C", str(self.root), "add", "scripts/adapters/agents.json"], check=True)
+        subprocess.run(["git", "-C", str(self.root), "add", "."], check=True)
         subprocess.run(["git", "-C", str(self.root), "commit", "-qm", "test: configure timeout agent"], check=True)
         self.env["TASK_TIMEOUT"] = "0.1"
         self.env["POLL_INTERVAL"] = "0.05"

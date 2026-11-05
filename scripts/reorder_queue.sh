@@ -8,12 +8,13 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [ "$(basename "$SCRIPT_DIR")" = "scripts" ]; then
-  NIGHTSHIFT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+if [ "$(basename "$SCRIPT_DIR")" = "scripts" ] || [ "$(basename "$SCRIPT_DIR")" = "nightshift" ]; then
+  NIGHTSHIFT_DIR="$SCRIPT_DIR"
+  PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 else
   NIGHTSHIFT_DIR="$SCRIPT_DIR"
+  PROJECT_ROOT="$(cd "$NIGHTSHIFT_DIR/.." && pwd)"
 fi
-PROJECT_ROOT="$(cd "$NIGHTSHIFT_DIR/.." && pwd)"
 if [ "${1:-}" = "--project" ]; then
   [ -n "${2:-}" ] || { echo "--project requires a name" >&2; exit 2; }
   PROJECT_SELECTION="$2"

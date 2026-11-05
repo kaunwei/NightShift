@@ -9,7 +9,7 @@ import tempfile
 import unittest
 import uuid
 
-RUNTIME = Path(__file__).resolve().parents[1] / "nightshift/worker_runtime.py"
+RUNTIME = Path(__file__).resolve().parents[1] / "scripts/worker_runtime.py"
 
 
 class WorkerTerminalArtifactTests(unittest.TestCase):

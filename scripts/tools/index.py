@@ -40,7 +40,7 @@ SCHEMA_VERSION = 5
 SUMMARY_MAX_BYTES = 8192
 IGNORED_PARTS = {
     ".git", ".build", ".swiftpm", "build", "DerivedData", ".worker-tree",
-    ".preview", ".scratch", "nightshift/.scratch", ".trials", ".reports", ".venv", ".aider.tags.cache.v4",
+    ".preview", ".scratch", "scripts/.scratch", "nightshift/.scratch", ".trials", ".reports", ".venv", ".aider.tags.cache.v4",
 }
 LANGUAGE_REGISTRY = json.loads((TOOL_ROOT / "languages.json").read_text(encoding="utf-8"))
 EXTENSIONS = {
@@ -91,8 +91,11 @@ def repository_root(repository: Path) -> Path:
 
 def index_location(root: Path) -> Path:
     state = os.environ.get("NIGHTSHIFT_STATE_DIR")
-    return (Path(state) / "code-index" / "index.json" if state else
-            root / "nightshift" / ".scratch" / "code-index" / "index.json")
+    if state:
+        return Path(state) / "code-index" / "index.json"
+    if (root / "nightshift/.scratch").exists() or (root / "nightshift").is_dir():
+        return root / "nightshift" / ".scratch" / "code-index" / "index.json"
+    return root / "scripts" / ".scratch" / "code-index" / "index.json"
 
 
 def summary_location(root: Path) -> Path:
@@ -100,24 +103,35 @@ def summary_location(root: Path) -> Path:
 
 
 def project_config(root: Path) -> dict:
-    config_json = Path(os.environ.get("NIGHTSHIFT_CONFIG_FILE") or root / "nightshift" / "config.json")
-    try:
-        parsed = project_config_file.read(config_json)
-        name = os.environ.get("NIGHTSHIFT_PROJECT_NAME")
-        entry = parsed.get("projects", {}).get(name, {}) if name else {}
-        ci = entry.get("code_index", parsed.get("code_index", {}))
-        if not isinstance(ci, dict):
-            raise ValueError("code_index must be an object")
-        project = ci.get("project", {}) if isinstance(ci.get("project"), dict) else ci
-        scope = ci.get("scope", {}) if isinstance(ci.get("scope"), dict) else ci
-        return {
-            "include": project.get("include", ["*", "**/*"]),
-            "exclude": project.get("exclude", []),
-            "tool_paths": scope.get("tool", ci.get("tool", [])),
-            "project_paths": scope.get("project", ci.get("project", ["*", "**/*"])),
-        }
-    except (OSError, ValueError) as exc:
-        raise IndexErrorMessage(f"project config is invalid: {config_json}: {exc}") from exc
+    cfg_env = os.environ.get("NIGHTSHIFT_CONFIG_FILE")
+    config_json = Path(
+        cfg_env
+        or (root / "scripts/config.json" if (root / "scripts/config.json").is_file() else root / "nightshift" / "config.json")
+    )
+    if cfg_env or config_json.is_file():
+        try:
+            parsed = project_config_file.read(config_json)
+            name = os.environ.get("NIGHTSHIFT_PROJECT_NAME")
+            entry = parsed.get("projects", {}).get(name, {}) if name else {}
+            ci = entry.get("code_index", parsed.get("code_index", {}))
+            if not isinstance(ci, dict):
+                raise ValueError("code_index must be an object")
+            project = ci.get("project", {}) if isinstance(ci.get("project"), dict) else ci
+            scope = ci.get("scope", {}) if isinstance(ci.get("scope"), dict) else ci
+            return {
+                "include": project.get("include", ["*", "**/*"]),
+                "exclude": project.get("exclude", []),
+                "tool_paths": scope.get("tool", ci.get("tool", [])),
+                "project_paths": scope.get("project", ci.get("project", ["*", "**/*"])),
+            }
+        except (OSError, ValueError) as exc:
+            raise IndexErrorMessage(f"project config is invalid: {config_json}: {exc}") from exc
+    return {
+        "include": ["*", "**/*"],
+        "exclude": [],
+        "tool_paths": [],
+        "project_paths": ["*", "**/*"],
+    }
 
 
 
@@ -378,7 +392,7 @@ def configuration_sha256(root: Path) -> str:
             "Cargo.toml", "go.mod", "requirements.txt", "code-index.toml", "config.json",
         } or path.suffix in {".xcconfig", ".xcscheme"}:
             candidates.add(path)
-    for cfg_candidate in (root / "nightshift/config.json",):
+    for cfg_candidate in (root / "scripts/config.json", root / "nightshift/config.json"):
         if cfg_candidate.is_file():
             candidates.add(cfg_candidate)
     for path in sorted(candidates):
@@ -617,7 +631,8 @@ def indexed_worktree_changes(root: Path) -> list[str]:
             )
             if (is_source or path.name in settings
                     or path.suffix in {".xcconfig", ".xcscheme"}
-                    or candidate in {"nightshift/tools/index.py", "nightshift/tools/languages.json"}):
+                    or candidate in {"scripts/tools/index.py", "scripts/tools/languages.json",
+                                    "nightshift/tools/index.py", "nightshift/tools/languages.json"}):
                 changed.add(candidate)
     return sorted(changed)
 

@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 
 
-CLI = Path(__file__).resolve().parents[1] / "nightshift" / "tools" / "index.py"
+CLI = Path(__file__).resolve().parents[1] / "scripts" / "tools" / "index.py"
 
 
 class GeneralCodeIndexPublicCliTests(unittest.TestCase):

@@ -44,7 +44,7 @@ def state_dir(root):
         path = Path(git(root, "rev-parse", "--git-path", "nightshift"))
         path = path if path.is_absolute() else Path(root) / path
     except Exception:
-        path = Path(root) / "nightshift"
+        path = Path(root) / "scripts" if (Path(root) / "scripts").is_dir() else Path(root) / "nightshift"
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -87,7 +87,9 @@ def workspace(root):
 
 def config(root):
     explicit = os.environ.get("NIGHTSHIFT_CONFIG_FILE")
-    local_path = Path(root) / "nightshift/config.json"
+    local_path = (Path(root) / "scripts/config.json"
+                  if (Path(root) / "scripts/config.json").is_file()
+                  else Path(root) / "nightshift/config.json")
     path = None
     if explicit:
         explicit_path = Path(explicit)
@@ -286,7 +288,7 @@ class DefaultAcceptanceRunner(AcceptanceRunner):
             state.update(commits=[], pending=False)
             save(path, state)
             return
-        ignored = re.compile(r"(?:^|/)(?:nightshift/)?(?:progress\.log|tasks\.txt|tasks\.done|worker\..*\.status|\.preview|\.reports|\.worker.*|\.scratch)")
+        ignored = re.compile(r"(?:^|/)(?:scripts/|nightshift/)?(?:progress\.log|tasks\.txt|tasks\.done|worker\..*\.status|\.preview|\.reports|\.worker.*|\.scratch)")
         def product_status():
             raw = git(root, "status", "--porcelain", "--untracked-files=all")
             return [line for line in raw.splitlines() if line and not ignored.search(line[3:])]
@@ -327,7 +329,9 @@ def get_runner(root, cfg=None):
         cls_or_func = getattr(mod, attr_name)
         return cls_or_func() if isinstance(cls_or_func, type) else cls_or_func(root, cfg)
 
-    custom_hook = Path(root) / "nightshift/acceptance_runner.py"
+    custom_hook = (Path(root) / "scripts/acceptance_runner.py"
+                   if (Path(root) / "scripts/acceptance_runner.py").is_file()
+                   else Path(root) / "nightshift/acceptance_runner.py")
     if custom_hook.is_file():
         import importlib.util
         spec = importlib.util.spec_from_file_location("custom_acceptance_runner", str(custom_hook))
@@ -347,15 +351,17 @@ def invoke(root, cfg, name, phase, base, run, task="", required=()):
 def clean(root):
     """Authorized clean-start policy. Never discard commits or ignored files."""
     preserved = {}
-    for name in ("tasks.txt", "nightshift/tasks.txt", "tasks.done", "nightshift/tasks.done",
-                 "progress.log", "nightshift/progress.log",
-                 "nightshift/config.json",
-                 "nightshift/PORTING_GUIDE.md", "nightshift/.ported"):
+    for name in ("tasks.txt", "scripts/tasks.txt", "nightshift/tasks.txt",
+                 "tasks.done", "scripts/tasks.done", "nightshift/tasks.done",
+                 "progress.log", "scripts/progress.log", "nightshift/progress.log",
+                 "scripts/config.json", "nightshift/config.json",
+                 "PORTING_GUIDE.md", "scripts/PORTING_GUIDE.md", "nightshift/PORTING_GUIDE.md",
+                 "scripts/.ported", "nightshift/.ported"):
         target = Path(root) / name
         if target.is_file():
             preserved[name] = target.read_bytes()
     git(root, "reset", "--hard", "HEAD")
-    git(root, "clean", "-fd", "-e", ".scratch", "-e", ".worker*", "-e", "nightshift/",
+    git(root, "clean", "-fd", "-e", ".scratch", "-e", ".worker*", "-e", "scripts/", "-e", "nightshift/",
         "-e", ".agents/", "-e", ".skills/", "-e", ".gitignore")
     for name, content in preserved.items():
         (Path(root) / name).write_bytes(content)
@@ -363,9 +369,11 @@ def clean(root):
     if status_raw:
         lines = [line for line in status_raw.splitlines()
                  if not any(name in line for name in preserved)
+                 and not line[3:].startswith("scripts/")
                  and not line[3:].startswith("nightshift/")
                  and not line[3:].startswith(".agents/")
                  and not line[3:].startswith(".skills/")
+                 and not line[3:].startswith(".worker")
                  and not line[3:] == ".gitignore"]
         if lines:
             raise GateError("clean-start failed; Worker not launched")

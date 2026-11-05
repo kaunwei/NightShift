@@ -4,7 +4,7 @@ import unittest
 from unittest.mock import patch
 import subprocess
 
-spec = importlib.util.spec_from_file_location('sentinel_relay', Path(__file__).resolve().parents[1] / 'nightshift/sentinel_relay.py')
+spec = importlib.util.spec_from_file_location('sentinel_relay', Path(__file__).resolve().parents[1] / 'scripts/sentinel_relay.py')
 relay_module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(relay_module)
 

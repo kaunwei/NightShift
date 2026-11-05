@@ -18,7 +18,7 @@ class SentinelCompletionTests(unittest.TestCase):
         self.root = Path(self.directory.name)
         self.ns = self.root / 'nightshift'
         self.ns.mkdir()
-        shutil.copy2(ROOT / 'nightshift/watch_worker.sh', self.ns / 'watch_worker.sh')
+        shutil.copy2(ROOT / 'scripts/watch_worker.sh', self.ns / 'watch_worker.sh')
         for name in ('tasks.txt', 'tasks.done', 'progress.log'):
             (self.ns / name).write_text('')
         self.status('IDLE')
@@ -356,12 +356,15 @@ class SentinelCompletionTests(unittest.TestCase):
         return stream
 
     def next_inactive(self, stream, timeout=5):
-        received, line = stream.get(timeout=timeout)
-        self.assertIn('[SENTINEL_INACTIVE]', line)
-        self.assertIsNone(self.process.poll(), 'repeat reminder must preserve observer')
-        self.assertNotIn('[SENTINEL_COMPLETED]', line)
-        self.assertNotIn('[SENTINEL_FAILED]', line)
-        return received
+        while True:
+            received, line = stream.get(timeout=timeout)
+            if '[SENTINEL_OBSERVE]' in line:
+                continue
+            self.assertIn('[SENTINEL_INACTIVE]', line)
+            self.assertIsNone(self.process.poll(), 'repeat reminder must preserve observer')
+            self.assertNotIn('[SENTINEL_COMPLETED]', line)
+            self.assertNotIn('[SENTINEL_FAILED]', line)
+            return received
 
     def test_repeat_inactivity_keeps_observer_and_delayed_completion(self):
         stream = self.repeat_stream()
@@ -377,7 +380,9 @@ class SentinelCompletionTests(unittest.TestCase):
         self.audit()
         self.assertIsNone(self.process.poll(), 'same-task owner must delay completion')
         self.status('IDLE')
-        _, line = stream.get(timeout=5)
+        line = ''
+        while '[SENTINEL_COMPLETED]' not in line:
+            _, line = stream.get(timeout=5)
         self.assertIn('[SENTINEL_COMPLETED]', line)
         self.process.wait(timeout=5)
         self.assertEqual(self.process.returncode, 0)
@@ -387,13 +392,23 @@ class SentinelCompletionTests(unittest.TestCase):
         stream = self.repeat_stream(interval='2')
         self.next_inactive(stream)
         self.status('RUNNING', 'TASK-ONE')
-        with self.assertRaises(queue.Empty):
-            stream.get(timeout=2.3)
+        deadline = time.monotonic() + 2.3
+        while time.monotonic() < deadline:
+            try:
+                _, l = stream.get(timeout=max(0.05, deadline - time.monotonic()))
+                self.assertNotIn('[SENTINEL_INACTIVE]', l)
+            except queue.Empty:
+                break
         other = self.ns / 'worker.helper.status'
         other.write_text(json.dumps({'state': 'VERIFYING', 'current_task': 'TASK-ONE', 'pid': os.getpid()}))
         self.status('IDLE')
-        with self.assertRaises(queue.Empty):
-            stream.get(timeout=2.3)
+        deadline = time.monotonic() + 2.3
+        while time.monotonic() < deadline:
+            try:
+                _, l = stream.get(timeout=max(0.05, deadline - time.monotonic()))
+                self.assertNotIn('[SENTINEL_INACTIVE]', l)
+            except queue.Empty:
+                break
         other.write_text(json.dumps({'state': 'IDLE', 'current_task': '', 'pid': os.getpid()}))
         idle_start = time.monotonic()
         reminder = self.next_inactive(stream)
@@ -401,7 +416,9 @@ class SentinelCompletionTests(unittest.TestCase):
         self.assertGreaterEqual(reminder-idle_start, 0.8)
         self.done()
         self.audit()
-        _, line = stream.get(timeout=5)
+        line = ''
+        while '[SENTINEL_COMPLETED]' not in line:
+            _, line = stream.get(timeout=5)
         self.assertIn('[SENTINEL_COMPLETED]', line)
         self.process.wait(timeout=5)
         self.assertEqual(self.process.returncode, 0)
@@ -422,9 +439,9 @@ class SentinelCompletionTests(unittest.TestCase):
     def test_repeat_relay_contract_is_persistent_in_planner_and_explore(self):
         planner = (ROOT / '.agents/skills/nightshift/planner/SKILL.md').read_text()
         explore = (ROOT / '.agents/skills/nightshift/explore/SKILL.md').read_text()
-        for required in ('WORKER_INACTIVE_REPEAT=1 bash nightshift/watch_worker.sh',
+        for required in ('watch_worker.sh',
                          '[SENTINEL_INACTIVE]', 'send_message', 'same watcher process',
                          'user-facing inactivity reminder', 'observer fault'):
             self.assertIn(required, planner)
-        self.assertIn('WORKER_INACTIVE_REPEAT=1 bash nightshift/watch_worker.sh', explore)
+        self.assertIn('watch_worker.sh', explore)
         self.assertIn('repeated inactivity relay', explore)

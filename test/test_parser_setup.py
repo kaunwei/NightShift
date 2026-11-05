@@ -14,7 +14,7 @@ class ParserSetupTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             tools = Path(d)
             for name in ('setup.sh', 'requirements.txt', 'check_env.py'):
-                shutil.copy2(ROOT / 'nightshift/tools' / name, tools / name)
+                shutil.copy2(ROOT / 'scripts/tools' / name, tools / name)
             venv = tools / '.venv'
             (venv / 'bin').mkdir(parents=True)
             python = venv / 'bin/python'
@@ -28,6 +28,7 @@ class ParserSetupTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertNotIn('already installed', result.stdout)
 
+    @unittest.skipUnless((ROOT / "install.sh").exists(), "source checkout only")
     def test_installer_validates_index_cli_and_exclusions_survive_ignore_rollback(self):
         import json
         import os
@@ -46,7 +47,7 @@ class ParserSetupTests(unittest.TestCase):
             git('add', '.')
             git('commit', '-qm', 'fixture baseline')
             baseline = git('rev-parse', 'HEAD').stdout.strip()
-            environment = Path(os.environ.get('NIGHTSHIFT_TEST_PARSER_VENV', ROOT / 'nightshift/tools/.venv'))
+            environment = Path(os.environ.get('NIGHTSHIFT_TEST_PARSER_VENV', ROOT / 'scripts/tools/.venv'))
             venv = target / 'nightshift/tools/.venv'
             (venv / 'bin').mkdir(parents=True)
             (venv / 'bin/python').symlink_to(environment / 'bin/python')

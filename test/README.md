@@ -1,17 +1,17 @@
 # Worker regression tests
 
-From the repository root, run `nightshift/tools/setup.sh` once to install the parser dependencies, then:
+From the repository root, run `scripts/tools/setup.sh` once to install the parser dependencies, then:
 
 ```sh
-NIGHTSHIFT_TEST_PARSER_VENV="$PWD/nightshift/tools/.venv" \
-  nightshift/tools/.venv/bin/python -m unittest discover -s test -v
+NIGHTSHIFT_TEST_PARSER_VENV="$PWD/scripts/tools/.venv" \
+  scripts/tools/.venv/bin/python -m unittest discover -s test -v
 ```
 
 An existing compatible parser environment can be supplied instead. Installer fixtures reuse it,
 so the test run needs no package downloads. Worker tests use fake executables; no model calls or tokens are consumed.
 
-Keep new tests at public seams: the `nightshift/worker_runtime.py` commands, the
-`nightshift/worker.sh` launcher, and the `nightshift/status.sh` dashboard. For each behavior change, add a
+Keep new tests at public seams: the `scripts/worker_runtime.py` commands, the
+`scripts/worker.sh` launcher, and the `scripts/status.sh` dashboard. For each behavior change, add a
 failing test with a fixed expected result, make the smallest implementation
 change, then run the whole suite. Coverage includes task claiming, Codex/agy
 CLI invocation, Luna/none settings, wrapper commits, mechanical and Git audit

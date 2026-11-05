@@ -1,7 +1,7 @@
 {
   "version": 1,
   "acceptance": {
-    "hot": "python3 nightshift/unittest_hot.py --start test",
+    "hot": "python3 scripts/unittest_hot.py --start test",
     "cold": "python3 -m unittest discover -s test",
     "cold_every": 5,
     "timeout": 180,
@@ -63,7 +63,7 @@
     ],
     "exclude": [],
     "tool": [
-      "nightshift/tools/**"
+      "scripts/tools/**"
     ],
     "project": [
       "**/*"

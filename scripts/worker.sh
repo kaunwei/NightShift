@@ -7,7 +7,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [ -f "$SCRIPT_DIR/worker_runtime.py" ]; then
   NIGHTSHIFT_DIR="$SCRIPT_DIR"
   RUNTIME_PATH="$SCRIPT_DIR/worker_runtime.py"
-  if [ "$(basename "$SCRIPT_DIR")" = "nightshift" ]; then
+  if [ "$(basename "$SCRIPT_DIR")" = "nightshift" ] || [ "$(basename "$SCRIPT_DIR")" = "scripts" ]; then
     PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
   else
     PROJECT_ROOT="$SCRIPT_DIR"
@@ -18,7 +18,7 @@ elif [ -f "$SCRIPT_DIR/scripts/worker_runtime.py" ]; then
   RUNTIME_PATH="$SCRIPT_DIR/scripts/worker_runtime.py"
   PROJECT_ROOT="$SCRIPT_DIR"
 else
-  echo "[FATAL ERROR] Missing nightshift/worker_runtime.py" >&2
+  echo "[FATAL ERROR] Missing scripts/worker_runtime.py" >&2
   exit 1
 fi
 
@@ -63,7 +63,7 @@ if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
   exit 1
 fi
 if [ ! -f "$RUNTIME_PATH" ]; then
-  echo "[FATAL ERROR] Missing nightshift/worker_runtime.py" >&2
+  echo "[FATAL ERROR] Missing scripts/worker_runtime.py" >&2
   exit 1
 fi
 

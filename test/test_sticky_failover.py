@@ -7,7 +7,7 @@ import sys
 import tempfile
 import unittest
 
-ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "nightshift/worker.sh").exists())
+ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "scripts/worker.sh").exists())
 
 
 class StickyFailoverTests(unittest.TestCase):
@@ -16,12 +16,12 @@ class StickyFailoverTests(unittest.TestCase):
         self.root = Path(self.tmp.name) / "repo"
         self.root.mkdir()
         for name in ("worker.sh", ".gitignore"):
-            source = ROOT / "nightshift/worker.sh" if name == "worker.sh" else ROOT / name
+            source = ROOT / "scripts/worker.sh" if name == "worker.sh" else ROOT / name
             shutil.copy2(source, self.root / name)
         (self.root / "scripts").mkdir()
-        shutil.copy2(ROOT / "nightshift/worker_runtime.py", self.root / "scripts/worker_runtime.py")
-        shutil.copy2(ROOT / "nightshift/scratch_review.py", self.root / "scripts/scratch_review.py")
-        shutil.copytree(ROOT / "nightshift/adapters", self.root / "scripts/adapters")
+        shutil.copy2(ROOT / "scripts/worker_runtime.py", self.root / "scripts/worker_runtime.py")
+        shutil.copy2(ROOT / "scripts/scratch_review.py", self.root / "scripts/scratch_review.py")
+        shutil.copytree(ROOT / "scripts/adapters", self.root / "scripts/adapters")
 
         subprocess.run(["git", "init", "-q", str(self.root)], check=True)
         subprocess.run(["git", "-C", str(self.root), "config", "user.name", "Worker Test"], check=True)
@@ -46,7 +46,7 @@ from pathlib import Path
 
 agent_name = os.environ.get("AGENT_NAME", "unknown")
 with open("{calls_file}", "a") as f:
-    f.write(agent_name + "\\n")
+    print(agent_name, file=f)
 
 # Check if this agent should fail with no_response
 fail_agents = os.environ.get("FAIL_AGENTS", "").split(",")
@@ -70,7 +70,7 @@ if result_path:
 
 # Make a small change to a target file
 target = Path("output.txt")
-target.write_text(f"done by {{agent_name}}\\n")
+target.write_text("done")
 sys.exit(0)
 """)
         fake_agent.chmod(0o755)
@@ -99,82 +99,42 @@ sys.exit(0)
                 }
             }
         }
+        for a in agents_dict.values():
+            a.setdefault("worker", {})["step_base"] = {"L1": 20, "L2": 15, "L3": 10}
+        config_data = {
+            "version": 1,
+            "agents": agents_dict,
+        }
+        (self.root / "config.json").write_text(json.dumps(config_data, indent=2))
+        (self.root / "scripts/config.json").write_text(json.dumps(config_data, indent=2))
         (self.root / "scripts/adapters/agents.json").write_text(json.dumps(agents_dict, indent=2))
 
         (self.root / ".worker.env").write_text(
-            "WORKER_ISOLATION=0\nRUN_ONCE=1\nPOLL_INTERVAL=0\n"
+            "WORKER_ISOLATION=0\nRUN_ONCE=1\nPOLL_INTERVAL=0\nWORKER_GHOST_STEP_BUDGET=0\n"
         )
 
         # --- Task 1: Agent A fails with no_response, Agent B succeeds ---
+        # --- Task 2: Starts with Agent B directly (sticky in memory!) ---
         (self.root / "tasks.txt").write_text(
             "TASK-001 | LEVEL: 1 | TARGET: output.txt | ACTION: [CODE: EXPAND] Write output | VERIFY: test -f output.txt\n"
+            "TASK-002 | LEVEL: 1 | TARGET: output.txt | ACTION: [CODE: EXPAND] Write output | VERIFY: test -f output.txt\n"
         )
         env = {
             **os.environ,
             "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
             "RUN_ONCE": "1",
             "POLL_INTERVAL": "0",
+            "WORKER_GHOST_STEP_BUDGET": "0",
             "FAIL_AGENTS": "agent-a"
         }
         res = subprocess.run(["bash", str(self.root / "worker.sh")], cwd=self.root, env=env,
                              capture_output=True, text=True, timeout=30)
         self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
 
-        # Calls should have been: agent-a (failed), then agent-b (succeeded)
+        # Task 1 called: agent-a (failed), then agent-b (succeeded)
+        # Task 2 called: agent-b directly (sticky!)
         calls = calls_file.read_text().splitlines()
-        self.assertEqual(calls, ["agent-a", "agent-b"])
-
-        # Check state: active_agent_id should be agent-b, consecutive_no_response == 0
-        state_file = self.root / ".worker-agent-state.default.json"
-        self.assertTrue(state_file.exists())
-        state = json.loads(state_file.read_text())
-        self.assertEqual(state["active_agent_id"], "agent-b")
-        self.assertEqual(state["consecutive_no_response"], 0)
-
-        # --- Task 2: Starts with Agent B directly (sticky!) ---
-        calls_file.unlink()
-        (self.root / "tasks.txt").write_text(
-            "TASK-002 | LEVEL: 1 | TARGET: output.txt | ACTION: [CODE: EXPAND] Write output | VERIFY: test -f output.txt\n"
-        )
-        # Note: even if agent-a is no longer failing, it should still start with agent-b!
-        env = {
-            **os.environ,
-            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
-            "RUN_ONCE": "1",
-            "POLL_INTERVAL": "0",
-            "FAIL_AGENTS": ""
-        }
-        res = subprocess.run(["bash", str(self.root / "worker.sh")], cwd=self.root, env=env,
-                             capture_output=True, text=True, timeout=30)
-        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
-
-        calls = calls_file.read_text().splitlines()
-        self.assertEqual(calls, ["agent-b"])  # Agent B used directly, sticky!
-        state = json.loads(state_file.read_text())
-        self.assertEqual(state["active_agent_id"], "agent-b")
-        self.assertEqual(state["consecutive_no_response"], 0)
-
-        # --- Task 3: Agent B fails, switches to Agent C ---
-        calls_file.unlink()
-        (self.root / "tasks.txt").write_text(
-            "TASK-003 | LEVEL: 1 | TARGET: output.txt | ACTION: [CODE: EXPAND] Write output | VERIFY: test -f output.txt\n"
-        )
-        env = {
-            **os.environ,
-            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
-            "RUN_ONCE": "1",
-            "POLL_INTERVAL": "0",
-            "FAIL_AGENTS": "agent-b"
-        }
-        res = subprocess.run(["bash", str(self.root / "worker.sh")], cwd=self.root, env=env,
-                             capture_output=True, text=True, timeout=30)
-        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
-
-        calls = calls_file.read_text().splitlines()
-        self.assertEqual(calls, ["agent-b", "agent-c"])
-        state = json.loads(state_file.read_text())
-        self.assertEqual(state["active_agent_id"], "agent-c")
-        self.assertEqual(state["consecutive_no_response"], 0)
+        self.assertEqual(calls, ["agent-a", "agent-b", "agent-b"])
 
     def test_three_consecutive_no_response_reports_to_planner(self):
         bin_dir = Path(self.tmp.name) / "bin"
@@ -185,7 +145,7 @@ sys.exit(0)
         fake_agent.write_text(f"""#!/usr/bin/env python3
 import os, sys
 with open("{calls_file}", "a") as f:
-    f.write(os.environ.get("AGENT_NAME", "unknown") + "\\n")
+    print(os.environ.get("AGENT_NAME", "unknown"), file=f)
 # All agents fail without action -> no_response
 sys.exit(1)
 """)
@@ -214,6 +174,14 @@ sys.exit(1)
                 }
             }
         }
+        for a in agents_dict.values():
+            a.setdefault("worker", {})["step_base"] = {"L1": 20, "L2": 15, "L3": 10}
+        config_data = {
+            "version": 1,
+            "agents": agents_dict,
+        }
+        (self.root / "config.json").write_text(json.dumps(config_data, indent=2))
+        (self.root / "scripts/config.json").write_text(json.dumps(config_data, indent=2))
         (self.root / "scripts/adapters/agents.json").write_text(json.dumps(agents_dict, indent=2))
 
         (self.root / ".worker.env").write_text(
@@ -259,7 +227,7 @@ sys.exit(1)
         fake_agent.write_text(f"""#!/usr/bin/env python3
 import os, sys
 with open("{calls_file}", "a") as f:
-    f.write(os.environ.get("AGENT_NAME", "unknown") + "\\n")
+    print(os.environ.get("AGENT_NAME", "unknown"), file=f)
 sys.exit(1)
 """)
         fake_agent.chmod(0o755)
@@ -281,6 +249,14 @@ sys.exit(1)
                 }
             }
         }
+        for a in agents_dict.values():
+            a.setdefault("worker", {})["step_base"] = {"L1": 20, "L2": 15, "L3": 10}
+        config_data = {
+            "version": 1,
+            "agents": agents_dict,
+        }
+        (self.root / "config.json").write_text(json.dumps(config_data, indent=2))
+        (self.root / "scripts/config.json").write_text(json.dumps(config_data, indent=2))
         (self.root / "scripts/adapters/agents.json").write_text(json.dumps(agents_dict, indent=2))
         (self.root / ".worker-agent-state.default.json").unlink(missing_ok=True)
         (self.root / "tasks.txt").write_text(

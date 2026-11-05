@@ -18,7 +18,7 @@ This sets working directory to project root, exports `$NIGHTSHIFT_CORE`, `$NIGHT
 `$TASKS_FILE`, `$TASKS_DONE_FILE`, `$PROGRESS_FILE`, `$STATUS_FILE`, and helpers (`ns-status`, `ns-watch`).
 If running un-sourced, discover paths via:
 
-    python3 "$NIGHTSHIFT_CORE/nightshift/worker_runtime.py" project-info --config PATH/config.json [--project NAME]
+    python3 "$NIGHTSHIFT_CORE/scripts/worker_runtime.py" project-info --config PATH/config.json [--project NAME]
 
 ## Dispatch
 
@@ -26,14 +26,14 @@ If running un-sourced, discover paths via:
    or run script-directed function/symbol queries without broad source reads; queue
    [explore](../explore/SKILL.md) for deep research:
 
-       python3 "$NIGHTSHIFT_CORE/nightshift/worker_runtime.py" code-index query symbol NAME --scope project --format compact
-       python3 "$NIGHTSHIFT_CORE/nightshift/worker_runtime.py" code-index query callers NAME --scope project --format compact
+       python3 "$NIGHTSHIFT_CORE/scripts/worker_runtime.py" code-index query symbol NAME --scope project --format compact
+       python3 "$NIGHTSHIFT_CORE/scripts/worker_runtime.py" code-index query callers NAME --scope project --format compact
 
    Open requirements use [grilling](../../productivity/grilling/SKILL.md); multi-ticket work
    uses to-spec/to-tickets. Routine tasks queue directly.
 2. Read the selected registration's score:
 
-       python3 "$NIGHTSHIFT_CORE/nightshift/worker_runtime.py" score-read --state "$NIGHTSHIFT_STATE_DIR/.worker-agent-scores" --agent-id NAME
+       python3 "$NIGHTSHIFT_CORE/scripts/worker_runtime.py" score-read --state "$NIGHTSHIFT_STATE_DIR/.worker-agent-scores" --agent-id NAME
 
    Score 5: L1 vertical slice. Score 3-4: L2 one module/seam. Score 1-2: L3 exact
    behavior, inputs/outputs and red/green steps. Shrink scope as score falls.
@@ -41,9 +41,9 @@ If running un-sourced, discover paths via:
 
        TASK-ID [CODE: FIX] | LEVEL: 2 | TARGET: src,test | ACTION: behavior | CASES: stable.case.id | VERIFY: command
 
-   Reorder through `"$NIGHTSHIFT_CORE/nightshift/reorder_queue.sh"`. Insert prioritized issue tasks with:
+   Reorder through `"$NIGHTSHIFT_CORE/scripts/reorder_queue.sh"`. Insert prioritized issue tasks with:
 
-       python3 "$NIGHTSHIFT_CORE/nightshift/worker_runtime.py" queue-insert --tasks "$TASKS_FILE" --task 'TASK-ISSUE | LEVEL: 2 | TARGET: src,test | ACTION: fix issue | VERIFY: command'
+       python3 "$NIGHTSHIFT_CORE/scripts/worker_runtime.py" queue-insert --tasks "$TASKS_FILE" --task 'TASK-ISSUE | LEVEL: 2 | TARGET: src,test | ACTION: fix issue | VERIFY: command'
 
    Use green intermediate phases for interface migrations. Every ten completed
    development tasks, queue a bounded hotspot review of the last twenty commits.
@@ -52,7 +52,7 @@ If running un-sourced, discover paths via:
 
 Delegate queue monitoring to Queue Sentinel and end the turn. Never poll status or chat loops.
 
-    WORKER_INACTIVE_REPEAT=1 bash "$NIGHTSHIFT_CORE/nightshift/watch_worker.sh" 0 5
+    WORKER_INACTIVE_REPEAT=1 bash "$NIGHTSHIFT_CORE/scripts/watch_worker.sh" 0 5
 
 (In sourced shell: `ns-watch 0 5`).
 
@@ -74,13 +74,13 @@ paused until Planner reviews the report, replans the FIFO queue, and explicitly 
 2. Read scores, revise prompts and use scheduling scripts to put ordinary issue
    tasks as early in FIFO as possible:
 
-       python3 "$NIGHTSHIFT_CORE/nightshift/worker_runtime.py" queue-insert --tasks "$TASKS_FILE" --task 'TASK-ISSUE | LEVEL: 2 | TARGET: src,test | ACTION: fix issue | VERIFY: command'
+       python3 "$NIGHTSHIFT_CORE/scripts/worker_runtime.py" queue-insert --tasks "$TASKS_FILE" --task 'TASK-ISSUE | LEVEL: 2 | TARGET: src,test | ACTION: fix issue | VERIFY: command'
 
    Delegate fixes except lowest-level work. A changed scope uses a new task ID.
    Repairs use the ordinary hot gate.
 3. Explicitly resume after replanning:
 
-       python3 "$NIGHTSHIFT_CORE/nightshift/worker_runtime.py" restart --root . --config "$NIGHTSHIFT_CONFIG_FILE"
+       python3 "$NIGHTSHIFT_CORE/scripts/worker_runtime.py" restart --root . --config "$NIGHTSHIFT_CONFIG_FILE"
 
    Honor configured PAUSE and agent-event gates separately. Queue edits alone do
    not resume; dispatch remains paused until `restart`. Next Worker discards
@@ -89,7 +89,7 @@ paused until Planner reviews the report, replans the FIFO queue, and explicitly 
 
 Five accepted tasks raise score by one (max five); failure resets the streak.
 Existing timeout/budget penalties remain. Read
-`$NIGHTSHIFT_CORE/nightshift/acceptance.md` for hook setup,
+`$NIGHTSHIFT_CORE/scripts/acceptance.md` for hook setup,
 TDD evidence, cadence and restart state.
 
 ## Trials

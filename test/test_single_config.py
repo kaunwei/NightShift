@@ -10,7 +10,7 @@ from unittest import mock
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "nightshift"))
+sys.path.insert(0, str(ROOT / "scripts"))
 import acceptance
 import worker_runtime
 
@@ -22,7 +22,7 @@ class SingleConfigTests(unittest.TestCase):
             owned = root / 'nightshift'
             owned.mkdir()
             for name in ('worker.sh', 'worker_runtime.py', 'lifecycle.py', 'acceptance.py', 'scratch_review.py', 'project_config.py'):
-                shutil.copy2(ROOT / 'nightshift' / name, owned / name)
+                shutil.copy2(ROOT / 'scripts' / name, owned / name)
             (owned / 'adapters').mkdir()
             agent = {'default': True, 'worker': {'step_base': {'L1': 60, 'L2': 40, 'L3': 20}}, 'agent': {'adapter': 'generic', 'command': 'unused'}}
             (owned / 'adapters/agents.json').write_text(json.dumps({'legacy': agent, 'legacy2': agent}))

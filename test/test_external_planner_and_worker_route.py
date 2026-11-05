@@ -9,12 +9,12 @@ import unittest
 from unittest import mock
 import sys
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "nightshift"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import acceptance
 import project_config
 
 ROOT = Path(__file__).resolve().parents[1]
-RUNTIME = ROOT / "nightshift" / "worker_runtime.py"
+RUNTIME = ROOT / "scripts" / "worker_runtime.py"
 
 
 class ExternalPlannerAndWorkerRouteTests(unittest.TestCase):

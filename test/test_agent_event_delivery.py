@@ -8,7 +8,7 @@ import subprocess
 import tempfile
 import unittest
 
-SOURCE_NIGHTSHIFT = Path(__file__).resolve().parent.parent / "nightshift"
+SOURCE_NIGHTSHIFT = Path(__file__).resolve().parent.parent / "scripts"
 
 
 class TestAgentEventDelivery(unittest.TestCase):

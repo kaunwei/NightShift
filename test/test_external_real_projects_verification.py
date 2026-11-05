@@ -8,11 +8,11 @@ import tempfile
 import unittest
 import sys
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "nightshift"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import project_config
 
 ROOT = Path(__file__).resolve().parents[1]
-RUNTIME = ROOT / "nightshift" / "worker_runtime.py"
+RUNTIME = ROOT / "scripts" / "worker_runtime.py"
 MATRONOME_ORIGINAL = (ROOT.parent / "matronome").resolve()
 TOMETOCLOCK_ORIGINAL = (ROOT.parent / "TometoClock").resolve()
 

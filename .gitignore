@@ -1,4 +1,22 @@
-# NightShift runtime artifacts (kept inside nightshift/)
+# NightShift runtime artifacts (kept inside scripts/ and nightshift/)
+scripts/tasks.txt
+scripts/tasks.done
+scripts/tasks.done.*
+scripts/worker*.status
+scripts/.worker*.log
+scripts/.worker*.pid
+scripts/.worker-agent-state*.json
+scripts/.worker-score*.json
+scripts/.worker-agent-scores/
+scripts/.worker-agent-events*.json*
+scripts/.worker-dispatch-gate.json
+scripts/.worker*.lock/
+scripts/PAUSE
+scripts/tasks.txt.lock/
+scripts/.worker-ghosts/
+scripts/.worker-ghost-state*.json
+scripts/.scratch/
+scripts/tools/.venv/
 nightshift/tasks.txt
 nightshift/tasks.done
 nightshift/tasks.done.*

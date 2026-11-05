@@ -4,7 +4,7 @@ Runtime owns Git writes, hot acceptance, scores and task state. Work on the curr
 
 ## Before and during work
 
-- For indexed navigation, run `python3 "$NIGHTSHIFT_CORE/nightshift/worker_runtime.py" code-index ensure`, then
+- For indexed navigation, run `python3 "$NIGHTSHIFT_CORE/scripts/worker_runtime.py" code-index ensure`, then
   read `$NIGHTSHIFT_STATE_DIR/code-index/INDEX.md` only after script approval. Use compact queries
   for details; `index.json` is script-owned cache. Dirty-input recovery follows Explore's code index.
 - Read `$NIGHTSHIFT_STATE_DIR/.worker.notes.md` and the ticket. Stay within TARGET.
@@ -47,5 +47,5 @@ Return exactly one JSON object with no text before or after it: outcome, commit_
 - On failure, report exact command, output and scope. Planner reschedules issues
   and explicitly restarts. Keep progress and queue records runtime-owned.
 
-Migration/configuration: read `$NIGHTSHIFT_CORE/nightshift/acceptance.md` when setting up hot/cold,
+Migration/configuration: read `$NIGHTSHIFT_CORE/scripts/acceptance.md` when setting up hot/cold,
 adding a framework adapter, or diagnosing missing case evidence.

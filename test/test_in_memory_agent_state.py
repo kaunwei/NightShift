@@ -9,12 +9,12 @@ import unittest
 from unittest import mock
 import sys
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "nightshift"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import worker_runtime
 import lifecycle
 
 ROOT = Path(__file__).resolve().parents[1]
-RUNTIME = ROOT / "nightshift" / "worker_runtime.py"
+RUNTIME = ROOT / "scripts" / "worker_runtime.py"
 
 
 class InMemoryAgentStateTests(unittest.TestCase):
@@ -78,10 +78,10 @@ class InMemoryAgentStateTests(unittest.TestCase):
             workspace = Path(directory)
             installation = workspace / "nightshift"
             installation.mkdir()
-            shutil.copytree(ROOT / "nightshift" / "adapters", installation / "adapters")
+            shutil.copytree(ROOT / "scripts" / "adapters", installation / "adapters")
             for name in ("worker.sh", "worker_runtime.py", "lifecycle.py", "acceptance.py",
                          "scratch_review.py", "project_config.py", "status.sh", "watch_worker.sh", "reorder_queue.sh"):
-                shutil.copy2(ROOT / "nightshift" / name, installation / name)
+                shutil.copy2(ROOT / "scripts" / name, installation / name)
 
             # Setup git repo
             subprocess.run(["git", "init", "-q", str(workspace)], check=True)

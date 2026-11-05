@@ -10,7 +10,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 _NS_CORE = Path(os.environ.get('NIGHTSHIFT_CORE', ROOT.parent / 'NightShift'))
-ADAPTER = _NS_CORE / 'nightshift' / 'unittest_hot.py' if (_NS_CORE / 'nightshift' / 'unittest_hot.py').is_file() else ROOT / 'nightshift' / 'unittest_hot.py'
+ADAPTER = _NS_CORE / 'scripts' / 'unittest_hot.py' if (_NS_CORE / 'scripts' / 'unittest_hot.py').is_file() else ROOT / 'scripts' / 'unittest_hot.py'
 
 
 class HotProtocolTests(unittest.TestCase):

@@ -45,8 +45,9 @@ def resolve_project(config_path, selection=None, default_root=None):
                            capture_output=True, text=True, check=False)
     if probe.returncode or Path(probe.stdout.strip()).resolve() != root:
         raise ValueError(f"project {name!r} must be a Git worktree root: {root}")
-    if "state" in entry and isinstance(entry["state"], str) and entry["state"].strip():
-        state_path = Path(entry["state"]).expanduser()
+    raw_state = entry.get("state") or entry.get("state_dir")
+    if raw_state and isinstance(raw_state, str) and raw_state.strip():
+        state_path = Path(raw_state).expanduser()
         state = (state_path if state_path.is_absolute() else config_path.parent / state_path).resolve()
     elif len(projects) == 1 and config_path.parent.name == name:
         state = config_path.parent.resolve()

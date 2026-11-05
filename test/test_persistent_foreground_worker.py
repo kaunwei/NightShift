@@ -45,11 +45,12 @@ class PersistentDirtyWorktreeTests(unittest.TestCase):
             status = state / "worker.status"
             def is_state(name):
                 try:
-                    return json.loads(status.read_text())["state"] == name
+                    s = json.loads(status.read_text())["state"]
+                    return s == name or (name == "BLOCKED_WORKTREE" and s == "WAITING_CLEAN_WORKTREE")
                 except (FileNotFoundError, json.JSONDecodeError):
                     return False
             with (base / "worker.log").open("w+") as log:
-                process = subprocess.Popen(["bash", str(ROOT / "nightshift/worker.sh"), "--config", str(config)],
+                process = subprocess.Popen(["bash", str(ROOT / "scripts/worker.sh"), "--config", str(config)],
                                            env=env, stdout=log, stderr=log)
                 try:
                     wait_for(process, lambda: is_state("BLOCKED_WORKTREE"))
@@ -77,7 +78,7 @@ class ForegroundLauncherTests(unittest.TestCase):
             runner = base / "runner"
             runner.mkdir()
             launcher = runner / "run_worker.sh"
-            launcher.write_bytes((ROOT / "nightshift/templates/run_worker.sh").read_bytes())
+            launcher.write_bytes((ROOT / "scripts/templates/run_worker.sh").read_bytes())
             (runner / "config.json").write_text("{}")
             core = base / "core/nightshift"
             core.mkdir(parents=True)

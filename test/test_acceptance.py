@@ -8,11 +8,11 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 _NS_CORE = Path(os.environ.get('NIGHTSHIFT_CORE', ROOT.parent / 'NightShift'))
-_ns_dir = str(_NS_CORE / 'nightshift') if (_NS_CORE / 'nightshift').is_dir() else str(ROOT / 'nightshift')
+_ns_dir = str(_NS_CORE / 'scripts') if (_NS_CORE / 'scripts').is_dir() else (str(ROOT / 'scripts') if (ROOT / 'scripts').is_dir() else str(ROOT / 'nightshift'))
 if _ns_dir not in sys.path:
     sys.path.insert(0, _ns_dir)
 import acceptance
-_NS_HOT = _NS_CORE / 'nightshift' / 'unittest_hot.py' if (_NS_CORE / 'nightshift' / 'unittest_hot.py').is_file() else ROOT / 'nightshift' / 'unittest_hot.py'
+_NS_HOT = _NS_CORE / 'scripts' / 'unittest_hot.py' if (_NS_CORE / 'scripts' / 'unittest_hot.py').is_file() else ROOT / 'scripts' / 'unittest_hot.py'
 
 
 class AcceptanceTests(unittest.TestCase):

@@ -11,7 +11,7 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 
 ROOT = Path(__file__).resolve().parents[1]
-RUNTIME = ROOT / "nightshift/worker_runtime.py"
+RUNTIME = ROOT / "scripts/worker_runtime.py"
 sys.path.insert(0, str(RUNTIME.parent))
 import scratch_review
 import worker_runtime
@@ -21,7 +21,7 @@ class ScratchReviewTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name).resolve()
-        self.runtime = self.root / "nightshift"
+        self.runtime = self.root / "scripts"
         self.runtime.mkdir()
         (self.runtime / "tasks.txt").write_text("USER-TASK | ACTION: preserve work\n")
         (self.runtime / "tasks.done").write_text("")
@@ -53,7 +53,7 @@ class ScratchReviewTests(unittest.TestCase):
         self.assertEqual(first["state"], "queued")
         queue = (self.runtime / "tasks.txt").read_text()
         self.assertIn("[MAINTENANCE: SCRATCH]", queue)
-        self.assertIn("nightshift/.scratch/review/last-review.json", queue)
+        self.assertIn("scripts/.scratch/review/last-review.json", queue)
         self.assertTrue(queue.endswith("USER-TASK | ACTION: preserve work\n"))
         self.assertEqual(self.check()["state"], "pending")
         self.assertEqual((self.runtime / "tasks.txt").read_text().count("[MAINTENANCE: SCRATCH]"), 1)
@@ -124,9 +124,9 @@ class ScratchReviewTests(unittest.TestCase):
         self.assertEqual(self.check()["state"], "queued")
 
     def test_receipt_rejects_oversize_stale_and_out_of_scope_paths(self):
-        for changes in ({"task_id": "stale"}, {"removed": ["nightshift/.scratch/code-index"]},
-                        {"removed": ["nightshift/.scratch/attempts/../secret"]},
-                        {"note": "x" * 1500}, {"removed": ["nightshift/.scratch/attempts/CURRENT/current"]}):
+        for changes in ({"task_id": "stale"}, {"removed": ["scripts/.scratch/code-index"]},
+                        {"removed": ["scripts/.scratch/attempts/../secret"]},
+                        {"note": "x" * 1500}, {"removed": ["scripts/.scratch/attempts/CURRENT/current"]}):
             with self.subTest(changes=changes):
                 self.write_report("CURRENT", **changes) if "task_id" not in changes else self.write_report("stale")
                 with self.assertRaises(ValueError):
@@ -161,41 +161,43 @@ class ScratchReviewTests(unittest.TestCase):
         shutil.copy2(RUNTIME.parent / "scratch_review.py", self.runtime / "scratch_review.py")
         shutil.copy2(RUNTIME.parent / "worker.sh", self.runtime / "worker.sh")
         shutil.copytree(RUNTIME.parent / "adapters", self.runtime / "adapters")
-        (self.root / ".gitignore").write_text("nightshift/.scratch/\nnightshift/tasks*\nnightshift/progress.log\nnightshift/worker*.status\nnightshift/.worker*\n")
+        (self.root / ".gitignore").write_text("scripts/.scratch/\nscripts/tasks*\nscripts/progress.log\nscripts/worker*.status\nscripts/.worker*\n")
         (self.runtime / "tasks.txt").write_text("USER-TASK | LEVEL: 1 | TARGET: product.txt | ACTION: preserve | VERIFY: true\n")
         (self.root / "product.txt").write_text("product\n")
         fake = self.root / "fake.py"
+        scripts_path = str((ROOT / 'scripts').resolve())
         fake.write_text("""import json, os
 from pathlib import Path
 import shutil
 import sys
-sys.path.insert(0, str(Path('nightshift').resolve()))
+sys.path.insert(0, """ + repr(scripts_path) + """)
 import scratch_review
 ident = os.environ['NIGHTSHIFT_TASK_ID']
 if ident.startswith('SCRATCH-REVIEW-'):
     prompt = Path(os.environ['NIGHTSHIFT_PROMPT_FILE']).read_text()
     assert 'DELETE BOUNDARY' in prompt and '<=1024' in prompt
-    before = scratch_review.inventory('nightshift')
-    old = Path('nightshift/.scratch/attempts/OLD/old-attempt')
+    before = scratch_review.inventory('scripts')
+    old = Path('scripts/.scratch/attempts/OLD/old-attempt')
     assert (old / 'baseline/snapshot.json').exists()
     metadata = json.loads((old / 'baseline/snapshot.json').read_text())
     assert metadata['task_id'] == 'OLD' and metadata['work_dir'] == str(Path.cwd())
     assert all(p.stat().st_mtime < __import__('time').time()-7*86400 for p in old.rglob('*'))
-    assert 'Planner_Review: accept' in Path('nightshift/progress.log').read_text()
+    assert 'Planner_Review: accept' in Path('scripts/progress.log').read_text()
     if not os.environ.get('INVALID_RECEIPT'):
         shutil.rmtree(old)
-    after = scratch_review.inventory('nightshift')
+    after = scratch_review.inventory('scripts')
     receipt = dict(task_id=('wrong' if os.environ.get('INVALID_RECEIPT') else ident),status='reviewed',
         before_bytes=before['attempts_bytes']+before['failed_bytes'],
         after_bytes=after['attempts_bytes']+after['failed_bytes'],
         removed=[] if old.exists() else [str(old)],kept={'anchor':1},note='removed closed old fixture')
-    Path('nightshift/.scratch/review/last-review.json').write_text(json.dumps(receipt))
+    Path('scripts/.scratch/review/last-review.json').write_text(json.dumps(receipt))
 json.dump(dict(outcome='complete',changed=False,verification_evidence='fixture verified',
     commit_message='test: reviewed',attempts=1,confidence='HIGH'),open(os.environ['NIGHTSHIFT_RESULT_FILE'],'w'))
 """)
-        registration = {"test": {"default": True,"worker": {"task_timeout_seconds":30},
-                         "agent": {"adapter":"generic", "command":sys.executable, "args":[str(fake)]}}}
+        registration = {"test": {"default": True, "worker": {"task_timeout_seconds": 30, "step_base": {"L1": 22, "L2": 22, "L3": 22}},
+                         "agent": {"adapter": "generic", "command": sys.executable, "args": [str(fake)]}}}
         (self.runtime / "adapters/agents.json").write_text(json.dumps(registration))
+        (self.runtime / "config.json").write_text(json.dumps({"version": 1, "agents": registration}))
         for arguments in (("init", "-q"), ("config","user.name","Test"),
                           ("config","user.email","test@example.invalid"), ("add","."), ("commit","-qm","fixture")):
             subprocess.run(["git","-C",str(self.root),*arguments],check=True,capture_output=True)

@@ -11,9 +11,9 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-RUNTIME = ROOT / "nightshift/worker_runtime.py"
-HOT = ROOT / "nightshift/unittest_hot.py"
-sys.path.insert(0, str(ROOT / "nightshift"))
+RUNTIME = ROOT / "scripts/worker_runtime.py"
+HOT = ROOT / "scripts/unittest_hot.py"
+sys.path.insert(0, str(ROOT / "scripts"))
 import acceptance
 import worker_runtime as runtime_module
 
@@ -142,7 +142,7 @@ pathlib.Path(os.environ['NIGHTSHIFT_RESULT_FILE']).write_text(json.dumps(result)
         self.assertTrue((state / "lifecycle/last-adapter.json").is_file())
         self.assertIn("Project: company", next((state / "lifecycle/runs").glob("*/prompt.txt")).read_text())
 
-    @unittest.skipUnless((ROOT / "nightshift/tools/.venv/bin/python").is_file(), "parser environment required")
+    @unittest.skipUnless((ROOT / "scripts/tools/.venv/bin/python").is_file(), "parser environment required")
     def test_external_index_uses_private_config_and_storage(self):
         import project_config
         external = self.directory / "external-config.json"
@@ -164,7 +164,7 @@ pathlib.Path(os.environ['NIGHTSHIFT_RESULT_FILE']).write_text(json.dumps(result)
 
     def test_worker_restart_uses_changed_agent_budget_and_timeout(self):
         launcher = self.root / "nightshift/worker.sh"
-        shutil.copy2(ROOT / "nightshift/worker.sh", launcher)
+        shutil.copy2(ROOT / "scripts/worker.sh", launcher)
         (self.root / "nightshift/worker_runtime.py").symlink_to(RUNTIME)
         config_path = self.root / "nightshift/config.json"
         config = json.loads(config_path.read_text())

@@ -8,14 +8,14 @@ import tempfile
 import unittest
 import sys
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "nightshift"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import project_config
 
 ROOT = Path(__file__).resolve().parents[1]
-RUNTIME = ROOT / "nightshift" / "worker_runtime.py"
+RUNTIME = ROOT / "scripts" / "worker_runtime.py"
 
 
-@unittest.skipUnless((ROOT / "nightshift/tools/.venv/bin/python").is_file(), "parser environment required")
+@unittest.skipUnless((ROOT / "scripts/tools/.venv/bin/python").is_file(), "parser environment required")
 class ExternalProjectIndexTests(unittest.TestCase):
     def test_external_index_build_query_and_isolation_between_two_projects(self):
         with tempfile.TemporaryDirectory() as directory:

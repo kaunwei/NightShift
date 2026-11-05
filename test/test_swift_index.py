@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 
-CLI = Path(__file__).resolve().parents[1] / "nightshift" / "tools" / "index.py"
+CLI = Path(__file__).resolve().parents[1] / "scripts" / "tools" / "index.py"
 
 
 class SwiftIndexPublicCliTests(unittest.TestCase):
@@ -172,7 +172,7 @@ func testTracker() { PracticeTracker().record() }
             self.assertEqual(second.returncode, 0, second.stderr)
             payload = json.loads(second.stdout)
             self.assertNotEqual(payload["index_path"], first["index_path"])
-            self.assertEqual(Path(payload["index_path"]), linked.resolve() / "nightshift/.scratch/code-index/index.json")
+            self.assertEqual(Path(payload["index_path"]), linked.resolve() / "scripts/.scratch/code-index/index.json")
         finally:
             subprocess.run(["git", "-C", str(self.root), "worktree", "remove", "--force", str(linked)], check=True)
 

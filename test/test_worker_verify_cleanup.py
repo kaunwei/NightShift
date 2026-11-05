@@ -10,7 +10,7 @@ import tempfile
 import time
 import unittest
 
-RUNTIME = Path(__file__).resolve().parents[1] / 'nightshift' / 'worker_runtime.py'
+RUNTIME = Path(__file__).resolve().parents[1] / 'scripts' / 'worker_runtime.py'
 
 
 def is_live(pid):

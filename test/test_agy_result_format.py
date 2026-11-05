@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-ADAPTER_PATH = Path(__file__).resolve().parent.parent / "nightshift" / "adapters" / "agy.py"
+ADAPTER_PATH = Path(__file__).resolve().parent.parent / "scripts" / "adapters" / "agy.py"
 
 
 class TestAgyResultFormat(unittest.TestCase):

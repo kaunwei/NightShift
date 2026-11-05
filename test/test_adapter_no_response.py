@@ -7,7 +7,7 @@ import tempfile
 import time
 import unittest
 
-ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "nightshift/worker.sh").exists())
+ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "scripts/worker.sh").exists())
 
 
 class AdapterNoResponseTests(unittest.TestCase):
@@ -29,7 +29,7 @@ class AdapterNoResponseTests(unittest.TestCase):
 
             def callback(name, request):
                 response = subprocess.run(
-                    [sys.executable, str(ROOT / 'nightshift/adapters' / f'{adapter}.py'), name],
+                    [sys.executable, str(ROOT / 'scripts/adapters' / f'{adapter}.py'), name],
                     input=json.dumps({'protocol_version': 1, **request}),
                     text=True, capture_output=True, timeout=10)
                 self.assertEqual(response.returncode, 0, response.stderr)

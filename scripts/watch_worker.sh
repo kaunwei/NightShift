@@ -4,9 +4,9 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [ "$(basename "$SCRIPT_DIR")" = "scripts" ]; then
-  NIGHTSHIFT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-  PROJECT_ROOT="$NIGHTSHIFT_DIR"
+if [ "$(basename "$SCRIPT_DIR")" = "scripts" ] || [ "$(basename "$SCRIPT_DIR")" = "nightshift" ]; then
+  NIGHTSHIFT_DIR="$SCRIPT_DIR"
+  PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
   RUNTIME_PATH="$SCRIPT_DIR/worker_runtime.py"
 else
   NIGHTSHIFT_DIR="$SCRIPT_DIR"

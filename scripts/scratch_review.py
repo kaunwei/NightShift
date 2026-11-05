@@ -7,7 +7,7 @@ import time
 import uuid
 
 TAG = "[MAINTENANCE: SCRATCH]"
-REPORT = "nightshift/.scratch/review/last-review.json"
+REPORT = "scripts/.scratch/review/last-review.json"
 REPORT_LIMIT = 1024
 
 
@@ -90,8 +90,8 @@ def read_small(path, limit=8192):
 
 def task_line(task_id):
     header = task_id if TAG in task_id else f"{task_id} {TAG}"
-    return (f"{header} | LEVEL: 1 | TARGET: nightshift/.scratch/attempts, "
-            f"nightshift/.scratch/failed_tasks, {REPORT} | ACTION: Review obsolete artifacts; "
+    return (f"{header} | LEVEL: 1 | TARGET: scripts/.scratch/attempts, "
+            f"scripts/.scratch/failed_tasks, {REPORT} | ACTION: Review obsolete artifacts; "
             "delete only proven safe entries under the maintenance prompt | VERIFY: none")
 
 
@@ -158,8 +158,8 @@ def validate_report(runtime, task_id):
     for name in removed:
         parts = Path(name).parts
         if (not isinstance(name, str) or ".." in parts or task_id in parts or
-            not ((parts[:3] == ("nightshift", ".scratch", "attempts") and len(parts) == 5) or
-                 (parts[:3] == ("nightshift", ".scratch", "failed_tasks") and len(parts) == 4))):
+            not (((parts[:3] == ("scripts", ".scratch", "attempts") or parts[:3] == ("nightshift", ".scratch", "attempts")) and len(parts) == 5) or
+                 ((parts[:3] == ("scripts", ".scratch", "failed_tasks") or parts[:3] == ("nightshift", ".scratch", "failed_tasks")) and len(parts) == 4))):
             raise ValueError("removed path outside maintenance boundary")
         runtime = Path(runtime)
         candidate = runtime.joinpath(*parts[1:])
@@ -196,7 +196,7 @@ The runtime creates attempts/<task>/<attempt>/baseline/snapshot.json plus adapte
 rollback creates failed_tasks/<archive>/recovery.json plus diffs. They are diagnostic/recovery evidence.
 
 DELETE BOUNDARY (ALL must hold):
-- Only whole nightshift/.scratch/attempts/<task>/<attempt> or nightshift/.scratch/failed_tasks/<archive>.
+- Only whole scripts/.scratch/attempts/<task>/<attempt> or scripts/.scratch/failed_tasks/<archive>.
 - Every file in the candidate is at least 7 days old; never follow symlinks or delete a symlink tree.
 - snapshot/recovery identity must match the task/attempt and current work_dir. Unknown/legacy evidence stays.
 - Ordinary task: newest exact-task audit is PASS with Planner_Review: accept and matching tasks.done DONE;
@@ -213,7 +213,7 @@ TOKEN BOUNDARY:
 Use file size/mtime and small snapshot/recovery headers first. Do not dump raw logs or scan all history.
 Search exact candidate task IDs only in queue/status/DONE and progress audit lines. Search reference paths
 only in live reports/rollback metadata. If evidence needs broad reading, keep it as unknown.
-Measure before/after with: python3 nightshift/worker_runtime.py scratch-review-check --root . --stats-only
+Measure before/after with: python3 scripts/worker_runtime.py scratch-review-check --root . --stats-only
 
 Overwrite {REPORT}, UTF-8 JSON <=1024 bytes, exactly:
 {{"task_id":"{task_id}","status":"reviewed","before_bytes":0,"after_bytes":0,

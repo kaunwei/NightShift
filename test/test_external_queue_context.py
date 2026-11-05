@@ -23,7 +23,7 @@ class ExternalQueueContextTests(unittest.TestCase):
             environment = dict(os.environ)
             environment.update(NIGHTSHIFT_CONFIG_FILE=str(config),
                                NIGHTSHIFT_PROJECT_NAME='sample', TASKS_FILE=str(tasks))
-            command = Path(__file__).resolve().parents[1] / 'nightshift/reorder_queue.sh'
+            command = Path(__file__).resolve().parents[1] / 'scripts/reorder_queue.sh'
             result = subprocess.run(['bash', str(command)], input='TASK-NEW\n', text=True,
                                     env=environment, capture_output=True)
             self.assertEqual(result.returncode, 0, result.stderr)

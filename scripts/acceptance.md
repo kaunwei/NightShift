@@ -7,13 +7,13 @@ not evidence that a new TDD case ran. Generated lifecycle state lives under
 
 ## Configure a project
 
-Track `nightshift/config.json` with the project's acceptance and agent commands:
+Track `scripts/config.json` with the project's acceptance and agent commands:
 
 ```json
 {
   "version": 1,
   "acceptance": {
-    "hot": "python3 nightshift/unittest_hot.py --start test",
+    "hot": "python3 scripts/unittest_hot.py --start test",
     "cold": "python3 -m unittest discover -s test",
     "cold_every": 5,
     "timeout": 180,
@@ -39,7 +39,7 @@ Track `nightshift/config.json` with the project's acceptance and agent commands:
 }
 ```
 
-Runtime reads persistent settings only from `nightshift/config.json`. Each agent must define positive `worker.step_base` values for L1, L2, and L3. Restart the Worker after editing configuration.
+Runtime reads persistent settings only from `scripts/config.json`. Each agent must define positive `worker.step_base` values for L1, L2, and L3. Restart the Worker after editing configuration.
 
 Commands run from project root. `cold_every` is optional: absent means no periodic
 insertion; a manually queued cold still requires `cold`. Set a positive integer
@@ -58,8 +58,8 @@ from wiring. Ghost leaves source, assertions and unrelated scripts unchanged.
 
 By default, NightShift executes `hot` and `cold` commands via bash with `NIGHTSHIFT_PHASE` environment variables (`DefaultAcceptanceRunner`). A project can customize or completely override how hot and cold call functions work:
 
-1. **Via `nightshift/acceptance_runner.py`**:
-   Create `nightshift/acceptance_runner.py` in the project root, defining a custom `Runner` class (or function `get_runner(root, cfg)`) subclassing `acceptance.DefaultAcceptanceRunner` or `acceptance.AcceptanceRunner`:
+1. **Via `scripts/acceptance_runner.py`**:
+   Create `scripts/acceptance_runner.py` in the project root, defining a custom `Runner` class (or function `get_runner(root, cfg)`) subclassing `acceptance.DefaultAcceptanceRunner` or `acceptance.AcceptanceRunner`:
    ```python
    import acceptance
 
@@ -68,15 +68,15 @@ By default, NightShift executes `hot` and `cold` commands via bash with `NIGHTSH
            # Custom hot execution logic
            return super().run_hot(args, result, run_verify)
 
-       def run_cold(self, root, run_verify):
-           # Custom cold regression logic
-           return super().run_cold(root, run_verify)
+        def run_cold(self, root, run_verify):
+            # Custom cold regression logic
+            return super().run_cold(root, run_verify)
 
    def get_runner(root, cfg):
        return CustomRunner()
    ```
 
-2. **Via `acceptance.runner` in `nightshift/config.json`**:
+2. **Via `acceptance.runner` in `scripts/config.json`**:
    Specify a custom runner entry point: `"runner": "my_module:CustomRunner"`.
 
 Keep generated queues/status/scores untracked. Installer ignores them; if an old
@@ -163,7 +163,7 @@ not in runtime heuristics.
 3. Planner inserts/reorders ordinary issue tasks through the queue scripts,
    revises instructions and explicitly runs:
 
-       python3 nightshift/worker_runtime.py restart --root .
+       python3 scripts/worker_runtime.py restart --root .
 
 4. Next Worker starts after `reset --hard HEAD` and `clean -fd`: tracked and
    nonignored uncommitted changes are discarded. Ignored files/reports survive.

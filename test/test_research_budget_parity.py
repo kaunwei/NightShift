@@ -9,7 +9,7 @@ import unittest
 from unittest import mock
 
 _SPEC = importlib.util.spec_from_file_location(
-    'research_budget_runtime', Path(__file__).resolve().parents[1] / 'nightshift/worker_runtime.py')
+    'research_budget_runtime', Path(__file__).resolve().parents[1] / 'scripts/worker_runtime.py')
 runtime = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(runtime)
 

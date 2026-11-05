@@ -9,7 +9,7 @@ import unittest
 from unittest import mock
 import sys
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "nightshift"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import acceptance
 import project_config
 
@@ -24,7 +24,7 @@ class ExternalProjectSelectionTests(unittest.TestCase):
             installation.mkdir(parents=True)
             for name in ("worker.sh", "worker_runtime.py", "lifecycle.py", "acceptance.py",
                          "scratch_review.py", "project_config.py", "status.sh", "watch_worker.sh", "reorder_queue.sh"):
-                shutil.copy2(ROOT / "nightshift" / name, installation / name)
+                shutil.copy2(ROOT / "scripts" / name, installation / name)
             projects = {}
             for name in ("first", "second"):
                 root = workspace / f"project {name}"
@@ -88,7 +88,7 @@ class ExternalProjectSelectionTests(unittest.TestCase):
             installation.mkdir(parents=True)
             for name in ("worker.sh", "worker_runtime.py", "lifecycle.py", "acceptance.py",
                          "scratch_review.py", "project_config.py", "status.sh", "watch_worker.sh", "reorder_queue.sh"):
-                shutil.copy2(ROOT / "nightshift" / name, installation / name)
+                shutil.copy2(ROOT / "scripts" / name, installation / name)
 
             alpha = workspace / "project alpha"
             alpha.mkdir()
@@ -187,7 +187,7 @@ class ExternalProjectSelectionTests(unittest.TestCase):
             installation.mkdir(parents=True)
             for name in ("worker.sh", "worker_runtime.py", "lifecycle.py", "acceptance.py",
                          "scratch_review.py", "project_config.py", "status.sh", "watch_worker.sh", "reorder_queue.sh"):
-                shutil.copy2(ROOT / "nightshift" / name, installation / name)
+                shutil.copy2(ROOT / "scripts" / name, installation / name)
 
             project_dir = workspace / "project with spaces"
             project_dir.mkdir()

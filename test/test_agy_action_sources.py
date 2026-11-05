@@ -8,8 +8,8 @@ import unittest
 import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
-RUNTIME = ROOT / "nightshift/worker_runtime.py"
-ADAPTER = ROOT / "nightshift/adapters/agy.py"
+RUNTIME = ROOT / "scripts/worker_runtime.py"
+ADAPTER = ROOT / "scripts/adapters/agy.py"
 
 
 class AgyActionSourceTests(unittest.TestCase):

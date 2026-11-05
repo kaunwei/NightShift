@@ -39,13 +39,20 @@ def protect_runtime(root, paths):
         if path.is_relative_to(root):
             name = path.relative_to(root).as_posix()
             if gate.git(root, "ls-files", "--", name):
-                if name in ("tasks.txt", "nightshift/tasks.txt"):
+                if name in ("tasks.txt", "scripts/tasks.txt", "nightshift/tasks.txt"):
                     continue
                 raise gate.GateError(f"migration required: untrack generated runtime file {name}")
             additions.extend(["/" + name, "/" + name + ".lock/"])
     exclude.parent.mkdir(parents=True, exist_ok=True)
     with exclude.open("a") as stream:
         stream.write("\n" + "\n".join(item for item in additions if item not in old.splitlines()) + "\n")
+
+
+def has_acceptance(root):
+    try:
+        return bool(gate.config(root))
+    except Exception:
+        return False
 
 
 def diagnose(root, runtime, active, result):
@@ -57,7 +64,7 @@ def diagnose(root, runtime, active, result):
     gate.save(directory / "report.json", report)
     (directory / "REPORT.md").write_text(
         "# Task failure\n\n" + json.dumps(report, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
-    if os.environ.get("NIGHTSHIFT_CONFIG_FILE") or (root / "nightshift/config.json").is_file():
+    if has_acceptance(root):
         gate.pause(root, active["task_id"], f"{detail}; report={directory / 'REPORT.md'}")
     return directory
 
@@ -96,6 +103,7 @@ def run(root, runtime):
     state = gate.state_dir(root)
     external = bool(os.environ.get("NIGHTSHIFT_CONFIG_FILE"))
     owned = (Path(os.environ["NIGHTSHIFT_STATE_DIR"]) if external else
+             root / "scripts" if (root / "scripts").is_dir() else
              root / "nightshift" if (root / "nightshift").is_dir() else root)
     def path(name, default):
         value = Path(str(owned / default) if external else os.environ.get(name, str(owned / default)))
@@ -178,7 +186,7 @@ def run(root, runtime):
     waiting_for_response = False
 
     def fail(active, result):
-        if not ((root / "nightshift/config.json").is_file()) and active.get("attempt_baseline"):
+        if not has_acceptance(root) and active.get("attempt_baseline"):
             try:
                 runtime.rollback_failed_task(
                     root, root, active["task_id"],
@@ -336,6 +344,10 @@ def run(root, runtime):
                 else:
                     continue
             if waiting_for_response and not pause.is_file():
+                if agent_state_file.exists():
+                    agent_state = runtime.read_agent_state(agent_state_file)
+                else:
+                    agent_state["consecutive_no_response"] = 0
                 if agent_state.get("consecutive_no_response", 0) >= len(agents):
                     update("AGENT_NO_RESPONSE", "Waiting for agent response")
                     stopped.wait(poll)
@@ -388,7 +400,7 @@ def run(root, runtime):
                         update("WAITING_CLEAN_WORKTREE")
                         stopped.wait(poll)
                         continue
-                elif (root / "nightshift/config.json").is_file():
+                elif has_acceptance(root):
                     gate.clean(root)
                 runtime.refresh_active_reports(owned if external else root, root)
                 stale = state / "tasks" / (gate.key(active["task_id"], raw) + ".json")
@@ -452,6 +464,8 @@ def run(root, runtime):
                     append_once(progress, f"no_response:{active['task_id']}", f"[AGENT_NO_RESPONSE] {active['task_id']}: agent no response; reporting to planner.")
                     runtime.insert_task_front(tasks, raw)
                     active_path.unlink(missing_ok=True)
+                    if not external:
+                        agent_state_file.write_text(json.dumps(agent_state, indent=2))
                     if once:
                         return 0
                     waiting_for_response = True
@@ -462,6 +476,8 @@ def run(root, runtime):
                     append_once(progress, f"agent_unavailable:{active['task_id']}", msg)
                     runtime.insert_task_front(tasks, raw)
                     active_path.unlink(missing_ok=True)
+                    if not external:
+                        agent_state_file.write_text(json.dumps(agent_state, indent=2))
                     update("WAITING_FOR_AGENT", active["task_id"])
                     if once:
                         return 0

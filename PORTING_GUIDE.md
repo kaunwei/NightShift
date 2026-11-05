@@ -10,8 +10,8 @@
 
 ```
 [ Tier 1: NightShift Core ] (純工具核心庫，例如 /opt/NightShift)
-    ├── nightshift/worker.sh
-    ├── nightshift/worker_runtime.py
+    ├── scripts/worker.sh
+    ├── scripts/worker_runtime.py
     └── .agents/skills/
 
 [ Tier 2: 外部控制工作區 ] (Runner Workspace，例如 ~/nightshift-workspace)
@@ -143,10 +143,10 @@ worker.sh --config ./config.json --project my-app
 當你啟動 Worker 時：
 ```bash
 # 模式 A (獨立專案資料夾)：直接傳入該專案 config，自動識別名稱與目錄
-/path/to/NightShift/nightshift/worker.sh --config ./projects/my-app/config.json
+/path/to/NightShift/scripts/worker.sh --config ./projects/my-app/config.json
 
 # 模式 B (全域多專案設定)：指定全域 config 與專案名稱
-/path/to/NightShift/nightshift/worker.sh --config ./config.json --project my-app
+/path/to/NightShift/scripts/worker.sh --config ./config.json --project my-app
 ```
 Worker 會透過 `project_config.resolve_project` 自動綁定執行環境：
 - **`NIGHTSHIFT_PROJECT_ROOT`**：指向專案實體目錄（例如 `/Users/you/repos/my-app`）。Worker 的 Agent 執行工作目錄在此，且只有專案修改會被 Git commit。
@@ -160,11 +160,11 @@ Worker 會透過 `project_config.resolve_project` 自動綁定執行環境：
 Planner 不需要猜測路徑，只要執行單一指令即可取得完整的結構化資訊：
 ```bash
 # 模式 A：
-python3 /path/to/NightShift/nightshift/worker_runtime.py project-info \
+python3 /path/to/NightShift/scripts/worker_runtime.py project-info \
   --config ./projects/my-app/config.json
 
 # 模式 B：
-python3 /path/to/NightShift/nightshift/worker_runtime.py project-info \
+python3 /path/to/NightShift/scripts/worker_runtime.py project-info \
   --config ./config.json \
   --project my-app
 ```
@@ -256,7 +256,7 @@ echo "State   : $PROJECT_STATE_DIR"
 echo "=================================="
 
 # 3. 執行 Worker (自動識別專案並將目前目錄作為暫存目錄)
-exec "$NIGHTSHIFT_CORE/nightshift/worker.sh" \
+exec "$NIGHTSHIFT_CORE/scripts/worker.sh" \
   --config "$CONFIG_FILE" \
   "$@"
 ```
@@ -327,7 +327,7 @@ if [ ! -f "$_CONFIG_FILE" ]; then
 fi
 
 # 1. 透過 project_config.py 導出所有標準環境變數
-eval "$(python3 "$NIGHTSHIFT_CORE/nightshift/project_config.py" --config "$_CONFIG_FILE" --root "$_ENV_DIR")"
+eval "$(python3 "$NIGHTSHIFT_CORE/scripts/project_config.py" --config "$_CONFIG_FILE" --root "$_ENV_DIR")"
 export NIGHTSHIFT_CORE
 
 # 2. 將 Runner 目錄加入 PATH，讓 `run_worker.sh` 與 `status.sh` 能直接當作全域指令執行
@@ -337,7 +337,7 @@ if [[ ":$PATH:" != *":$_ENV_DIR:"* ]]; then
 fi
 
 # 3. 注入常用便捷指令
-ns-status() { "$NIGHTSHIFT_CORE/nightshift/status.sh" --config "$NIGHTSHIFT_CONFIG_FILE" "$@"; }
+ns-status() { "$NIGHTSHIFT_CORE/scripts/status.sh" --config "$NIGHTSHIFT_CONFIG_FILE" "$@"; }
 ns-worker() { "$_ENV_DIR/run_worker.sh" "$@"; }
 ns-watch() { "$_ENV_DIR/watch_worker.sh" "$@"; }
 ns-pause() { touch "$PAUSE_FILE" && echo "[PAUSED] Worker paused via $PAUSE_FILE"; }
