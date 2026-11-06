@@ -222,32 +222,63 @@ class DefaultAcceptanceRunner(AcceptanceRunner):
         declarations = result.get("tdd_cases")
         if not isinstance(declarations, list) or not declarations:
             raise GateError("development handoff requires nonempty tdd_cases")
-        declared = {}
-        for item in declarations:
-            if (not isinstance(item, dict) or not isinstance(item.get("id"), str)
-                    or not item["id"] or not safe_path(item.get("source")) or item["id"] in declared):
-                raise GateError("tdd_cases requires unique IDs and relative source paths")
-            declared[item["id"]] = item["source"]
         print(f"[HOT_GATE] Discovering permanent test cases (baseline={args.base[:8]})...", flush=True)
         permanent, discovery = self.invoke(root, cfg, "hot", "discover", args.base, run)
-        for identity, source in declared.items():
-            case = permanent.get(identity, {})
+        declared, canonical, dropped, seen = {}, [], [], set()
+        original = json.loads(json.dumps(declarations))
+        for item in declarations:
+            if (not isinstance(item, dict) or not isinstance(item.get("id"), str)
+                    or not item["id"] or not isinstance(item.get("source"), str) or not item["source"]):
+                raise GateError("tdd_cases requires nonempty IDs and source paths")
+            # Resolve only exact discovered identities or extra leading test. wrappers.
+            identity, candidates = item["id"], set()
+            while True:
+                if identity in permanent:
+                    candidates.add(identity)
+                if not identity.startswith("test."):
+                    break
+                identity = identity[len("test."):]
+            if len(candidates) != 1:
+                raise GateError(f"TDD case ID unknown or ambiguous: {item['id']}")
+            identity = candidates.pop()
+            if identity in seen:
+                raise GateError(f"duplicate TDD case after reconciliation: {identity}")
+            seen.add(identity)
+            submitted = Path(item["source"])
+            if ".." in submitted.parts or ".git" in submitted.parts:
+                raise GateError(f"unsafe TDD source path: {item['source']}")
+            path = submitted if submitted.is_absolute() else root / submitted
+            if (not path.resolve().is_relative_to(root.resolve()) or not path.is_file()
+                    or path.is_symlink()):
+                raise GateError(f"TDD case source not found: {identity}")
+            source = path.resolve().relative_to(root.resolve()).as_posix()
+            case = permanent[identity]
+            if case.get("source") != source or not safe_path(source):
+                raise GateError(f"TDD case source mismatch: {identity}")
             fingerprint = case.get("fingerprint", "")
             baseline = case.get("baseline_fingerprint")
-            path = root / source
-            if (not path.resolve().is_relative_to(root.resolve()) or not path.is_file()
-                    or path.is_symlink() or case.get("source") != source):
-                raise GateError(f"TDD case source not found: {identity}")
             if (not isinstance(fingerprint, str) or not re.fullmatch(r"[a-f0-9]{64}", fingerprint)
                     or (baseline is not None and (not isinstance(baseline, str) or not re.fullmatch(r"[a-f0-9]{64}", baseline)))
-                    or "baseline_fingerprint" not in case or baseline == fingerprint):
-                raise GateError(f"TDD case unchanged or source evidence unsupported: {identity}")
-            old = subprocess.run(["git", "-C", str(root), "show", f"{args.base}:{source}"], capture_output=True)
-            if old.returncode == 0 and old.stdout == path.read_bytes():
-                raise GateError(f"declared TDD source unchanged: {source}")
+                    or "baseline_fingerprint" not in case):
+                raise GateError(f"TDD source evidence unsupported: {identity}")
+            normalized = {"id": identity, "source": source}
+            canonical.append(normalized)
             ignored = subprocess.run(["git", "-C", str(root), "check-ignore", "-q", "--", source])
             if ignored.returncode == 0:
                 raise GateError(f"TDD source must be delivered in Git: {source}")
+            if baseline == fingerprint:
+                dropped.append(normalized)
+                continue
+            old = subprocess.run(["git", "-C", str(root), "show", f"{args.base}:{source}"], capture_output=True)
+            if old.returncode == 0 and old.stdout == path.read_bytes():
+                raise GateError(f"declared TDD source unchanged: {source}")
+            declared[identity] = source
+        if not declared:
+            raise GateError("TDD handoff contains no new or changed test cases")
+        reconciliation = {"original": original, "canonical": canonical, "dropped": dropped}
+        result["tdd_cases"] = [{"id": identity, "source": source} for identity, source in declared.items()]
+        result["tdd_reconciliation"] = reconciliation
+        print("[HOT_GATE] TDD reconciliation: " + json.dumps(reconciliation, sort_keys=True), flush=True)
         required = set(declared)
         explicit = getattr(args, "required_cases", [])
         if isinstance(explicit, str):
@@ -271,7 +302,7 @@ class DefaultAcceptanceRunner(AcceptanceRunner):
             if code:
                 raise GateError(f"task VERIFY exited {code}\n{output[-16384:]}")
         print(f"[HOT_GATE] <<< Hot Acceptance Gate PASSED cleanly for {args.task_id}!\n", flush=True)
-        return {"cases": sorted(executed), "evidence": evidence}
+        return {"cases": sorted(executed), "evidence": evidence, "tdd_reconciliation": reconciliation}
 
     def run_cold(self, root, run_verify=None, **kwargs):
         runner = run_verify if callable(run_verify) else kwargs.get("run")

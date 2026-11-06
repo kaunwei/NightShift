@@ -99,10 +99,16 @@ of normal hot without these task selectors on later tasks.
 }
 ```
 
-Missing declarations, unchanged test content, comment-only edits, ticket-only
-cases and skipped/deselected results fail. Runtime may stage allowed changes
-before hot, then commits only after the common gate passes. Worker runs TDD during
-implementation; repeated post-commit VERIFY and hard-coded framework checks are gone.
+Runtime reconciles declarations against permanent discovery: extra leading
+`test.` prefixes and in-project absolute source paths normalize only to a unique
+exact discovered case/source. It records original, canonical and dropped entries.
+An unchanged case is removed from TDD declarations only when another valid new or
+changed case remains; it still runs in the full regression suite.
+
+Missing/empty declarations, unchanged-only or comment-only evidence, unknown or
+ambiguous IDs, mismatched/outside sources, duplicates and unsupported fingerprints
+fail. Failed, skipped, deselected or missing required cases always block acceptance.
+Runtime commits only after the complete hot, VERIFY and scope audit pass.
 
 ## Framework adapter protocol
 
