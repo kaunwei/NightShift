@@ -251,6 +251,71 @@ pathlib.Path(os.environ['NIGHTSHIFT_RESULT_FILE']).write_text(json.dumps(result)
         self.assertTrue((self.root / "keep.ignored").exists())
         self.assertEqual(self.git("stash", "list"), "")
 
+    def test_external_restart_cleans_failed_work_before_clean_preflight(self):
+        external = self.directory / "external-config.json"
+        state = self.directory / "runner"
+        cfg = json.loads((self.root / "nightshift/config.json").read_text())
+        cfg["projects"] = {"sample": {"path": str(self.root), "state": str(state)}}
+        external.write_text(json.dumps(cfg))
+        state.mkdir()
+        queue = state / "tasks.txt"
+        queue.write_text("TASK-FAIL [CODE: FIX] | LEVEL: 3 | TARGET: value.txt,test | VERIFY: true\n")
+        self.plan.write_text(json.dumps({"fail": True}))
+        command = [sys.executable, str(RUNTIME)]
+        context = ["--root", str(self.root), "--config", str(external), "--project", "sample"]
+        def call(operation):
+            result = subprocess.run(command + [operation] + context, env=self.env,
+                                    capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            return result
+        call("daemon")
+        self.assertTrue((state / "lifecycle/paused.json").is_file())
+        (self.root / "value.txt").write_text("failed attempt residue")
+        (self.root / "scripts").mkdir(exist_ok=True)
+        (self.root / "scripts/generated.uid").write_text("failed import")
+        (self.root / "keep.ignored").write_text("keep")
+        (state / "keep.txt").write_text("runner state")
+        queue.write_text("TASK-NEXT [CODE: FIX] | LEVEL: 3 | TARGET: value.txt,test | VERIFY: true\n")
+        self.plan.write_text("{}")
+        call("daemon")  # Pause alone cannot authorize removing failed output.
+        self.assertEqual((self.root / "value.txt").read_text(), "failed attempt residue")
+        self.assertTrue((self.root / "scripts/generated.uid").is_file())
+        call("restart")
+        call("daemon")
+        self.assertEqual(self.git("show", "HEAD:value.txt"), "TASK-NEXT")
+        self.assertFalse((self.root / "scripts/generated.uid").exists())
+        self.assertTrue((self.root / "keep.ignored").is_file())
+        self.assertEqual((state / "keep.txt").read_text(), "runner state")
+        self.assertFalse((state / "lifecycle/restart-clean.json").exists())
+        self.assertEqual(self.git("stash", "list"), "")
+        # A no-op restart must not authorize clearing unrelated future changes.
+        (self.root / "unrelated.txt").write_text("preserve")
+        call("restart")
+        self.assertFalse((state / "lifecycle/restart-clean.json").exists())
+        self.assertEqual((self.root / "unrelated.txt").read_text(), "preserve")
+
+    def test_external_restart_refuses_cleanup_after_head_changes(self):
+        external = self.directory / "external-config.json"
+        state = self.directory / "runner"
+        cfg = json.loads((self.root / "nightshift/config.json").read_text())
+        cfg["projects"] = {"sample": {"path": str(self.root), "state": str(state)}}
+        external.write_text(json.dumps(cfg))
+        lifecycle = state / "lifecycle"
+        lifecycle.mkdir(parents=True)
+        (lifecycle / "paused.json").write_text('{"task":"TASK-FAILED"}')
+        command = [sys.executable, str(RUNTIME)]
+        context = ["--root", str(self.root), "--config", str(external), "--project", "sample"]
+        subprocess.run(command + ["restart"] + context, env=self.env, check=True,
+                       capture_output=True, text=True, timeout=10)
+        self.git("commit", "--allow-empty", "-qm", "intervening commit")
+        (self.root / "value.txt").write_text("preserve after HEAD change")
+        result = subprocess.run(command + ["daemon"] + context, env=self.env,
+                                capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("HEAD changed after restart", (lifecycle / "paused.json").read_text())
+        self.assertTrue((lifecycle / "restart-clean.json").is_file())
+        self.assertEqual((self.root / "value.txt").read_text(), "preserve after HEAD change")
+
     def test_cold_cadence_counts_only_within_a_live_session(self):
         self.cfg["cold_every"] = 2
         self.write_config()

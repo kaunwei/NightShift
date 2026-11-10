@@ -275,6 +275,20 @@ def run_session(root, runtime, scheduler):
                     return 0
                 stopped.wait(poll)
                 continue
+            restart_clean = state / "restart-clean.json"
+            if external and restart_clean.is_file():
+                try:
+                    authorization = gate.load(restart_clean)
+                    if authorization.get("head") != gate.git(root, "rev-parse", "HEAD"):
+                        raise gate.GateError("HEAD changed after restart; Planner must review cleanup")
+                    gate.clean(root, external=True)
+                    restart_clean.unlink()
+                except Exception as error:
+                    gate.pause(root, "TASK-RESTART-CLEAN", str(error))
+                    update("PAUSED_FOR_PLANNER")
+                    if once:
+                        return 2
+                    continue
             if external and not active_path.exists() and tasks.is_file() and any(
                     line.strip() and not line.lstrip().startswith("#")
                     for line in tasks.read_text(encoding="utf-8").splitlines()):

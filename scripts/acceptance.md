@@ -243,6 +243,11 @@ not in runtime heuristics.
 
 4. Next Worker starts after `reset --hard HEAD` and `clean -fd`: tracked and
    nonignored uncommitted changes are discarded. Ignored files/reports survive.
+   For external runners, restarting an existing failure pause records a one-shot
+   cleanup authorization. The daemon consumes it under the workspace lock before
+   checking for a clean worktree, including generated product files under `scripts/`.
+   Runner state is preserved. A changed HEAD or cleanup failure pauses dispatch
+   again; restarting without a failure pause does not authorize cleanup.
    No failed patch is stashed, archived or continued. Configured PAUSE and agent
    event gates remain separate controls. Cleanup failure keeps dispatch paused.
 

@@ -453,8 +453,24 @@ def invoke(root, cfg, name, phase, base, run, task="", required=()):
     return DefaultAcceptanceRunner().invoke(root, cfg, name, phase, base, run, task, required)
 
 
-def clean(root):
+def clean(root, *, external=False):
     """Authorized clean-start policy. Never discard commits or ignored files."""
+    if external:
+        # External runners own their configuration/state outside product paths;
+        # product scripts and generated UID files are not runner state.
+        exclusions = []
+        selected = Path(os.environ["NIGHTSHIFT_STATE_DIR"]).resolve()
+        product = Path(root).resolve()
+        if selected == product:
+            raise GateError("external clean-start requires separate runner state")
+        if selected.is_relative_to(product):
+            exclusions = ["-e", "/" + selected.relative_to(product).as_posix() + "/"]
+        git(root, "reset", "--hard", "HEAD")
+        git(root, "clean", "-fd", *exclusions)
+        remaining = git(root, "status", "--porcelain", "--untracked-files=all")
+        if remaining:
+            raise GateError("external clean-start failed; Worker not launched")
+        return
     preserved = {}
     for name in ("tasks.txt", "scripts/tasks.txt", "nightshift/tasks.txt",
                  "tasks.done", "scripts/tasks.done", "nightshift/tasks.done",

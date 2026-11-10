@@ -2785,7 +2785,16 @@ def main(argv=None):
         elif args.project:
             raise ValueError("--project requires --config")
         if args.command == "restart":
-            (acceptance.state_dir(args.root) / "paused.json").unlink(missing_ok=True)
+            state = acceptance.state_dir(args.root)
+            paused = state / "paused.json"
+            if os.environ.get("NIGHTSHIFT_CONFIG_FILE") and paused.is_file():
+                # Persist authorization before releasing pause; the daemon consumes it
+                # under its workspace lock, ahead of the external clean preflight.
+                acceptance.save(state / "restart-clean.json", {
+                    "head": acceptance.git(args.root, "rev-parse", "HEAD"),
+                    "failure": acceptance.load(paused),
+                })
+            paused.unlink(missing_ok=True)
             print("[RESTART] Planner released failure pause; next Worker starts clean.")
         else:
             import hook_control
