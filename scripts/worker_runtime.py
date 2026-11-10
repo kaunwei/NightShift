@@ -2080,11 +2080,15 @@ def run_verify(command, work_dir, port, timeout):
 def first_report(root, target):
     root = Path(root).resolve()
     reports = (root / ".reports").resolve()
+    allowed_reports = [reports]
+    selected_state = os.environ.get("NIGHTSHIFT_STATE_DIR")
+    if selected_state:
+        allowed_reports.append((Path(selected_state) / "reports").resolve())
     for declared in (part.strip() for part in (target or "").split(",")):
         if not declared:
             continue
         candidate = (root / declared).resolve()
-        if not candidate.is_relative_to(reports) or candidate == reports:
+        if not any(candidate.is_relative_to(base) and candidate != base for base in allowed_reports):
             continue
         if candidate.is_file():
             if candidate.name == "SUMMARY.md":
@@ -2093,7 +2097,9 @@ def first_report(root, target):
             for current, directories, files in os.walk(candidate, followlinks=False):
                 directories[:] = [name for name in directories if not name.startswith(".")]
                 if "SUMMARY.md" in files:
-                    return Path(current) / "SUMMARY.md"
+                    summary = (Path(current) / "SUMMARY.md").resolve()
+                    if summary.is_file() and any(summary.is_relative_to(base) for base in allowed_reports):
+                        return summary
     return None
 
 
