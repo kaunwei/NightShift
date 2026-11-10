@@ -40,7 +40,8 @@ When activated:
 - Updates terminal prompt indicator to `(ns:my-app)`.
 - Injects quick command helpers:
   - `ns-status`: Display real-time worker status & queue progress dashboard.
-  - `ns-worker`: Run the project worker daemon (`run_worker.sh`).
+  - `ns-run` / `ns-worker`: Run the project worker daemon (`run_worker.sh`).
+  - `ns-help`: List the commands available in the activated project.
   - `ns-watch`: Stream live worker events and audit triggers.
   - `ns-pause` / `ns-resume`: Safely pause before claiming the next task, or resume.
   - `deactivate-ns`: Deactivate project context and restore shell environment.

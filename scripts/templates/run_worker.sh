@@ -4,6 +4,7 @@ set -euo pipefail
 PROJECT_STATE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_NAME="$(basename "$PROJECT_STATE_DIR")"
 CONFIG_FILE="$PROJECT_STATE_DIR/config.json"
+if [ -f "$PROJECT_STATE_DIR/env.sh" ]; then source "$PROJECT_STATE_DIR/env.sh"; fi
 NIGHTSHIFT_CORE="${NIGHTSHIFT_CORE:-/Volumes/Vault500G/workspace/NightShift}"
 
 WORKER_SCRIPT=""
@@ -24,7 +25,7 @@ echo "Config:  $CONFIG_FILE"
 echo "State:   $PROJECT_STATE_DIR"
 echo "=================================="
 
-export RUN_ONCE=0
+export RUN_ONCE="${RUN_ONCE:-0}"
 
 cleanup() {
     echo "Stopped by operator"
@@ -43,6 +44,7 @@ while true; do
     wait "$WORKER_PID"
     status=$?
     set -e
+    if [ "$RUN_ONCE" = 1 ]; then exit "$status"; fi
     echo "Worker exited with status $status"
     sleep "${NIGHTSHIFT_RETRY_SECONDS:-5}"
 done
