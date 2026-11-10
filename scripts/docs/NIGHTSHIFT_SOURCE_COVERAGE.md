@@ -36,7 +36,7 @@ For every later simplification, compare the changed source hashes and each affec
 | [install.sh](../../install.sh) | fdeeb5921379ed67e230dcc3672017dcd5a2fbc09e0ffbe8059ff89edbd007c0 |
 | [remove.sh](../../remove.sh) | dc903ef55e497f8eeaaf5829ffc46f0c0cf81aa72fe78f670a8b3c314837242e |
 | [README.md](../../README.md) | dcb943b41c867909a7f697836c2e4a176e7d403d938b4b4ad4c8b3dbf9b81374 |
-| [test/README.md](../../test/README.md) | f08d9ab6eb15eb369421ef3b4bc405c8f0f2dd26f60b89aac24dbc139b6a409b |
+| [test/README.md](../../test/README.md) | 6c19e636e0172f2b43de2cf2f55a145ded524aceb38d048d26e23aa796f13849 |
 | [nightshift/docs/NIGHTSHIFT_SPEC.md](../docs/NIGHTSHIFT_SPEC.md) | ed10810b3579530dbe64a31d2afbeb6cfd50fd53e7a58d6e48cae97dc0a6fb67 |
 | [nightshift/docs/PORTING_GUIDE.md](../docs/PORTING_GUIDE.md) | 712fb3d98a5ac77068ccad9dcbc54695af8c7ea82a98dcfa7f8d1346ced65fe8 |
 | [nightshift/docs/DETERMINISTIC_EXPLORE_STRATEGY.md](../docs/DETERMINISTIC_EXPLORE_STRATEGY.md) | c832795fb51c7e8ad65e66de0116629a70480172d0628217cb3aafb12683e896 |

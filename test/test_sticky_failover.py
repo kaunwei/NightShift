@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from runtime_fixture import deploy_runtime
 
 ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "scripts/worker.sh").exists())
 
@@ -19,11 +20,7 @@ class StickyFailoverTests(unittest.TestCase):
             source = ROOT / "scripts/worker.sh" if name == "worker.sh" else ROOT / name
             shutil.copy2(source, self.root / name)
         (self.root / "scripts").mkdir()
-        shutil.copy2(ROOT / "scripts/worker_runtime.py", self.root / "scripts/worker_runtime.py")
-        shutil.copy2(ROOT / "scripts/scratch_review.py", self.root / "scripts/scratch_review.py")
-        for name in ('attempt_archive.py', 'preflight.py', 'environment_probe.py', 'verify_process.py', 'evidence_capabilities.py', 'ticket_policy.py', 'outcome_policy.py'):
-            shutil.copy2(ROOT / "scripts" / name, self.root / "scripts" / name)
-        shutil.copytree(ROOT / "scripts/adapters", self.root / "scripts/adapters")
+        deploy_runtime(self.root / "scripts")
 
         subprocess.run(["git", "init", "-q", str(self.root)], check=True)
         subprocess.run(["git", "-C", str(self.root), "config", "user.name", "Worker Test"], check=True)

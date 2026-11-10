@@ -72,7 +72,7 @@ class PersistentDirtyWorktreeTests(unittest.TestCase):
 
 
 class ForegroundLauncherTests(unittest.TestCase):
-    def test_launcher_retries_exit_and_forces_persistent_mode_until_operator_stops(self):
+    def test_launcher_retries_exit_in_persistent_mode_until_operator_stops(self):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
             runner = base / "runner"
@@ -92,7 +92,7 @@ exec python3 -c 'import time; time.sleep(60)'
 ''')
             fake.chmod(0o755)
             env = dict(os.environ, NIGHTSHIFT_CORE=str(core.parent), NS_TEST_CAPTURE=str(capture),
-                       NIGHTSHIFT_RETRY_SECONDS="0.05", RUN_ONCE="1")
+                       NIGHTSHIFT_RETRY_SECONDS="0.05", RUN_ONCE="0")
             with (base / "launcher.log").open("w+") as log:
                 process = subprocess.Popen(["bash", str(launcher)], env=env, stdout=log, stderr=log)
                 try:
@@ -109,3 +109,23 @@ exec python3 -c 'import time; time.sleep(60)'
                 self.assertIn("Worker exited with status 7", output)
                 self.assertIn("Project:", output)
                 self.assertIn("Stopped by operator", output)
+
+    def test_launcher_run_once_preserves_exit_status_without_retry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            runner = base / "runner"
+            runner.mkdir()
+            launcher = runner / "run_worker.sh"
+            launcher.write_bytes((ROOT / "scripts/templates/run_worker.sh").read_bytes())
+            (runner / "config.json").write_text("{}")
+            core = base / "core/nightshift"
+            core.mkdir(parents=True)
+            capture = base / "attempts"
+            (core / "worker.sh").write_text(
+                '#!/usr/bin/env bash\nprintf "%s\\n" "$RUN_ONCE" >> "$NS_TEST_CAPTURE"\nexit 7\n')
+            result = subprocess.run(["bash", str(launcher)], capture_output=True, text=True, timeout=5,
+                env={**os.environ, "NIGHTSHIFT_CORE": str(core.parent), "NS_TEST_CAPTURE": str(capture),
+                     "NIGHTSHIFT_RETRY_SECONDS": ".01", "RUN_ONCE": "1"})
+            self.assertEqual(result.returncode, 7, result.stdout + result.stderr)
+            self.assertEqual(capture.read_text().splitlines(), ["1"])
+            self.assertNotIn("Worker exited with status", result.stdout)

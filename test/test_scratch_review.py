@@ -15,6 +15,7 @@ RUNTIME = ROOT / "scripts/worker_runtime.py"
 sys.path.insert(0, str(RUNTIME.parent))
 import scratch_review
 import worker_runtime
+from runtime_fixture import deploy_runtime
 
 
 class ScratchReviewTests(unittest.TestCase):
@@ -157,13 +158,8 @@ class ScratchReviewTests(unittest.TestCase):
 
     def run_daemon_review(self, invalid):
         # Real daemon + generic adapter; fake executable exercises the prompt/result protocol.
-        shutil.copy2(RUNTIME, self.runtime / "worker_runtime.py")
-        shutil.copy2(RUNTIME.parent / "scratch_review.py", self.runtime / "scratch_review.py")
-        for name in ('attempt_archive.py', 'preflight.py', 'environment_probe.py', 'verify_process.py', 'evidence_capabilities.py', 'ticket_policy.py', 'outcome_policy.py'):
-            shutil.copy2(RUNTIME.parent / name, self.runtime / name)
-        shutil.copy2(RUNTIME.parent / "worker.sh", self.runtime / "worker.sh")
-        shutil.copytree(RUNTIME.parent / "adapters", self.runtime / "adapters")
-        (self.root / ".gitignore").write_text("scripts/.scratch/\nscripts/tasks*\nscripts/progress.log\nscripts/worker*.status\nscripts/.worker*\n")
+        deploy_runtime(self.runtime)
+        (self.root / ".gitignore").write_text((ROOT / ".gitignore").read_text())
         (self.runtime / "tasks.txt").write_text("USER-TASK | LEVEL: 1 | TARGET: product.txt | ACTION: preserve | VERIFY: true\n")
         (self.root / "product.txt").write_text("product\n")
         fake = self.root / "fake.py"
@@ -197,7 +193,8 @@ json.dump(dict(outcome='complete',changed=False,verification_evidence='fixture v
     commit_message='test: reviewed',attempts=1,confidence='HIGH'),open(os.environ['NIGHTSHIFT_RESULT_FILE'],'w'))
 """)
         registration = {"test": {"default": True, "worker": {"task_timeout_seconds": 30, "step_base": {"L1": 22, "L2": 22, "L3": 22}},
-                         "agent": {"adapter": "generic", "command": sys.executable, "args": [str(fake)]}}}
+                         "agent": {"adapter": "generic", "command": sys.executable, "args": [str(fake)],
+                                   "config": {"initial_score": 5}}}}
         (self.runtime / "adapters/agents.json").write_text(json.dumps(registration))
         (self.runtime / "config.json").write_text(json.dumps({"version": 1, "agents": registration}))
         for arguments in (("init", "-q"), ("config","user.name","Test"),
