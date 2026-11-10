@@ -159,7 +159,7 @@ class ScratchReviewTests(unittest.TestCase):
         # Real daemon + generic adapter; fake executable exercises the prompt/result protocol.
         shutil.copy2(RUNTIME, self.runtime / "worker_runtime.py")
         shutil.copy2(RUNTIME.parent / "scratch_review.py", self.runtime / "scratch_review.py")
-        for name in ('attempt_archive.py', 'preflight.py', 'environment_probe.py', 'verify_process.py', 'evidence_capabilities.py'):
+        for name in ('attempt_archive.py', 'preflight.py', 'environment_probe.py', 'verify_process.py', 'evidence_capabilities.py', 'ticket_policy.py', 'outcome_policy.py'):
             shutil.copy2(RUNTIME.parent / name, self.runtime / name)
         shutil.copy2(RUNTIME.parent / "worker.sh", self.runtime / "worker.sh")
         shutil.copytree(RUNTIME.parent / "adapters", self.runtime / "adapters")

@@ -17,7 +17,7 @@ class TestAgentEventDelivery(unittest.TestCase):
         self.root = Path(self.tmp_dir.name)
         self.ns = self.root / "nightshift"
         self.ns.mkdir(parents=True)
-        for name in ['watch_worker.sh', 'worker_runtime.py', 'scratch_review.py', 'attempt_archive.py', 'preflight.py', 'environment_probe.py', 'verify_process.py', 'evidence_capabilities.py']:
+        for name in ['watch_worker.sh', 'worker_runtime.py', 'scratch_review.py', 'attempt_archive.py', 'preflight.py', 'environment_probe.py', 'verify_process.py', 'evidence_capabilities.py', 'ticket_policy.py', 'outcome_policy.py']:
             shutil.copy2(SOURCE_NIGHTSHIFT / name, self.ns / name)
         (self.ns / "watch_worker.sh").chmod(0o755)
 

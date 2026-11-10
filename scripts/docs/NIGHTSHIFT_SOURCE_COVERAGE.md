@@ -17,14 +17,14 @@ For every later simplification, compare the changed source hashes and each affec
 | [nightshift/adapters/agents.json](../adapters/agents.json) | 1dcce30d5fe2ebe49fa57c4ea108cab7e90f5d50a24ac97117183fe13608d2ea |
 | [nightshift/adapters/agy.py](../adapters/agy.py) | 1af2f11c3143d5f6185ee7d8ee67aba11b28076e7d9c1e05e0c3c086601a4eaa |
 | [nightshift/adapters/codex.py](../adapters/codex.py) | 4a3b8ce67ff6ae807ac2487676f6e28bc7f20d25af6719fb6f337e634e210af8 |
-| [nightshift/adapters/generic.py](../adapters/generic.py) | fa8626610244c5d1bb6c037a6e6e6a8490a2b04c3c571108ed9b915d99b348e4 |
+| [nightshift/adapters/generic.py](../adapters/generic.py) | 9c1424b4cf06defbd7be4f48abaca32cbc2f274dbe1eb96da8bc24ac467e56db |
 | [nightshift/extract_skeleton.sh](../extract_skeleton.sh) | 210ebbf5f00940d9fab650c10347f7c180838e68a824a779baf0f854391f54d6 |
 | [nightshift/probe_line.sh](../probe_line.sh) | 6514cfdd8582fe2508d8779a0d18608201a0f9c655c846f2c5f4c03e49a437e3 |
 | [nightshift/reorder_queue.sh](../reorder_queue.sh) | 68bf2e6b6d212393ef8c087ce27c2b29e642ddfe8d38e9b7b77f567fa7f42363 |
 | [nightshift/status.sh](../status.sh) | 2896954c5e6972d2c6985a79535b9e6a7cf2325b334d650d4d2dddb57c1257f3 |
-| [nightshift/watch_worker.sh](../watch_worker.sh) | a72cb03d984c80cd5de8efe47863f962284aac1b609de8f4f96d8f49f37440ca |
+| [nightshift/watch_worker.sh](../watch_worker.sh) | e2ea3008d90fc8ac20fba59a2c2979633dd0896e0931a7f679d4c41cf43b6f47 |
 | [nightshift/worker.sh](../worker.sh) | d430417b8f221222763e0885aa3a7c2d0e9681da2cda4de00e9d22c9005e0cb9 |
-| [nightshift/worker_runtime.py](../worker_runtime.py) | 7f12ad992489917016ab47e24f981872a6deb3ae1062fc65af8bd859ceea3970 |
+| [nightshift/worker_runtime.py](../worker_runtime.py) | ae7809ba8d4ee9339365c51e2baebfb969b674913bc7c0b1c98e8093f272c52b |
 | [nightshift/tools/README.md](../tools/README.md) | a35532892107d432df3c4b2175516b28e4310ec3aee357d3184591c2f960c811 |
 | [nightshift/tools/index.py](../tools/index.py) | 3c42160f91ae8152b7a272614dc9e0732493caa7aef6cce65751b952bd199b56 |
 | [nightshift/tools/languages.json](../tools/languages.json) | fc7f10de17095f0a0930fd7e344bd4d787ecc57ee4f3c4202224485e718faa13 |
@@ -32,12 +32,12 @@ For every later simplification, compare the changed source hashes and each affec
 | [nightshift/tools/setup.sh](../tools/setup.sh) | a2cbd18108502b18d4f1a8ad83c3455a94888fbd6cbe65a4ee53c5c1075b3644 |
 | [nightshift/tools/setup.ps1](../tools/setup.ps1) | 31fbe3b44ed2b160342d0b507931f1e23f1ba57f62ceba03ec92d7e4cf0802b6 |
 | [nightshift/scratch_review.py](../scratch_review.py) | 146f28c2325e9bfee6c3c94877bb37bffbd9dc45d00db16204f4722df4e7964c |
-| [nightshift/install-manifest.json](../install-manifest.json) | ed499435ef033ab6ebc0216dcbf593674b49bbe3704c6202e10844813a704c17 |
+| [nightshift/install-manifest.json](../install-manifest.json) | 51c54a2942df07d4ca0a9f59edced7140272d42821095706b38b8fb4c6011ecf |
 | [install.sh](../../install.sh) | fdeeb5921379ed67e230dcc3672017dcd5a2fbc09e0ffbe8059ff89edbd007c0 |
 | [remove.sh](../../remove.sh) | dc903ef55e497f8eeaaf5829ffc46f0c0cf81aa72fe78f670a8b3c314837242e |
 | [README.md](../../README.md) | dcb943b41c867909a7f697836c2e4a176e7d403d938b4b4ad4c8b3dbf9b81374 |
 | [test/README.md](../../test/README.md) | f08d9ab6eb15eb369421ef3b4bc405c8f0f2dd26f60b89aac24dbc139b6a409b |
-| [nightshift/docs/NIGHTSHIFT_SPEC.md](../docs/NIGHTSHIFT_SPEC.md) | d017c5aa9089d3241a22cbc82ff8910f7978cea2b359b44233b6dcd9138519ff |
+| [nightshift/docs/NIGHTSHIFT_SPEC.md](../docs/NIGHTSHIFT_SPEC.md) | 9a036cc3693c531ba6e27d7bb0b28a0b39a50c389d04764bcd08c74453de835c |
 | [nightshift/docs/PORTING_GUIDE.md](../docs/PORTING_GUIDE.md) | 712fb3d98a5ac77068ccad9dcbc54695af8c7ea82a98dcfa7f8d1346ced65fe8 |
 | [nightshift/docs/DETERMINISTIC_EXPLORE_STRATEGY.md](../docs/DETERMINISTIC_EXPLORE_STRATEGY.md) | c832795fb51c7e8ad65e66de0116629a70480172d0628217cb3aafb12683e896 |
 | [nightshift/docs/DETERMINISTIC_EXPLORE_RESULTS.md](../docs/DETERMINISTIC_EXPLORE_RESULTS.md) | a624dfe4d49bc5fe167e597b71f86e1c3d86610b9e6084fc0e1d3c49721b068c |
@@ -48,11 +48,16 @@ For every later simplification, compare the changed source hashes and each affec
 | [scripts/evidence_capabilities.py](../evidence_capabilities.py) | 570201cfca85010e38a5d4976bc0c1a5616ab1514cd28a4c4e59b3de72cfd91f |
 | [scripts/acceptance_hooks.py](../acceptance_hooks.py) | ee9f97b5aa9d96d8fcb318462872a2be3a117b4754fd703249edb3c3809bbfab |
 | [scripts/hook_control.py](../hook_control.py) | 66a8ecf356c8376684720fd98faa21a32f034730ec0780b6169585152a976567 |
-| [scripts/acceptance.py](../acceptance.py) | f817bb5b9ba59dd37d78ca1556b1dd8f374bea48877c1659d66a5ee05676520f |
-| [scripts/lifecycle.py](../lifecycle.py) | 0f8c9fe30709ee79f09e278ae6d048fb38693eaf29f5c2fe6d8f4b7b3c11be39 |
+| [scripts/acceptance.py](../acceptance.py) | 1e54bd8ba0e7797c3cd302787cecdd6be61b2d83ac9046cb735d28477776e4fb |
+| [scripts/lifecycle.py](../lifecycle.py) | a058dcf0a6fb5acdd6661eafe77627389262f1a10e6e9bff5749d03acd4de127 |
 | [scripts/docs/RUNTIME_HARDENING.md](../docs/RUNTIME_HARDENING.md) | 227b8a8018e1cda4bdddbea439cc889d089542c6f39c608898f4ffda007315de |
 
 | [scripts/docs/AGENT_CONTRACT_REVIEW.md](../docs/AGENT_CONTRACT_REVIEW.md) | 032398bc970747bcb5e736cf956db145db1b143ce24d1f80c069f442ce4b3c61 |
+
+| [scripts/ticket_policy.py](../ticket_policy.py) | 4dc719b7922a2c60845aefa5dafde1127a94e3653059667ec78c33874e20da5c |
+| [scripts/outcome_policy.py](../outcome_policy.py) | eba3560478e1a3c318cc7cf2e04e0a394c628add4f4fdfa42b703d08661d34a5 |
+| [scripts/docs/TICKET_ACCEPTANCE.md](../docs/TICKET_ACCEPTANCE.md) | 6077d6494ab6a4936d1cfc147425321cc3a57d2aa543f1acba35d6b49fcfec75 |
+| [scripts/acceptance.md](../acceptance.md) | fb260373812fe8b09007805f3ce44be14da36b82ceac99a285af687209ea4c62 |
 
 ## Runtime function coverage
 
@@ -60,80 +65,80 @@ For every later simplification, compare the changed source hashes and each affec
 
 | Function | As-built clause |
 | --- | --- |
-| [serialize_workspace_state](../worker_runtime.py#L70) | 5, 25 |
-| [atomic_write](../worker_runtime.py#L79) | 25 |
-| [prepend_progress](../worker_runtime.py#L99) | 25 |
-| [update_planner_review](../worker_runtime.py#L117) | 12 |
-| [read_score_state](../worker_runtime.py#L156) | 12 |
-| [score_task_level](../worker_runtime.py#L172) | 12 |
-| [score_summary](../worker_runtime.py#L176) | 12 |
-| [registered_agent_score_path](../worker_runtime.py#L193) | 12 |
-| [initialize_agent_score](../worker_runtime.py#L199) | 12 |
-| [read_agent_score_state](../worker_runtime.py#L228) | 12 |
-| [append_agent_event](../worker_runtime.py#L238) | 12 |
-| [_read_json_lines](../worker_runtime.py#L276) | 12 |
-| [_watch_agent_events_locked](../worker_runtime.py#L303) | 12 |
-| [watch_agent_events](../worker_runtime.py#L342) | 12 |
-| [acknowledge_agent_event](../worker_runtime.py#L362) | 12 |
-| [record_agent_score_result](../worker_runtime.py#L392) | 12 |
-| [_record_score_result](../worker_runtime.py#L411) | 12 |
-| [record_score_result](../worker_runtime.py#L445) | 12 |
-| [build_ghost_closeout_prompt](../worker_runtime.py#L466) | 10 |
-| [workspace_snapshot](../worker_runtime.py#L486) | 10 |
-| [pop_task](../worker_runtime.py#L508) | 1–2 |
-| [restore_task_front](../worker_runtime.py#L557) | 1–2 |
-| [insert_task_front](../worker_runtime.py#L579) | 1–2, 20 |
-| [parse_agent_registry](../worker_runtime.py#L611) | 11, 25 |
-| [load_agent_registry](../worker_runtime.py#L658) | 11, 25 |
-| [adapter_callback](../worker_runtime.py#L744) | 6–11 |
-| [execute_adapter_protocol](../worker_runtime.py#L793) | 6–11 |
-| [should_failover_agent](../worker_runtime.py#L916) | 11, 19 |
-| [read_agent_state](../worker_runtime.py#L931) | 11 |
-| [agent_supports_task](../worker_runtime.py#L969) | 11, 19 |
-| [execute_registered_agents](../worker_runtime.py#L976) | 11–12, 19 |
-| [progress_bar](../worker_runtime.py#L1165) | 1–2 |
-| [poll_next](../worker_runtime.py#L1172) | 1–2 |
-| [task_field](../worker_runtime.py#L1229) | 1–2 |
-| [write_status](../worker_runtime.py#L1242) | 5 |
-| [display_status](../worker_runtime.py#L1269) | 5 |
-| [run_with_timeout](../worker_runtime.py#L1287) | 9 |
-| [temporary_git_index](../worker_runtime.py#L1323) | 10 |
-| [worktree_tree](../worker_runtime.py#L1335) | 19 |
-| [attempt_audit_trees](../worker_runtime.py#L1341) | 10, 13 |
-| [changed_tree_paths](../worker_runtime.py#L1353) | 10, 13, 19 |
-| [run_code_index](../worker_runtime.py#L1357) | CLI inventory |
-| [code_index_inputs](../worker_runtime.py#L1370) | 6 |
-| [ensure_code_index_after_commit](../worker_runtime.py#L1392) | 6 |
-| [finalize_task_git](../worker_runtime.py#L1413) | 6, 10 |
-| [finalize_structured_adapter_result](../worker_runtime.py#L1581) | 6, 10 |
-| [claim_ghost_allowance](../worker_runtime.py#L1589) | 10 |
-| [run_adapter_ghost](../worker_runtime.py#L1617) | 10 |
-| [execute_adapter_task](../worker_runtime.py#L1708) | 10 |
-| [build_task_prompt](../worker_runtime.py#L1841) | 6, 25 |
-| [env_bool](../worker_runtime.py#L1887) | 25–26 |
-| [acquire_worker_lock](../worker_runtime.py#L1891) | 3–5 |
-| [worker_daemon](../worker_runtime.py#L1924) | 3–5, 11–12, 17, 19, 25 |
-| [git_audit](../worker_runtime.py#L1956) | 13–16 |
-| [run_verify](../worker_runtime.py#L2048) | 13–16 |
-| [first_report](../worker_runtime.py#L2100) | 13–16 |
-| [publish_research_reports](../worker_runtime.py#L2126) | 13–16 |
-| [mechanical_audit](../worker_runtime.py#L2162) | 13–16 |
-| [report_archive_path](../worker_runtime.py#L2269) | 18 |
-| [cleanup_invalid_reports](../worker_runtime.py#L2280) | 18 |
-| [settle_invalid_reports](../worker_runtime.py#L2297) | 18 |
-| [report_source_paths](../worker_runtime.py#L2331) | 18 |
-| [report_staleness](../worker_runtime.py#L2351) | 18 |
-| [refresh_active_reports](../worker_runtime.py#L2386) | 18 |
-| [archive_active_reports](../worker_runtime.py#L2404) | 18 |
-| [archive_overlapping_reports](../worker_runtime.py#L2417) | 18 |
-| [_git_path_state](../worker_runtime.py#L2422) | 19 |
-| [_runtime_state_root](../worker_runtime.py#L2432) | 5, 19 |
-| [_scratch_state_root](../worker_runtime.py#L2441) | 5, 19 |
-| [_git_names](../worker_runtime.py#L2448) | 19 |
-| [capture_attempt_baseline](../worker_runtime.py#L2455) | 19 |
-| [recover_attempt_baseline](../worker_runtime.py#L2479) | 19 |
-| [rollback_failed_task](../worker_runtime.py#L2560) | 19 |
-| [main](../worker_runtime.py#L2624) | CLI inventory |
+| [serialize_workspace_state](../worker_runtime.py#L68) | 5, 25 |
+| [atomic_write](../worker_runtime.py#L77) | 25 |
+| [prepend_progress](../worker_runtime.py#L97) | 25 |
+| [update_planner_review](../worker_runtime.py#L115) | 12 |
+| [read_score_state](../worker_runtime.py#L154) | 12 |
+| [score_task_level](../worker_runtime.py#L173) | 12 |
+| [score_summary](../worker_runtime.py#L177) | 12 |
+| [registered_agent_score_path](../worker_runtime.py#L195) | 12 |
+| [initialize_agent_score](../worker_runtime.py#L201) | 12 |
+| [read_agent_score_state](../worker_runtime.py#L230) | 12 |
+| [append_agent_event](../worker_runtime.py#L240) | 12 |
+| [_read_json_lines](../worker_runtime.py#L278) | 12 |
+| [_watch_agent_events_locked](../worker_runtime.py#L305) | 12 |
+| [watch_agent_events](../worker_runtime.py#L344) | 12 |
+| [acknowledge_agent_event](../worker_runtime.py#L364) | 12 |
+| [record_agent_score_result](../worker_runtime.py#L394) | 12 |
+| [_record_score_result](../worker_runtime.py#L413) | 12 |
+| [record_score_result](../worker_runtime.py#L454) | 12 |
+| [build_ghost_closeout_prompt](../worker_runtime.py#L475) | 10 |
+| [workspace_snapshot](../worker_runtime.py#L495) | 10 |
+| [pop_task](../worker_runtime.py#L517) | 1–2 |
+| [restore_task_front](../worker_runtime.py#L568) | 1–2 |
+| [insert_task_front](../worker_runtime.py#L590) | 1–2, 20 |
+| [parse_agent_registry](../worker_runtime.py#L622) | 11, 25 |
+| [load_agent_registry](../worker_runtime.py#L669) | 11, 25 |
+| [adapter_callback](../worker_runtime.py#L757) | 6–11 |
+| [execute_adapter_protocol](../worker_runtime.py#L806) | 6–11 |
+| [should_failover_agent](../worker_runtime.py#L929) | 11, 19 |
+| [read_agent_state](../worker_runtime.py#L944) | 11 |
+| [agent_supports_task](../worker_runtime.py#L982) | 11, 19 |
+| [execute_registered_agents](../worker_runtime.py#L989) | 11–12, 19 |
+| [progress_bar](../worker_runtime.py#L1178) | 1–2 |
+| [poll_next](../worker_runtime.py#L1185) | 1–2 |
+| [task_field](../worker_runtime.py#L1238) | 1–2 |
+| [write_status](../worker_runtime.py#L1243) | 5 |
+| [display_status](../worker_runtime.py#L1270) | 5 |
+| [run_with_timeout](../worker_runtime.py#L1288) | 9 |
+| [temporary_git_index](../worker_runtime.py#L1324) | 10 |
+| [worktree_tree](../worker_runtime.py#L1336) | 19 |
+| [attempt_audit_trees](../worker_runtime.py#L1342) | 10, 13 |
+| [changed_tree_paths](../worker_runtime.py#L1354) | 10, 13, 19 |
+| [run_code_index](../worker_runtime.py#L1358) | CLI inventory |
+| [code_index_inputs](../worker_runtime.py#L1371) | 6 |
+| [ensure_code_index_after_commit](../worker_runtime.py#L1393) | 6 |
+| [finalize_task_git](../worker_runtime.py#L1414) | 6, 10 |
+| [finalize_structured_adapter_result](../worker_runtime.py#L1596) | 6, 10 |
+| [claim_ghost_allowance](../worker_runtime.py#L1604) | 10 |
+| [run_adapter_ghost](../worker_runtime.py#L1632) | 10 |
+| [execute_adapter_task](../worker_runtime.py#L1723) | 10 |
+| [build_task_prompt](../worker_runtime.py#L1856) | 6, 25 |
+| [env_bool](../worker_runtime.py#L1903) | 25–26 |
+| [acquire_worker_lock](../worker_runtime.py#L1907) | 3–5 |
+| [worker_daemon](../worker_runtime.py#L1940) | 3–5, 11–12, 17, 19, 25 |
+| [git_audit](../worker_runtime.py#L1972) | 13–16 |
+| [run_verify](../worker_runtime.py#L2064) | 13–16 |
+| [first_report](../worker_runtime.py#L2116) | 13–16 |
+| [publish_research_reports](../worker_runtime.py#L2142) | 13–16 |
+| [mechanical_audit](../worker_runtime.py#L2178) | 13–16 |
+| [report_archive_path](../worker_runtime.py#L2285) | 18 |
+| [cleanup_invalid_reports](../worker_runtime.py#L2296) | 18 |
+| [settle_invalid_reports](../worker_runtime.py#L2313) | 18 |
+| [report_source_paths](../worker_runtime.py#L2347) | 18 |
+| [report_staleness](../worker_runtime.py#L2367) | 18 |
+| [refresh_active_reports](../worker_runtime.py#L2402) | 18 |
+| [archive_active_reports](../worker_runtime.py#L2420) | 18 |
+| [archive_overlapping_reports](../worker_runtime.py#L2433) | 18 |
+| [_git_path_state](../worker_runtime.py#L2438) | 19 |
+| [_runtime_state_root](../worker_runtime.py#L2448) | 5, 19 |
+| [_scratch_state_root](../worker_runtime.py#L2457) | 5, 19 |
+| [_git_names](../worker_runtime.py#L2464) | 19 |
+| [capture_attempt_baseline](../worker_runtime.py#L2471) | 19 |
+| [recover_attempt_baseline](../worker_runtime.py#L2495) | 19 |
+| [rollback_failed_task](../worker_runtime.py#L2576) | 19 |
+| [main](../worker_runtime.py#L2640) | CLI inventory |
 
 ## Complete public CLI inventory
 
@@ -192,3 +197,18 @@ Agent contract alignment retains existing role branches; the old/new comparison,
 intentional FIX permission correction, bounded research policy, blocked-state
 relay/shutdown handling and unchanged score arithmetic are reviewed in
 [AGENT_CONTRACT_REVIEW.md](AGENT_CONTRACT_REVIEW.md).
+
+## Ticket acceptance amendment (2026-11-10)
+
+As-built clause 29 and [TICKET_ACCEPTANCE.md](TICKET_ACCEPTANCE.md) supersede
+previous automatic score arithmetic and recursive budget observations.
+`ticket_policy` owns field parsing, preclaim evidence/VERIFY validation, planned
+file estimates and preparation floors. `outcome_policy.classify` owns the
+evidence-backed feedback classification; lifecycle persists it with idempotent
+registration feedback and capability events. Acceptance keeps full hot and
+source/fingerprint checks for explicit existing cases. Generic adapter status
+normalization enables actual no-change verification. Worker finalization checks
+no-change before and after VERIFY; watcher relays CONTRACT_BLOCKED.
+Regression coverage: test_ticket_granularity and test_sentinel_completion.
+No Planner/Explore/Sentinel skill was edited for this amendment; complete
+acceptance-unit slicing guidance remains ticket 05 for later discussion.

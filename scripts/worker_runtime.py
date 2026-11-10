@@ -33,6 +33,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import scratch_review
 import attempt_archive
 import preflight
+import ticket_policy
 def _import_nightshift_module(name):
     try:
         return importlib.import_module(name)
@@ -58,10 +59,7 @@ acceptance = _import_nightshift_module("acceptance")
 project_config = _import_nightshift_module("project_config")
 
 
-FIELD_NAMES = (
-    "LEVEL", "TARGET", "ACTION", "GOAL", "VERIFY",
-    "FORBIDDEN_SHORTCUTS", "CONSTRAINTS", "DEPENDS_ON", "CASES",
-)
+FIELD_NAMES = ticket_policy.FIELD_NAMES
 
 
 _workspace_state_lock = threading.RLock()
@@ -166,6 +164,9 @@ def read_score_state(path):
             or not isinstance(state.get("failures"), dict)):
         raise ValueError(f"invalid worker score state file: {path}")
     state.setdefault("feedback", [])
+    streak = state.get("attributable_failure_streak", 0)
+    if type(streak) is not int or streak < 0:
+        raise ValueError(f"invalid attributable failure streak: {path}")
     return state
 
 
@@ -176,7 +177,7 @@ def score_task_level(score):
 def score_summary(state):
     feedback = state.get("feedback", [])[-20:]
     counts = {name: sum(item.get("result") == name for item in feedback)
-              for name in ("accept", "reject", "no_fault", "hard_failure")}
+              for name in ("accept", "reject", "no_fault", "hard_failure", "attributable_failure")}
     streak = 0
     for item in reversed(feedback):
         if item.get("result") in ("no_fault", "success"):
@@ -186,6 +187,7 @@ def score_summary(state):
         streak += 1
     return {"score": state["score"], "task_level": score_task_level(state["score"]),
             "successes_in_window": len(state["success_window"]),
+            "attributable_failure_streak": state.get("attributable_failure_streak", 0),
             "recent_outcomes": counts, "feedback_window_size": len(feedback),
             "recent_accept_streak": streak, "recent_evidence": feedback}
 
@@ -410,13 +412,19 @@ def record_agent_score_result(root, registration_id, task_id, result, evidence="
 
 def _record_score_result(path, task_id, result, evidence="", event_id=""):
     """Update shared Worker score from planner feedback or hard runtime evidence."""
-    if result not in ("accept", "reject", "no_fault", "hard_failure", "success"):
+    if result not in ("accept", "reject", "no_fault", "hard_failure", "success", "attributable_failure"):
         raise ValueError(f"unsupported score result: {result}")
     state = read_score_state(path)
     if event_id and event_id in state.get("applied_events", {}):
         return {**score_summary(state), "task_id": task_id, "result": result, "duplicate": True}
     failures = state["failures"]
-    if result == "hard_failure":
+    if result == "attributable_failure":
+        state["success_window"] = []
+        count = int(state.get("attributable_failure_streak", 0)) + 1
+        state["attributable_failure_streak"] = count
+        if count % 2 == 0:
+            state["score"] = max(1, state["score"] - 1)
+    elif result == "hard_failure":
         count = int(failures.get(task_id, 0)) + 1
         failures[task_id] = count
         if count in (2, 3):
@@ -425,6 +433,7 @@ def _record_score_result(path, task_id, result, evidence="", event_id=""):
         failures.pop(task_id, None)
     elif result == "accept":
         failures.pop(task_id, None)
+        state["attributable_failure_streak"] = 0
         state["success_window"].append(task_id)
         if len(state["success_window"]) >= 5:
             if all(state["success_window"][-5:]):
@@ -505,7 +514,7 @@ def workspace_snapshot(work_dir, base):
     return snapshot
 
 
-def pop_task(queue_path, claim_path=None):
+def pop_task(queue_path, claim_path=None, validate=None):
     """Remove one task under the same directory lock used by reorder_queue.sh."""
     queue = Path(queue_path)
     lock = Path(f"{queue}.lock")
@@ -523,6 +532,8 @@ def pop_task(queue_path, claim_path=None):
         for index, line in enumerate(lines):
             if line.strip() and not line.lstrip().startswith("#"):
                 task = line.rstrip("\r\n")
+                if validate is not None:
+                    validate(task)
                 if claim_path:
                     acceptance.save(claim_path, {"raw": task, "claimed": True})
                 atomic_write(queue, "".join(lines[:index] + lines[index + 1:]))
@@ -678,11 +689,13 @@ def load_agent_registry(config_file):
         agent = profile.get("agent")
         if not isinstance(worker, dict):
             raise ValueError(f"agent {name} worker config must be an object")
-        worker_unknown = set(worker) - {"task_timeout_seconds", "research_step_budget", "step_base", "preflight"}
+        worker_unknown = set(worker) - {"task_timeout_seconds", "research_step_budget", "step_base", "preflight", "preparation_steps"}
         if worker_unknown:
             raise ValueError(f"agent {name} worker config has unknown fields: {', '.join(sorted(worker_unknown))}")
         if "preflight" in worker:
             preflight.validate(worker["preflight"])
+        if "preparation_steps" in worker and (type(worker["preparation_steps"]) is not int or worker["preparation_steps"] < 1):
+            raise ValueError(f"agent {name} worker.preparation_steps must be a positive integer")
         timeout = worker.get("task_timeout_seconds")
         if timeout is not None and (isinstance(timeout, bool) or not isinstance(timeout, (int, float))
                                     or not math.isfinite(timeout) or timeout <= 0):
@@ -1049,7 +1062,7 @@ def execute_registered_agents(args, agents, state_path, rollback):
             else:
                 attempt.step_budget = int(os.environ.get("RESEARCH_STEP_BUDGET", "100"))
         if hasattr(args, "target_file_count"):
-            base = agent["worker"]["step_base"][f"L{args.level}"]
+            base = ticket_policy.preparation_base(agent["worker"], args.level)
             if not is_research:
                 attempt.step_budget = base + args.target_file_count * args.step_per_file
             attempt.step_base = base
@@ -1176,7 +1189,7 @@ def poll_next(args):
                                      and Path(args.dispatch_gate).exists()):
         fields[0] = "paused"
         return fields
-    raw = pop_task(args.tasks)
+    raw = pop_task(args.tasks, validate=ticket_policy.validate)
     def count(path):
         source = Path(path)
         if not source.exists():
@@ -1197,11 +1210,7 @@ def poll_next(args):
                            (12, "FORBIDDEN_SHORTCUTS"), (13, "CONSTRAINTS")):
             fields[index] = task_field(raw, key)
         targets = [item.strip() for item in fields[10].split(",") if item.strip()]
-        file_count = 0
-        for target in ([] if scratch_review.is_review(raw) else targets):
-            path = Path(args.work_dir) / target
-            file_count += max(1, sum(1 for item in path.rglob("*") if item.is_file())) if path.is_dir() else 1
-        file_count = max(1, file_count)
+        file_count = 1 if scratch_review.is_review(raw) else ticket_policy.planned_files(raw)
         fields[14] = str(file_count)
         is_research = is_research_task(raw)
         if is_research:
@@ -1216,7 +1225,7 @@ def poll_next(args):
                     agents = load_agent_registry(config_candidate)
                     if not agents:
                         raise ValueError("config.json requires at least one agent")
-                    base = agents[0]["worker"]["step_base"][f"L{fields[9]}"]
+                    base = ticket_policy.preparation_base(agents[0]["worker"], fields[9])
                 except (ValueError, KeyError):
                     insert_task_front(args.tasks, raw)
                     raise
@@ -1227,15 +1236,7 @@ def poll_next(args):
 
 
 def task_field(raw, key):
-    if key not in FIELD_NAMES:
-        raise ValueError(f"unknown task field: {key}")
-    # A pipe only separates fields when followed by a recognized field name.
-    start = re.search(rf"(?:^|\|\s*){key}:\s*", raw)
-    if start is None:
-        return ""
-    rest = raw[start.end():]
-    end = re.search(r"\s*\|\s*(?:" + "|".join(FIELD_NAMES) + r"):\s*", rest)
-    return (rest[:end.start()] if end else rest).strip()
+    return ticket_policy.field(raw, key)
 
 
 @serialize_workspace_state
@@ -1483,24 +1484,38 @@ def _finalize_structured_adapter_result(args, result):
     if scratch_review.is_review(getattr(args, "title", "")):
         return 0
     outcome = result.get("outcome")
+    if ticket_policy.is_verify(getattr(args, "title", "")) and outcome != "no_change":
+        raise ValueError("VERIFY tickets must return no_change and leave product files unchanged")
     if outcome == "no_change":
         reason = result.get("no_change_reason")
         if not isinstance(reason, str) or not reason.strip():
             raise ValueError("no_change result requires a non-empty no_change_reason")
-        trees = attempt_audit_trees(args)
-        if trees:
-            tracked = changed_tree_paths(args.work_dir, *trees)
-            untracked = []
-        else:
-            tracked = subprocess.run(["git", "-C", args.work_dir, "diff", "--name-only", args.base],
-                                     capture_output=True, text=True, check=False).stdout.splitlines()
-            untracked = subprocess.run(["git", "-C", args.work_dir, "ls-files", "--others",
-                                        "--exclude-standard"], capture_output=True, text=True,
-                                       check=False).stdout.splitlines()
-        runtime_file = re.compile(r"(?:^|/)(?:scripts/|nightshift/)?(?:progress\.log|tasks\.txt|tasks\.done|worker\..*\.status|\.worker.*|\.preview(?:/|$)|\.reports(?:/|$))")
-        changes = [name for name in tracked + untracked if not runtime_file.search(name)]
-        if changes:
-            raise ValueError("no_change result conflicts with workspace changes")
+        def check_unchanged():
+            trees = attempt_audit_trees(args)
+            if trees:
+                tracked = changed_tree_paths(args.work_dir, *trees)
+                untracked = []
+            else:
+                tracked = subprocess.run(["git", "-C", args.work_dir, "diff", "--name-only", args.base],
+                                         capture_output=True, text=True, check=False).stdout.splitlines()
+                untracked = subprocess.run(["git", "-C", args.work_dir, "ls-files", "--others",
+                                            "--exclude-standard"], capture_output=True, text=True,
+                                           check=False).stdout.splitlines()
+            runtime_file = re.compile(r"(?:^|/)(?:scripts/|nightshift/)?(?:progress\.log|tasks\.txt|tasks\.done|worker\..*\.status|\.worker.*|\.preview(?:/|$)|\.reports(?:/|$))")
+            changes = [name for name in tracked + untracked if not runtime_file.search(name)]
+            if changes:
+                raise ValueError("no_change result conflicts with workspace changes")
+        check_unchanged()
+        if args.verify and args.verify.lower() not in ("none", "report_only"):
+            code, output = run_verify(args.verify, args.work_dir, args.worker_port, args.timeout)
+            result["runtime_verify"] = {"command": args.verify, "exit": code,
+                                        **bounded_verify_evidence(output)}
+            if code or getattr(output, "empty_test_run", False):
+                result["runtime_error"] = {"phase": "verification", "kind": "verification_only",
+                                           "message": f"no_change VERIFY failed ({code})", "code": code or 9,
+                                           **bounded_verify_evidence(output)}
+                return code or 9
+            check_unchanged()
         return 0
     if outcome in ("scope_blocked", "guidance", "blocked", "failure", "closeout_required"):
         return 126 if outcome == "closeout_required" else 1
@@ -1526,7 +1541,7 @@ def _finalize_structured_adapter_result(args, result):
                                        "message": str(error), "evidence": error.evidence, "code": 1}
             return 1
         except (ValueError, OSError, subprocess.CalledProcessError) as error:
-            result["runtime_error"] = {"phase": "hot", "message": str(error), "code": 1}
+            result["runtime_error"] = {"phase": "hot", "kind": "evidence_contract", "message": str(error), "code": 1}
             return 1
     elif args.verify and args.verify.lower() not in ("report_only", "none"):
         code, output = run_verify(args.verify, args.work_dir, args.worker_port, args.timeout)
@@ -1874,6 +1889,7 @@ RULES
 
 CLOSEOUT
 - Development handoff requires nonempty `tdd_cases` with exact `id`/project-relative `source` pairs from permanent hot discovery. Only new or meaningfully modified behavior cases belong here; omit unchanged baseline cases.
+- Exception: only a Planner CODE: REFACTOR ticket with EVIDENCE: EXISTING may pin unchanged CASES. The runtime still runs full hot, source/fingerprint and scope checks. A VERIFY ticket leaves product files unchanged and returns no_change; runtime executes its VERIFY. FILES is the planned file estimate; directory contents do not enlarge action budgets. LEVEL controls precision/risk, with a common preparation floor.
 - For unittest hot discovery, recursively flatten `unittest.TestLoader().discover("test")` (or the configured start directory). Copy `test.id()` and `inspect.getfile(type(test))` relative to project root. Do not prepend `test.` or infer IDs from file paths. For example, `test_input.InputTests.test_empty` maps to `test/test_input.py`. Run declared cases explicitly before handoff; do not invent IDs.
 - Run focused red/green cases before handoff. For a change, runtime owns hot and ticket VERIFY ({verify or 'none'}); do not repeat a full regression unless the ticket explicitly requires it. For no_change, run the declared VERIFY and report actual results. At most 3 implementation attempts; on blocker, return [BLOCKED] with cause.
 - [RESEARCH]: Follow the ticket's attempt/time bounds and artifact contract. A valid complete report may use outcome=complete with research_conclusion=positive|negative|inconclusive; unreproduced is not fixed. Missing evidence or invalid method remains blocked. Keep unresolved defects in backlog; new evidence gates further reproduction or repair.
@@ -1946,7 +1962,7 @@ def worker_daemon(root):
         try:
             if status_file.is_file():
                 status_data = json.loads(status_file.read_text(encoding="utf-8"))
-                if status_data.get("state") not in ("BLOCKED", "PAUSED", "PAUSED_FOR_PLANNER", "AGENT_NO_RESPONSE", "RECOVERY_FAILED", "WAITING_FOR_AGENT", "WAITING_CLEAN_WORKTREE", "ENVIRONMENT_BLOCKED", "HOOK_INTERRUPTED"):
+                if status_data.get("state") not in ("BLOCKED", "PAUSED", "PAUSED_FOR_PLANNER", "AGENT_NO_RESPONSE", "RECOVERY_FAILED", "WAITING_FOR_AGENT", "WAITING_CLEAN_WORKTREE", "ENVIRONMENT_BLOCKED", "HOOK_INTERRUPTED", "CONTRACT_BLOCKED"):
                     status_data["state"] = "STOPPED"
                     atomic_write(status_file, json.dumps(status_data) + "\n")
         except Exception:
@@ -2630,7 +2646,7 @@ def main(argv=None):
     score_record = commands.add_parser("score-record")
     score_record.add_argument("--state", required=True)
     score_record.add_argument("--task-id", required=True)
-    score_record.add_argument("--result", choices=("accept", "reject", "no_fault", "hard_failure", "success"), required=True)
+    score_record.add_argument("--result", choices=("accept", "reject", "no_fault", "hard_failure", "success", "attributable_failure"), required=True)
     score_record.add_argument("--evidence", default="")
     score_record.add_argument("--progress-file", default="")
     score_record.add_argument("--audit-ns", default="")

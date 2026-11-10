@@ -86,7 +86,7 @@ class SentinelCompletionTests(unittest.TestCase):
         self.assert_completed()
 
     def test_queue_prerequisites_notify_before_claim_on_late_watch_start(self):
-        for state in ('ENVIRONMENT_BLOCKED', 'HOOK_INTERRUPTED'):
+        for state in ('ENVIRONMENT_BLOCKED', 'HOOK_INTERRUPTED', 'CONTRACT_BLOCKED'):
             with self.subTest(state=state):
                 (self.ns / 'tasks.txt').write_text('TASK-ONE [CODE] | TARGET: src\n')
                 self.status(state)

@@ -162,6 +162,11 @@ Upgrade preserves project configuration; it does not invent a hot gate for you.
 
 ## Worker handoff
 
+The [ticket contract](docs/TICKET_ACCEPTANCE.md) defines planned FILES budgets,
+the common preparation floor, explicit REFACTOR/EXISTING and VERIFY-only modes,
+preclaim validation, and evidence-backed automatic scoring. Default development
+retains the strict changed-test contract below.
+
 Use persistent framework discovery. A task can declare additional `CASES: id,id`
 and `VERIFY: command`; both join hot acceptance. New TDD cases must remain part
 of normal hot without these task selectors on later tasks.

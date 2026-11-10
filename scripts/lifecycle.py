@@ -17,6 +17,8 @@ import acceptance as gate
 import acceptance_hooks as hooks
 import hook_control
 import preflight
+import ticket_policy
+import outcome_policy
 
 
 def task_level(raw):
@@ -236,22 +238,32 @@ def run_session(root, runtime, scheduler):
         registration = result.get("registration_id", "")
         candidate = runtime.registered_agent_score_path(agent_scores, registration) if registration else score
         destination = candidate if candidate.is_file() else score
-        # An accepted task advances the existing accept streak, not old success-only bookkeeping.
-        neutral = runtime.is_research_task(active["raw"]) and not accepted
-        outcome = "accept" if accepted else "no_fault" if neutral else "reject"
-        runtime.record_score_result(destination, active["task_id"], outcome,
-                                    "automatic hot gate", event_id=identity)
-        if not accepted and result.get("terminal_status") in ("execution_timeout", "step_budget_exceeded"):
-            runtime.record_score_result(destination, active["task_id"], "hard_failure",
-                                        result["terminal_status"], event_id=identity + ":hard")
+        research = runtime.is_research_task(active["raw"])
+        verification = ticket_policy.is_verify(active["raw"]) or (accepted and result.get("outcome") == "no_change")
+        attribution = outcome_policy.classify(result, research=research, verification=verification)
+        result["score_attribution"] = attribution
+        if accepted:
+            outcome = "no_fault" if research or verification else "accept"
+        else:
+            outcome = "attributable_failure" if attribution["attributable"] else "no_fault"
+        before = runtime.read_score_state(destination)["score"]
+        recorded = runtime.record_score_result(destination, active["task_id"], outcome,
+                                               "automatic: " + attribution["category"], event_id=identity)
+        if not recorded.get("duplicate") and runtime.score_task_level(before) != runtime.score_task_level(recorded["score"]):
+            runtime.append_agent_event(path("WORKER_AGENT_EVENTS_FILE", ".worker-agent-events.jsonl"), {
+                "event_id": identity + ":level", "registration_id": registration,
+                "cause": "automatic_score_level_change", "task_id": active["task_id"],
+                "previous_registration_id": registration, "current_registration_id": registration,
+                "previous_score": before, "current_score": recorded["score"],
+                "previous_level": runtime.score_task_level(before),
+                "current_level": runtime.score_task_level(recorded["score"])}, dispatch_gate)
 
     def finish(active, result):
         journal_path = state / "tasks" / (gate.key(active["task_id"], active["raw"]) + ".json")
         journal = gate.load(journal_path, {})
         result["registration_id"] = journal.get("registration_id", result.get("registration_id", ""))
         commit = journal.get("commit", result.get("commit", ""))
-        if (commit and commit != active.get("base")) or runtime.is_research_task(active["raw"]):
-            score_once(active, result, True)
+        score_once(active, result, True)
         token = f"Audit_NS: {active['event']}"
         attempts = result.get("attempts", 1)
         print(f"[AUDIT] Running mechanical audit for {active['task_id']}...", flush=True)
@@ -458,7 +470,18 @@ def run_session(root, runtime, scheduler):
                         return 2
                     stopped.wait(poll)
                     continue
-            raw = runtime.pop_task(tasks, claim_path=active_path)
+            try:
+                raw = runtime.pop_task(tasks, claim_path=active_path, validate=ticket_policy.validate)
+            except ValueError as error:
+                diagnostic = {"status": "contract-blocked", "reason": str(error)}
+                if gate.load(state / "contract.json", {}) != diagnostic:
+                    print("[CONTRACT_BLOCKED] " + str(error), flush=True)
+                gate.save(state / "contract.json", diagnostic)
+                update("CONTRACT_BLOCKED", phase="preflight")
+                if once:
+                    return 2
+                stopped.wait(poll)
+                continue
             if not raw:
                 if running["state"] != "BLOCKED":
                     update("IDLE")
@@ -508,8 +531,7 @@ def run_session(root, runtime, scheduler):
                 target = runtime.task_field(raw, "TARGET")
                 level = task_level(raw)
                 verify = runtime.task_field(raw, "VERIFY")
-                file_count = sum(max(1, sum(item.is_file() for item in (root / part.strip()).rglob("*")))
-                                 if (root / part.strip()).is_dir() else 1 for part in target.split(",") if part.strip())
+                file_count = ticket_policy.planned_files(raw)
                 step_per_file = int(os.environ.get("STEP_PER_FILE", "5"))
                 file_count = max(1, file_count)
                 directory = state / "runs" / active["event"]
@@ -521,6 +543,7 @@ def run_session(root, runtime, scheduler):
                     step_budget=0, target_file_count=file_count, step_per_file=step_per_file, research_step_budget=int(os.environ.get("RESEARCH_STEP_BUDGET", "100")),
                     worker_port=os.environ.get("WORKER_PORT", "3001"), task_id=active["task_id"],
                     title=raw, target=target, level=level, verify=verify, base=active["base"],
+                    constraints=runtime.task_field(raw, "CONSTRAINTS"),
                     required_cases=runtime.task_field(raw, "CASES"), progress_file=str(progress),
                     ghost_state_path=str(state / "ghost.json"), ghost_artifact_root=str(state / "ghost"),
                     agent_score_state_file=str(agent_scores), attempt_snapshot_root=str(owned / ".scratch/attempts" / active["task_id"]),
@@ -636,13 +659,12 @@ def run_session(root, runtime, scheduler):
                     stopped.wait(poll)
                     continue
                 result.setdefault("runtime_error", {"phase": "lifecycle", "message": str(error)})
-                if result.get("runtime_error", {}).get("kind") != "baseline_regression":
-                    score_once(active, result, False)
+                score_once(active, result, False)
                 fail(active, result)
     finally:
         stopped.set()
         thread.join(timeout=2)
-        if running["state"] not in ("BLOCKED", "PAUSED", "PAUSED_FOR_PLANNER", "AGENT_NO_RESPONSE", "RECOVERY_FAILED", "WAITING_FOR_AGENT", "ENVIRONMENT_BLOCKED", "HOOK_INTERRUPTED"):
+        if running["state"] not in ("BLOCKED", "PAUSED", "PAUSED_FOR_PLANNER", "AGENT_NO_RESPONSE", "RECOVERY_FAILED", "WAITING_FOR_AGENT", "ENVIRONMENT_BLOCKED", "HOOK_INTERRUPTED", "CONTRACT_BLOCKED"):
             update("STOPPED")
         for sig, handler in previous.items():
             signal.signal(sig, handler)

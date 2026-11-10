@@ -180,8 +180,8 @@ pathlib.Path(os.environ['NIGHTSHIFT_RESULT_FILE']).write_text(json.dumps(result)
         self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
         request = acceptance.load(acceptance.state_dir(self.root) / "last-adapter.json")["request"]
         self.assertEqual(request["limits"]["execution_timeout_seconds"], 11)
-        self.assertEqual(request["limits"]["action_limit"], 41)
-        self.assertIn("(21+4", Path(request["prompt_path"]).read_text())
+        self.assertEqual(request["limits"]["action_limit"], 51)
+        self.assertIn("(31+4", Path(request["prompt_path"]).read_text())
         config = json.loads(config_path.read_text())
         config["agents"]["fixture"]["worker"].update(
             task_timeout_seconds=13, step_base={"L1": 42, "L2": 32, "L3": 22})

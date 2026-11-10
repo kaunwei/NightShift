@@ -69,7 +69,7 @@ except (OSError,ValueError,TypeError) as error:
     json.dump(payload,open(result,"w",encoding="utf-8")); outcome="failure"
 if code and outcome in ("complete","no_change"): outcome="failure"
 diagnostic=open(log,encoding="utf-8",errors="replace").read()
-state="execution_timeout" if "print timeout after" in diagnostic.lower() else outcome
+state="execution_timeout" if "print timeout after" in diagnostic.lower() else ("complete" if outcome=="no_change" else outcome)
 json.dump({"status":state,"result_location":result,"exit_code":code},open(status,"w",encoding="utf-8"))
 '''
     argv = [cfg["executable"], *cfg["args"]]

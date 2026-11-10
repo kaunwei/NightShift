@@ -24,6 +24,7 @@ import subprocess
 import tempfile
 import time
 import uuid
+import ticket_policy
 
 
 class GateError(ValueError):
@@ -278,8 +279,15 @@ class DefaultAcceptanceRunner(AcceptanceRunner):
                                and permanent[identity].get("baseline_fingerprint") is not None]
         if not baseline_candidates:
             return HotFailure("ticket_regression", "new hot case failed on the ticket", details)
+        def inconclusive(limitation):
+            details["classification_limitation"] = limitation
+            output = str(evidence.get("output", ""))[-16384:]
+            message = "candidate hot failed: " + ", ".join(failed)
+            if output:
+                message += "\n" + output
+            return HotFailure("undetermined", message + "\nBaseline classification: " + limitation, details)
         if not evidence.get("supports_case_selection"):
-            return HotFailure("undetermined", "hot runner does not support isolated case selection", details)
+            return inconclusive("hot runner does not support isolated case selection")
         deadline = time.monotonic() + phase_timeout(cfg, "hot")
         try:
             # A linked worktree retains the Git metadata required by the hot protocol.
@@ -301,12 +309,12 @@ class DefaultAcceptanceRunner(AcceptanceRunner):
                     git(root, "worktree", "remove", "--force", str(checkout))
         except (OSError, ValueError, subprocess.SubprocessError) as error:
             details["baseline_error"] = str(error)
-            return HotFailure("undetermined", "isolated hot baseline could not be verified", details)
+            return inconclusive("isolated hot baseline could not be verified")
         if (not record["supports_case_selection"] or set(baseline) != set(baseline_candidates)
                 or any(case.get("status") not in ("passed", "failed") or
                        case.get("fingerprint") != permanent[identity].get("baseline_fingerprint")
                        for identity, case in baseline.items())):
-            return HotFailure("undetermined", "isolated hot baseline evidence is incomplete", details)
+            return inconclusive("isolated hot baseline evidence is incomplete")
         baseline_red = sorted(identity for identity, case in baseline.items() if case["status"] == "failed")
         details["baseline_failed_cases"] = baseline_red
         if baseline_red:
@@ -321,11 +329,27 @@ class DefaultAcceptanceRunner(AcceptanceRunner):
         for name in cfg.get("wiring", []):
             if subprocess.run(["git", "-C", str(root), "check-ignore", "-q", "--", name]).returncode == 0:
                 raise GateError(f"persistent hot wiring must be delivered in Git: {name}")
-        declarations = result.get("tdd_cases")
-        if not isinstance(declarations, list) or not declarations:
+        existing = ticket_policy.evidence_mode(getattr(args, "title", "")) == "EXISTING"
+        declarations = result.get("tdd_cases", [] if existing else None)
+        if not isinstance(declarations, list) or (not declarations and not existing):
             raise GateError("development handoff requires nonempty tdd_cases")
         print(f"[HOT_GATE] Discovering permanent test cases (baseline={args.base[:8]})...", flush=True)
         permanent, discovery = self.invoke(root, cfg, "hot", "discover", args.base, run, deadline=deadline)
+        pinned = set(ticket_policy.required_cases(args.title)) if existing else set()
+        for identity in pinned:
+            case = permanent.get(identity, {})
+            source = case.get("source", "")
+            fingerprint = case.get("fingerprint", "")
+            if (not safe_path(source) or not (root / source).is_file() or (root / source).is_symlink()
+                    or not (root / source).resolve().is_relative_to(root.resolve())
+                    or not isinstance(fingerprint, str) or not re.fullmatch(r"[a-f0-9]{64}", fingerprint)
+                    or case.get("baseline_fingerprint") != fingerprint):
+                raise GateError(f"pinned existing case requires unchanged baseline source evidence: {identity}")
+            if subprocess.run(["git", "-C", str(root), "check-ignore", "-q", "--", source]).returncode == 0:
+                raise GateError(f"pinned existing case source must be delivered in Git: {identity}")
+            if subprocess.run(["git", "-C", str(root), "cat-file", "-e", f"{args.base}:{source}"],
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode:
+                raise GateError(f"pinned existing case source is absent at baseline: {identity}")
         declared, canonical, dropped, seen = {}, [], [], set()
         original = json.loads(json.dumps(declarations))
         for item in declarations:
@@ -379,13 +403,13 @@ class DefaultAcceptanceRunner(AcceptanceRunner):
             if old.returncode == 0 and old.stdout == path.read_bytes():
                 raise GateError(f"declared TDD source unchanged: {source}")
             declared[identity] = source
-        if not declared:
+        if not declared and not existing:
             raise GateError("TDD handoff contains no new or changed test cases")
         reconciliation = {"original": original, "canonical": canonical, "dropped": dropped}
         result["tdd_cases"] = [{"id": identity, "source": source} for identity, source in declared.items()]
         result["tdd_reconciliation"] = reconciliation
         print("[HOT_GATE] TDD reconciliation: " + json.dumps(reconciliation, sort_keys=True), flush=True)
-        required = set(declared)
+        required = set(declared) | pinned
         explicit = getattr(args, "required_cases", [])
         if isinstance(explicit, str):
             explicit = [part.strip() for part in explicit.split(",") if part.strip()]
@@ -398,9 +422,10 @@ class DefaultAcceptanceRunner(AcceptanceRunner):
         for identity in required:
             if executed.get(identity, {}).get("status") != "passed":
                 raise GateError(f"required case did not execute and pass: {identity}")
-            if identity in declared and any(executed[identity].get(field) != permanent[identity].get(field)
+            if identity in declared or identity in pinned:
+                if any(executed[identity].get(field) != permanent[identity].get(field)
                                             for field in ("source", "fingerprint")):
-                raise GateError(f"case evidence changed between discovery and execution: {identity}")
+                    raise GateError(f"case evidence changed between discovery and execution: {identity}")
         evidence = [discovery, execution]
         if args.verify and args.verify.lower() not in ("none", "report_only") and args.verify.strip() != command(cfg, "hot").strip():
             print(f"[HOT_GATE] Running task verify command: {args.verify}...", flush=True)
@@ -413,7 +438,8 @@ class DefaultAcceptanceRunner(AcceptanceRunner):
                 raise HotFailure("timeout" if record["timed_out"] else "task_verify",
                                  f"task VERIFY exited {code}\n{output[-16384:]}", record)
         print(f"[HOT_GATE] <<< Hot Acceptance Gate PASSED cleanly for {args.task_id}!\n", flush=True)
-        return {"cases": sorted(executed), "evidence": evidence, "tdd_reconciliation": reconciliation}
+        return {"cases": sorted(executed), "evidence": evidence, "tdd_reconciliation": reconciliation,
+                "evidence_mode": "EXISTING" if existing else "CHANGED", "pinned_cases": sorted(pinned)}
 
     def run_cold(self, root, run_verify=None, **kwargs):
         runner = run_verify if callable(run_verify) else kwargs.get("run")

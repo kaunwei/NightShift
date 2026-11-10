@@ -33,7 +33,10 @@
     "acceptance_hooks.py",
     "hook_control.py",
     "docs/RUNTIME_HARDENING.md",
-    "docs/AGENT_CONTRACT_REVIEW.md"
+    "docs/AGENT_CONTRACT_REVIEW.md",
+    "ticket_policy.py",
+    "outcome_policy.py",
+    "docs/TICKET_ACCEPTANCE.md"
   ],
   "skill_files": [
     {
