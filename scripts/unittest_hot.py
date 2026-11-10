@@ -39,7 +39,16 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--start", default="test")
     parser.add_argument("--pattern", default="test*.py")
+    parser.add_argument("--cold-only-file", type=Path,
+                        help="Case IDs to omit from hot unless new, changed, or required")
     args = parser.parse_args()
+    cold_only = set()
+    if args.cold_only_file is not None:
+        cold_only = {line.strip() for line in args.cold_only_file.read_text(encoding="utf-8").splitlines()
+                     if line.strip() and not line.lstrip().startswith("#")}
+    phase = os.environ["NIGHTSHIFT_PHASE"]
+    required = set(json.loads(os.environ.get("NIGHTSHIFT_REQUIRED", "[]"))) if phase == "run" else set()
+    only = set(json.loads(os.environ.get("NIGHTSHIFT_ONLY_CASES", "[]"))) if phase == "run" else set()
     root = Path.cwd().resolve()
     if str(root) not in sys.path:
         sys.path.insert(0, str(root))
@@ -47,18 +56,26 @@ def main():
     suite = loader.discover(args.start, pattern=args.pattern)
     if loader.errors:
         raise RuntimeError("\n".join(loader.errors))
-    tests = list(flatten(suite))
-    cases = []
-    for test in tests:
+    tests, cases = [], []
+    fingerprints = {}
+    for test in flatten(suite):
         source = Path(inspect.getfile(type(test))).resolve().relative_to(root).as_posix()
-        method = test._testMethodName
-        identity = (type(test).__name__, method)
-        current = methods((root / source).read_text())[identity]
-        baseline = subprocess.run(["git", "show", f"{os.environ['NIGHTSHIFT_BASE']}:{source}"], capture_output=True)
-        previous = methods(baseline.stdout.decode()).get(identity) if baseline.returncode == 0 else None
-        cases.append({"id": test.id(), "source": source, "fingerprint": current,
+        if source not in fingerprints:
+            baseline = subprocess.run(["git", "show", f"{os.environ['NIGHTSHIFT_BASE']}:{source}"], capture_output=True)
+            fingerprints[source] = (methods((root / source).read_text()),
+                                    methods(baseline.stdout.decode()) if baseline.returncode == 0 else {})
+        identity = (type(test).__name__, test._testMethodName)
+        current_methods, baseline_methods = fingerprints[source]
+        current, previous = current_methods[identity], baseline_methods.get(identity)
+        case_id = test.id()
+        if only and case_id not in only:
+            continue
+        if case_id in cold_only and case_id not in required and previous == current:
+            continue
+        tests.append(test)
+        cases.append({"id": case_id, "source": source, "fingerprint": current,
                       "baseline_fingerprint": previous})
-    if os.environ["NIGHTSHIFT_PHASE"] == "run":
+    if phase == "run":
         class Result(unittest.TextTestResult):
             def __init__(self, *args, **kwargs):
                 super().__init__(*args, **kwargs)
@@ -68,13 +85,28 @@ def main():
                 super().addSuccess(test)
                 self.outcomes[test.id()] = "passed"
 
-        result = unittest.TextTestRunner(resultclass=Result, verbosity=1).run(suite)
+            def addFailure(self, test, err):
+                super().addFailure(test, err)
+                self.outcomes[test.id()] = "failed"
+
+            def addError(self, test, err):
+                super().addError(test, err)
+                self.outcomes[test.id()] = "error"
+
+            def addSubTest(self, test, subtest, err):
+                super().addSubTest(test, subtest, err)
+                if err:
+                    status = "failed" if issubclass(err[0], test.failureException) else "error"
+                    if self.outcomes.get(test.id()) != "error":
+                        self.outcomes[test.id()] = status
+
+        result = unittest.TextTestRunner(resultclass=Result, verbosity=1).run(unittest.TestSuite(tests))
         for case in cases:
             case["status"] = result.outcomes.get(case["id"], "failed_or_skipped")
         code = 0 if result.wasSuccessful() and tests else 1
     else:
         code = 0
-    Path(os.environ["NIGHTSHIFT_RESULT"]).write_text(json.dumps({"run": os.environ["NIGHTSHIFT_RUN"], "cases": cases}))
+    Path(os.environ["NIGHTSHIFT_RESULT"]).write_text(json.dumps({"run": os.environ["NIGHTSHIFT_RUN"], "cases": cases, "supports_case_selection": True}))
     return code
 
 

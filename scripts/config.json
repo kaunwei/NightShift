@@ -4,7 +4,8 @@
     "hot": "python3 scripts/unittest_hot.py --start test",
     "cold": "python3 -m unittest discover -s test",
     "cold_every": 5,
-    "timeout": 180,
+    "hot_timeout": 300,
+    "cold_timeout": 1800,
     "wiring": []
   },
   "agents": {

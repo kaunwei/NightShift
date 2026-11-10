@@ -806,16 +806,16 @@ def execute_adapter_protocol(command, request, extra_args=(), trace=None,
         raise ValueError("adapter callback_timeout_seconds must be positive")
     base["configuration"] = configuration.get("configuration", {})
     base["limits"] = {**configuration.get("limits", {}), **base.get("limits", {})}
+    started = time.monotonic()
     try:
         execution = adapter_callback(command, start_callback, base, extra_args,
-                                     timeout=callback_timeout)
+                                     timeout=min(callback_timeout, execution_timeout))
     except subprocess.TimeoutExpired:
         return {"status": "cancellation_failed", "stopped": False,
                 "diagnostic": "start callback timed out before returning an execution handle"}
     execution_id, status_location = execution.get("execution_id"), execution.get("status_location")
     if not isinstance(execution_id, str) or not execution_id or not isinstance(status_location, str) or not status_location:
         raise ValueError("adapter start response requires execution_id and status_location")
-    started = time.monotonic()
 
     def cancel(reason):
         try:
@@ -828,6 +828,7 @@ def execute_adapter_protocol(command, request, extra_args=(), trace=None,
             stopped = response.get("stopped") is True
             return {"status": reason if stopped else "cancellation_failed",
                     "execution_id": execution_id, "stopped": stopped,
+                    "elapsed_seconds": time.monotonic() - started, "budget_seconds": execution_timeout,
                     **({} if stopped else {"diagnostic": "adapter did not confirm termination"})}
         except (OSError, RuntimeError, subprocess.TimeoutExpired, ValueError) as error:
             return {"status": "cancellation_failed", "execution_id": execution_id,
@@ -867,9 +868,10 @@ def execute_adapter_protocol(command, request, extra_args=(), trace=None,
                 "protocol_version": ADAPTER_PROTOCOL_VERSION,
                 "execution_id": execution_id, "status_location": status_location,
                 **({"trace": str(trace)} if trace else {}),
-            }, extra_args, timeout=callback_timeout)
+            }, extra_args, timeout=min(callback_timeout, execution_timeout - elapsed))
         except subprocess.TimeoutExpired:
-            return cancel("callback_timeout")
+            return cancel("execution_timeout" if time.monotonic() - started >= execution_timeout
+                          else "callback_timeout")
         stream_adapter_output()
         now = time.monotonic()
         if now - last_log_activity >= 15 and now - last_heartbeat >= 15:
@@ -990,6 +992,7 @@ def execute_registered_agents(args, agents, state_path, rollback):
                 break
 
     current_index = start_index
+    deadline = time.monotonic() + args.timeout
     while True:
         agent = available[current_index]
         attempt = argparse.Namespace(**vars(args))
@@ -1012,7 +1015,14 @@ def execute_registered_agents(args, agents, state_path, rollback):
         attempt.executable = agent["command"]
         attempt.adapter_command = sys.executable
         attempt.adapter_args = [str(Path(__file__).resolve().parent / "adapters" / f"{agent['adapter']}.py")]
-        attempt.timeout = agent.get("worker", {}).get("task_timeout_seconds", args.timeout)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            atomic_write(args.result_file, json.dumps({"runtime_error": {
+                "phase": "agent", "kind": "task_deadline", "budget_seconds": args.timeout,
+                "message": "shared task deadline exhausted; Planner must reslice"}}) + "\n")
+            return 124, False
+        attempt.timeout = min(agent.get("worker", {}).get("task_timeout_seconds", args.timeout), remaining)
+        attempt.execution_timeout = attempt.timeout
         is_research = is_research_task(getattr(args, 'title', ''))
         if is_research:
             configured_research_budget = agent.get("worker", {}).get("research_step_budget")
@@ -1083,13 +1093,30 @@ def execute_registered_agents(args, agents, state_path, rollback):
             persist()
             return code, False
 
+        timed_out = status_val in ("execution_timeout", "callback_timeout")
+        productive_timeout = timed_out and bool(actions_used)
+        if timed_out and not productive_timeout:
+            metadata = acceptance.load(Path(attempt.attempt_baseline) / "snapshot.json", {})
+            baseline_tree = metadata.get("audit_tree")
+            if baseline_tree:
+                productive_timeout = worktree_tree(args.work_dir) != baseline_tree
         try:
-            rollback(attempt.attempt_baseline, attempt.attempt_id)
+            archive = rollback(attempt.attempt_baseline, attempt.attempt_id)
         except Exception:
             args.recovery_failed = True
             return 1, False
         if getattr(args, "recovery_failed", False):
             return 1, False
+        if time.monotonic() >= deadline or productive_timeout:
+            parsed_result["runtime_error"] = {
+                "phase": "agent", "kind": "productive_timeout" if productive_timeout else "task_deadline",
+                "budget_seconds": args.timeout, "registration": agent["id"],
+                "message": "agent deadline reached; preserved attempt evidence and stopped for Planner",
+            }
+            if archive:
+                parsed_result["recovery_archive"] = str(archive)
+            atomic_write(args.result_file, json.dumps(parsed_result) + "\n")
+            return 124, False
         if is_no_response:
             consecutive_no_response += 1
             state["consecutive_no_response"] = consecutive_no_response
@@ -1472,8 +1499,15 @@ def _finalize_structured_adapter_result(args, result):
     except Exception:
         has_hot_config = False
     if has_hot_config and not is_research_task(args.title) and not scratch_review.is_review(args.title):
+        on_verify = getattr(args, "on_verify", None)
+        if callable(on_verify):
+            on_verify()
         try:
             result["hot"] = acceptance.hot(args, result, run_verify)
+        except acceptance.HotFailure as error:
+            result["runtime_error"] = {"phase": "hot", "kind": error.kind,
+                                       "message": str(error), "evidence": error.evidence, "code": 1}
+            return 1
         except (ValueError, OSError, subprocess.CalledProcessError) as error:
             result["runtime_error"] = {"phase": "hot", "message": str(error), "code": 1}
             return 1
@@ -1743,7 +1777,7 @@ def execute_adapter_task(args):
             raise ValueError("adapter result must be a JSON object")
         code = (finalize_structured_adapter_result(args, result)
                 if status.get("status") == "complete" else 126)
-        if code:
+        if code and not result.get("runtime_error", {}).get("kind"):
             try:
                 code, rescued_result, ghost_dir = run_adapter_ghost(args, request, status, result)
                 if rescued_result:
@@ -1761,7 +1795,8 @@ def execute_adapter_task(args):
                     status["status"], 1)
     if isinstance(result, dict):
         atomic_write(result_path, json.dumps(result, ensure_ascii=False) + "\n")
-    wrapper = {"status": status["status"], "stopped": status.get("stopped"), "result": result}
+    wrapper = {"status": status["status"], "stopped": status.get("stopped"), "result": result,
+               "elapsed_seconds": status.get("elapsed_seconds"), "budget_seconds": args.timeout}
     if getattr(args, "adapter_artifact_dir", ""):
         try:
             terminal_dir = adapter_output_dir / ".runtime-terminal"
@@ -1823,7 +1858,7 @@ RULES
 CLOSEOUT
 - Development handoff requires nonempty `tdd_cases` with exact `id`/project-relative `source` pairs from permanent hot discovery. Only new or meaningfully modified behavior cases belong here; omit unchanged baseline cases.
 - For unittest hot discovery, recursively flatten `unittest.TestLoader().discover("test")` (or the configured start directory). Copy `test.id()` and `inspect.getfile(type(test))` relative to project root. Do not prepend `test.` or infer IDs from file paths. For example, `test_input.InputTests.test_empty` maps to `test/test_input.py`. Run declared cases explicitly before handoff; do not invent IDs.
-- Run {verify or 'task verification'} and state actual results. [DEAD_END] requires isolated passing proof. At most 3 implementation attempts; on blocker, return [BLOCKED] with cause.
+- Run focused red/green cases before handoff. For a change, runtime owns hot and ticket VERIFY ({verify or 'none'}); do not repeat a full regression unless the ticket explicitly requires it. For no_change, run the declared VERIFY and report actual results. At most 3 implementation attempts; on blocker, return [BLOCKED] with cause.
 - Never stage/commit or change Worker score. Do not self-adjust the shared Worker score. Runtime verifies, audits and commits using your message; Planner accepts. Do not adjust scope for the adapter.
 - Return exactly one JSON object with no text before or after it. Fields: `outcome`=complete|closeout_required|blocked|scope_blocked|guidance|failure|no_change; `changed`=boolean; `verification_evidence`; `commit_message`; `no_change_reason` when relevant; `attempts`=integer; `confidence`=HIGH|MED|LOW. `complete`=finished/verified; `no_change`=no edits needed; `closeout_required`=verification/message pending. If verification fails, return blocked or failure; closeout_required cannot repair failed tests. Never invent evidence/messages from logs.
 
@@ -1986,7 +2021,15 @@ def git_audit(args):
     return 0, ""
 
 
+class VerifyOutput(str):
+    def __new__(cls, text, *, timed_out, elapsed, budget):
+        value = super().__new__(cls, text)
+        value.timed_out, value.elapsed, value.budget = timed_out, elapsed, budget
+        return value
+
+
 def run_verify(command, work_dir, port, timeout):
+    started = time.monotonic()
     environment = os.environ.copy()
     environment.update(PORT=str(port), TEST_PORT=str(port))
     options = {"cwd": work_dir, "env": environment, "stdout": subprocess.PIPE,
@@ -2027,9 +2070,11 @@ def run_verify(command, work_dir, port, timeout):
                     process.wait(timeout=1)
                 except subprocess.TimeoutExpired as cleanup_error:
                     raise RuntimeError("VERIFY cleanup could not reap owned direct child") from cleanup_error
-        return 124, output.decode("utf-8", "replace")
+        return 124, VerifyOutput(output.decode("utf-8", "replace"), timed_out=True,
+                                 elapsed=time.monotonic() - started, budget=timeout)
     else:
-        return process.returncode, output.decode("utf-8", "replace")
+        return process.returncode, VerifyOutput(output.decode("utf-8", "replace"), timed_out=False,
+                                                elapsed=time.monotonic() - started, budget=timeout)
 
 
 def first_report(root, target):
@@ -2701,6 +2746,15 @@ def main(argv=None):
     restart.add_argument("--root", required=True)
     restart.add_argument("--config", default="")
     restart.add_argument("--project", default=None)
+    for hook_command in ("hook-register", "hook-retry"):
+        hook_parser = commands.add_parser(hook_command)
+        hook_parser.add_argument("--root", required=True)
+        hook_parser.add_argument("--config", default="")
+        hook_parser.add_argument("--project", default=None)
+        if hook_command == "hook-register":
+            hook_parser.add_argument("--spec", required=True, help="JSON one-shot hook definition")
+        else:
+            hook_parser.add_argument("--run-id", required=True)
     info = commands.add_parser("project-info")
     info.add_argument("--root", required=True)
     info.add_argument("--config", required=True)
@@ -2720,7 +2774,7 @@ def main(argv=None):
         print(json.dumps({"name": name, "root": str(root), "state": str(state) if state else None,
                           "skills": str(Path(__file__).resolve().parent.parent / ".agents/skills"),
                           "index": str(state / "code-index/INDEX.md") if state else str(root / "scripts/.scratch/code-index/INDEX.md" if (root / "scripts").is_dir() else root / "nightshift/.scratch/code-index/INDEX.md")}))
-    elif args.command == "restart":
+    elif args.command in ("restart", "hook-register", "hook-retry"):
         if args.config:
             name, root, state = project_config.resolve_project(args.config, args.project, args.root)
             if name is not None:
@@ -2730,8 +2784,17 @@ def main(argv=None):
                 args.root = str(root)
         elif args.project:
             raise ValueError("--project requires --config")
-        (acceptance.state_dir(args.root) / "paused.json").unlink(missing_ok=True)
-        print("[RESTART] Planner released failure pause; next Worker starts clean.")
+        if args.command == "restart":
+            (acceptance.state_dir(args.root) / "paused.json").unlink(missing_ok=True)
+            print("[RESTART] Planner released failure pause; next Worker starts clean.")
+        else:
+            import hook_control
+            try:
+                request = ({"command": "register", "spec": json.loads(args.spec)} if args.command == "hook-register"
+                           else {"command": "retry", "run_id": args.run_id})
+                print(json.dumps(hook_control.request(args.root, request)))
+            except (OSError, ValueError) as error:
+                parser.exit(2, f"acceptance hook: {error}\n")
     elif args.command == "score-record":
         if args.agent_id:
             event_path = args.events or str(Path(args.state).parent / ".worker-agent-events.jsonl")

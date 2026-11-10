@@ -16,7 +16,8 @@ Track `scripts/config.json` with the project's acceptance and agent commands:
     "hot": "python3 scripts/unittest_hot.py --start test",
     "cold": "python3 -m unittest discover -s test",
     "cold_every": 5,
-    "timeout": 180,
+    "hot_timeout": 300,
+    "cold_timeout": 1800,
     "wiring": []
   },
   "agents": {
@@ -41,18 +42,87 @@ Track `scripts/config.json` with the project's acceptance and agent commands:
 
 Runtime reads persistent settings only from `scripts/config.json`. Each agent must define positive `worker.step_base` values for L1, L2, and L3. Restart the Worker after editing configuration.
 
-Commands run from project root. `cold_every` is optional: absent means no periodic
-insertion; a manually queued cold still requires `cold`. Set a positive integer
-to insert after that many successfully committed development tasks. Cold itself,
-research, failed and no-change tasks do not advance cadence. Cold runs serially,
-coalesces pending requests and skips an unchanged already-passing HEAD. Success
-only updates internal state: no message, Worker score or Git record. Outputs must
-be ignored; tracked/nonignored product mutations fail the cold task.
+Acceptance budgets are separate: hot discovery, hot execution and extra task
+VERIFY share one `hot_timeout` deadline (default 300 seconds). Cold uses
+`cold_timeout` (default 1800 seconds). Each phase field wins over an explicitly configured legacy `timeout`.
+Without a phase field, an explicit legacy value remains that phase's fallback;
+without either field, the phase default applies. Values must be finite positive
+numbers, not booleans. These limits are separate from agent task timeouts.
+A running Worker that loaded an older reader keeps its old semantics until a
+user-controlled restart; adding fields does not hot-reload its Python modules.
+
+Commands run from project root. `cold_every` is an optional compatibility
+setting: it converts `cold` and `cold_timeout` to a periodic hook, counting
+accepted development commits as before. Manual `[COLD]` tickets enter the same
+hook ledger. Cold retains its per-revision pass record and silent success;
+it does not change score or Git history. Counts and the per-session pass cache
+start empty on every worker launch. The last cold result file is audit output,
+not control input. Outputs must be ignored by Git.
 
 `wiring` lists exact configuration/registration files Ghost may edit to connect
 existing tests. Include those files and tests in task TARGET. Ghost also may supply
 the acceptance configuration. Keep executable test behavior in tests, separate
 from wiring. Ghost leaves source, assertions and unrelated scripts unchanged.
+
+## Post-acceptance hooks
+
+A project can register periodic commands in its acceptance config:
+
+```json
+"hooks": [
+  {"id":"package-demo","every":5,"argv":["python3","scripts/build_demo.py"],"timeout":420}
+]
+```
+
+Configured `every` hooks count distinct accepted ticket events after
+installation, including no-change results. Cold and hooks do not count. Legacy
+`cold_every` has a different counting rule but uses the same scheduler,
+executor, and failure handling. Use a stable hook ID. The
+runtime serializes due hooks before the next ticket. The command runs in the
+project root with `NIGHTSHIFT_HOOK_REVISION`, `NIGHTSHIFT_HOOK_TASK`,
+`NIGHTSHIFT_HOOK_ID`, and `NIGHTSHIFT_HOOK_RUN_ID`. The last is an idempotency
+key; scripts should use it for output names or external side-effect deduplication.
+Commands must leave the Git revision and tracked/nonignored files unchanged.
+
+Register a one-shot from a Planner shell before the ticket is accepted:
+
+```sh
+python3 "$NIGHTSHIFT_CORE/scripts/worker_runtime.py" hook-register --root . \
+  --config "$NIGHTSHIFT_CONFIG_FILE" \
+  --spec '{"id":"demo-42","after":"TASK-42","argv":["python3","scripts/build_demo.py"],"timeout":420}'
+```
+
+The CLI sends commands to the live worker through a private local pipe. It
+does not register work when no worker is running. The worker owns one in-memory
+scheduler; it does not poll or replay an acceptance hook ledger. Relaunching
+`worker.sh` loads config and starts with no one-shots, counters, pending runs,
+or retry state. Register one-shots again after relaunching. A manually queued
+`[COLD]` ticket remains part of the ordinary task queue.
+
+Nonzero exits and timeouts use the cold-style failure report and pause dispatch;
+accepted commits, reports and explicit pause controls are preserved. To retry a
+failed hook in the same live worker, run `hook-retry --root . --config ... --run-id RUN_ID`,
+then the Planner `restart` command to clear the failure pause without relaunching.
+A relaunched worker cannot retry a previous session's hook. Treat registered
+argv as trusted project code; do not embed secrets in it.
+
+## Hot failure triage and adapter deadlines
+
+Workers run focused red/green checks; the runtime runs the permanent hot suite
+and any extra VERIFY. Do not set VERIFY to the full cold command on new code
+tickets. A selected-case-capable hot hook can report assertion failures for a
+one-time rerun at the accepted base in a detached worktree. Set
+`supports_case_selection: true` in its evidence only if it honors the exact
+JSON IDs in `NIGHTSHIFT_ONLY_CASES`. A baseline failure creates a durable
+repair record and stops dispatch. Ticket-only failures, baseline failures and
+inconclusive diagnostics preserve the failed attempt without auto-requeueing
+the original ticket. Fix the baseline or reslice before restarting.
+
+`TASK_TIMEOUT` limits the shared adapter dispatch window (default 1800 seconds).
+Per-agent limits are caps within that window. A productive execution timeout
+goes to Planner instead of restarting from scratch on another agent. Status
+reports distinguish runtime cancellation from a command returning exit 124.
+Watcher elapsed time is the duration of the watch, not a ticket deadline.
 
 ### Custom Hot/Cold Runner Abstraction
 

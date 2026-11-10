@@ -373,7 +373,7 @@ while true; do
       fi
     elif [ "$REMAINING_TASKS" -eq 0 ]; then
       if [ -n "${PENDING_FAILED_TASKS// /}" ]; then
-        echo "[SENTINEL_FAILED] Tasks $PENDING_FAILED_TASKS received failure results after ${ELAPSED}s."
+        echo "[SENTINEL_FAILED] Tasks $PENDING_FAILED_TASKS received failure results (watch elapsed: ${ELAPSED}s)."
         exit 1
       fi
       if [ -n "$AUDITED_DONE_TASKS" ] && { [ "$STATE" = "IDLE" ] || [ "$STATE" = "STOPPED" ]; }; then
@@ -396,15 +396,15 @@ while true; do
     exit 3
   fi
   if [ "$STATE" = "BLOCKED" ] || [ "$STATE" = "AWAITING_GUIDANCE" ]; then
-    echo "[SENTINEL_BLOCKED] Worker entered state: $STATE after ${ELAPSED}s."
+    echo "[SENTINEL_BLOCKED] Worker entered state: $STATE (watch elapsed: ${ELAPSED}s)."
     exit 1
   fi
   if [ "$STATE" = "AGENT_NO_RESPONSE" ]; then
-    echo "[SENTINEL_AGENT_NO_RESPONSE] Worker entered state: $STATE after ${ELAPSED}s."
+    echo "[SENTINEL_AGENT_NO_RESPONSE] Worker entered state: $STATE (watch elapsed: ${ELAPSED}s)."
     exit 1
   fi
   if [ "$STATE" = "PAUSED_FOR_PLANNER" ]; then
-    echo "[SENTINEL_PAUSED_FOR_PLANNER] Worker entered state: $STATE after ${ELAPSED}s."
+    echo "[SENTINEL_PAUSED_FOR_PLANNER] Worker entered state: $STATE (watch elapsed: ${ELAPSED}s)."
     exit 1
   fi
 

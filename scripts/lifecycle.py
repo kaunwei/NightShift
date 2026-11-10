@@ -1,6 +1,7 @@
 """Serial task lifecycle. Planner owns restart; runtime owns acceptance."""
 
 import argparse
+import hashlib
 from datetime import datetime
 import json
 import os
@@ -13,6 +14,14 @@ import time
 import uuid
 
 import acceptance as gate
+import acceptance_hooks as hooks
+import hook_control
+
+
+def task_level(raw):
+    """Extract the numeric level from a task header, including dependency fields."""
+    match = re.search(r"LEVEL:\s*([1-3])", raw)
+    return match.group(1) if match else "1"
 
 
 def append_once(path, identity, line):
@@ -43,6 +52,8 @@ def protect_runtime(root, paths):
                     continue
                 raise gate.GateError(f"migration required: untrack generated runtime file {name}")
             additions.extend(["/" + name, "/" + name + ".lock/"])
+            if name.endswith(".status"):
+                additions.append("/" + name + "." + "[0-9a-f]" * 32)
     exclude.parent.mkdir(parents=True, exist_ok=True)
     with exclude.open("a") as stream:
         stream.write("\n" + "\n".join(item for item in additions if item not in old.splitlines()) + "\n")
@@ -69,30 +80,6 @@ def diagnose(root, runtime, active, result):
     return directory
 
 
-def cold_ghost(root, runtime, active, error):
-    last = gate.load(gate.state_dir(root) / "last-adapter.json")
-    result = {"outcome": "blocked", "runtime_error": {"phase": "cold", "message": str(error)}}
-    if last:
-        request = last["request"]
-        args = argparse.Namespace(
-            work_dir=str(root), task_id=active["task_id"], title=active["raw"],
-            base=active["base"], target="", verify=gate.config(root).get("cold", ""),
-            timeout=180, progress_file="runtime-owned", worker_port="3001",
-            adapter_command=last["command"], executable=last["command"], adapter_args=last["args"],
-            attempt_id=active["event"], diagnostic_only=True,
-            ghost_state_path=str(gate.state_dir(root) / "ghost.json"),
-            ghost_artifact_root=str(gate.state_dir(root) / "ghost"))
-        try:
-            _, supplement, _ = runtime.run_adapter_ghost(
-                args, request, {"execution_id": active["event"]}, result)
-            result.update(supplement)
-        except Exception as failure:
-            result["ghost_error"] = str(failure)
-    else:
-        result["ghost_error"] = "no prior adapter registration is available for diagnosis"
-    return result
-
-
 def daemon(root, runtime):
     root = Path(root).resolve()
     with gate.workspace(root):
@@ -100,6 +87,16 @@ def daemon(root, runtime):
 
 
 def run(root, runtime):
+    try:
+        cfg = gate.config(root)
+    except gate.GateError:
+        cfg = {}
+    scheduler = hooks.Scheduler(cfg)
+    with hook_control.serve(root, scheduler):
+        return run_session(root, runtime, scheduler)
+
+
+def run_session(root, runtime, scheduler):
     state = gate.state_dir(root)
     external = bool(os.environ.get("NIGHTSHIFT_CONFIG_FILE"))
     owned = (Path(os.environ["NIGHTSHIFT_STATE_DIR"]) if external else
@@ -126,7 +123,8 @@ def run(root, runtime):
     agents = runtime.load_agent_registry(registry)
     if not external:
         protect_runtime(root, (tasks, done, progress, status, log_file, pause, dispatch_gate, score,
-                               agent_scores, agent_state_file, owned / ".scratch", owned / ".worker-ghosts"))
+                               agent_scores, agent_state_file, path("PID_FILE", ".worker.pid"),
+                               owned / ".scratch", owned / ".worker-ghosts"))
     for file in (tasks, done, progress, log_file):
         file.parent.mkdir(parents=True, exist_ok=True)
         file.touch(exist_ok=True)
@@ -168,10 +166,10 @@ def run(root, runtime):
         if once:
             print("[WORKER] RUN_ONCE is enabled.")
     began = [time.monotonic()]
-    def update(kind, task=None):
+    def update(kind, task=None, phase=None):
         if task != running.get("current_task"):
             began[0] = time.monotonic()
-        running.update(state=kind, current_task=task, last_heartbeat=datetime.now().isoformat())
+        running.update(state=kind, current_task=task, phase=phase, last_heartbeat=datetime.now().isoformat())
         gate.save(status, running)
     def heartbeat():
         while not stopped.wait(1):
@@ -184,9 +182,14 @@ def run(root, runtime):
     scratch_checked = float("-inf")
     recovery_halted_task = ""
     waiting_for_response = False
+    waiting_path = state / "waiting-agent.json"
+    exhausted_head = gate.load(waiting_path)
+
+    def fingerprint(agent):
+        return hashlib.sha256(json.dumps(agent, sort_keys=True).encode()).hexdigest()
 
     def fail(active, result):
-        if not has_acceptance(root) and active.get("attempt_baseline"):
+        if not has_acceptance(root) and active.get("attempt_baseline") and not result.get("recovery_archive"):
             try:
                 runtime.rollback_failed_task(
                     root, root, active["task_id"],
@@ -237,13 +240,6 @@ def run(root, runtime):
         commit = journal.get("commit", result.get("commit", ""))
         if (commit and commit != active.get("base")) or runtime.is_research_task(active["raw"]):
             score_once(active, result, True)
-        scheduled_cold = False
-        if commit and commit != active.get("base") and not runtime.is_research_task(active["raw"]):
-            before_pending = gate.load(state / "cold.json", {}).get("pending", False)
-            gate.schedule_cold(root, commit, tasks, runtime.insert_task_front)
-            after_pending = gate.load(state / "cold.json", {}).get("pending", False)
-            if not before_pending and after_pending:
-                scheduled_cold = True
         token = f"Audit_NS: {active['event']}"
         attempts = result.get("attempts", 1)
         print(f"[AUDIT] Running mechanical audit for {active['task_id']}...", flush=True)
@@ -253,15 +249,18 @@ def run(root, runtime):
         print(f"[COMMIT] Committing verified changes for {active['task_id']} ({commit[:8] if commit else 'no-commit'})...", flush=True)
         runtime.settle_invalid_reports(owned if external else root, root, accepted=True)
         runtime.refresh_active_reports(owned if external else root, root)
+        scheduled_hook = False
+        if journal.get("phase") != "accepted":
+            scheduled_hook = scheduler.accepted(
+                active["task_id"], active["event"], commit or active["base"],
+                committed=bool(commit and commit != active["base"] and not runtime.is_research_task(active["raw"])))
         journal.update(phase="accepted", commit=commit, result=result, event=active["event"])
         gate.save(journal_path, journal)
         active_path.unlink(missing_ok=True)
         print(f"[DONE] <<< Task {active['task_id']} accepted and verified cleanly!\n", flush=True)
-        if scheduled_cold and once:
-            update("IDLE")
-            return True
-        return False
+        return scheduled_hook and once
 
+    drain_hooks = False
     try:
         while not stopped.is_set():
             if (state / "paused.json").exists() or dispatch_gate.exists():
@@ -300,6 +299,11 @@ def run(root, runtime):
                     # Only explicit restart can reach here after a diagnosed failure.
                     active_path.unlink()
                     continue
+                if runtime.task_header_has_tag(active["raw"], r"\[COLD\]"):
+                    scheduler.enqueue_cold(active)
+                    active_path.unlink()
+                    drain_hooks = once
+                    continue
                 journal_path = state / "tasks" / (gate.key(active["task_id"], active["raw"]) + ".json")
                 journal = gate.load(journal_path, {})
                 if journal.get("phase") == "ready_commit":
@@ -309,25 +313,49 @@ def run(root, runtime):
                     if commit:
                         journal.update(phase="committed", commit=commit)
                         gate.save(journal_path, journal)
-                    elif runtime.finalize_structured_adapter_result(recovery, journal["result"]) == 0:
+                    else:
+                        result = journal["result"]
+                        code = runtime.finalize_structured_adapter_result(recovery, result)
+                        if code:
+                            result.setdefault("runtime_error", {"phase": "ready_commit", "message": f"commit replay exited {code}"})
+                            fail(active, result)
+                            continue
                         journal = gate.load(journal_path)
                 if journal.get("phase") in ("committed", "accepted"):
                     if journal.get("commit") and subprocess.run(
                             ["git", "-C", str(root), "merge-base", "--is-ancestor", journal["commit"], "HEAD"], capture_output=True).returncode:
                         raise gate.GateError("accepted commit missing from current history")
                     if finish(active, journal["result"]):
-                        return 0
-                    update("IDLE")
+                        drain_hooks = True
+                        continue
                     if once:
                         return 0
                     continue
                 # Interrupted model execution is not safe to repeat or clean without Planner.
                 fail(active, {"diagnostic": "interrupted task; schedule a new task and restart"})
                 continue
-            # Replay a due cold insertion after a crash before queue mutation.
-            cold_state = gate.load(state / "cold.json", {})
-            if cold_state.get("pending"):
-                gate.schedule_cold(root, "", tasks, runtime.insert_task_front)
+            hook = scheduler.next_run()
+            if hook:
+                is_cold = hook.get("kind") == "cold"
+                hook_id = "TASK-COLD" if is_cold else "TASK-HOOK-" + hook["id"]
+                phase = "cold" if is_cold else "post_acceptance_hook"
+                update("VERIFYING", hook_id, phase)
+                try:
+                    hooks.execute(root, hook, runtime.run_verify, cold_passed=scheduler.cold_passed,
+                                  cfg=scheduler.cfg)
+                    scheduler.settle(hook["id"], "passed")
+                    with progress.open("a") as stream:
+                        stream.write(f"[HOOK_PASS] {hook['hook']} | Hook_Run: {hook['id']} | Revision: {hook['revision']}\n")
+                except (OSError, ValueError, subprocess.SubprocessError, RuntimeError) as error:
+                    failure = str(error)
+                    active_hook = {"task_id": hook_id, "raw": f"{hook_id} [{'COLD' if is_cold else 'HOOK'}]",
+                                   "event": hook["audit_event"], "base": hook["revision"]}
+                    fail(active_hook, {"outcome": "failure", "hook": hook,
+                                       "runtime_error": {"phase": phase, "message": failure}})
+                    scheduler.settle(hook["id"], "failed", error=failure)
+                continue
+            if drain_hooks:
+                return 0
             if time.monotonic() - scratch_checked >= 60:
                 runtime.scratch_review.check(owned, tasks, runtime.insert_task_front, runtime.atomic_write)
                 scratch_checked = time.monotonic()
@@ -354,6 +382,34 @@ def run(root, runtime):
                     continue
                 stopped.wait(poll)
                 waiting_for_response = False
+            if exhausted_head is not None:
+                blocked_raw = exhausted_head["raw"]
+                blocked_id = exhausted_head["task_id"]
+                prior_agents = exhausted_head["agents"]
+                head = next((line.strip() for line in tasks.read_text(encoding="utf-8").splitlines()
+                             if line.strip() and not line.lstrip().startswith("#")), "")
+                if head == blocked_raw.strip():
+                    try:
+                        current_agents = runtime.load_agent_registry(registry)
+                    except (OSError, ValueError):
+                        current_agents = []
+                    exclusions = exhausted_head["exclusions"]
+                    # A changed registration may be retried; unchanged exhausted agents stay excluded.
+                    changed = {agent["id"] for agent in current_agents
+                               if fingerprint(agent) != prior_agents.get(agent["id"])}
+                    if not any((agent["id"] not in exclusions or agent["id"] in changed)
+                               and runtime.agent_supports_task(agent, head, runtime.task_field(head, "CONSTRAINTS"))
+                               for agent in current_agents):
+                        if running["state"] != "WAITING_FOR_AGENT":
+                            update("WAITING_FOR_AGENT", blocked_id)
+                        if once:
+                            return 0
+                        stopped.wait(poll)
+                        continue
+                    agent_state["task_exclusions"][blocked_id] = [identity for identity in exclusions
+                                                                   if identity not in changed]
+                exhausted_head = None
+                waiting_path.unlink(missing_ok=True)
             raw = runtime.pop_task(tasks, claim_path=active_path)
             if not raw:
                 if running["state"] != "BLOCKED":
@@ -373,19 +429,12 @@ def run(root, runtime):
             if previous_record.get("phase") == "accepted" and not runtime.task_header_has_tag(raw, r"\[COLD\]"):
                 active["event"] = previous_record.get("event", active["event"])
                 if finish(active, previous_record["result"]):
-                    return 0
+                    drain_hooks = True
                 continue
             if runtime.task_header_has_tag(raw, r"\[COLD\]"):
-                update("VERIFYING", active["task_id"])
-                try:
-                    gate.cold(root, runtime.run_verify)
-                    active_path.unlink()
-                except Exception as error:
-                    result = cold_ghost(root, runtime, active, error)
-                    fail(active, result)
-                update("IDLE")
-                if once:
-                    return 0
+                scheduler.enqueue_cold(active)
+                active_path.unlink()
+                drain_hooks = once
                 continue
             args = None
             result = {}
@@ -409,8 +458,7 @@ def run(root, runtime):
                 if not agents:
                     raise gate.GateError("no executable adapter registration")
                 target = runtime.task_field(raw, "TARGET")
-                level = re.search(r"LEVEL:\s*([1-3])", raw)
-                level = level.group(1) if level else "1"
+                level = task_level(raw)
                 verify = runtime.task_field(raw, "VERIFY")
                 file_count = sum(max(1, sum(item.is_file() for item in (root / part.strip()).rglob("*")))
                                  if (root / part.strip()).is_dir() else 1 for part in target.split(",") if part.strip())
@@ -429,10 +477,11 @@ def run(root, runtime):
                     ghost_state_path=str(state / "ghost.json"), ghost_artifact_root=str(state / "ghost"),
                     agent_score_state_file=str(agent_scores), attempt_snapshot_root=str(owned / ".scratch/attempts" / active["task_id"]),
                     awaiting_agent=False, recovery_failed=False)
-                update("RUNNING", active["task_id"])
+                update("RUNNING", active["task_id"], "agent")
+                args.on_verify = lambda: update("VERIFYING", active["task_id"], "hot")
                 def recover_before_switch(snapshot, attempt_id):
                     try:
-                        runtime.rollback_failed_task(
+                        return runtime.rollback_failed_task(
                             root, root, active["task_id"],
                             (tasks, done, progress, status, log_file, pause, dispatch_gate, score, agent_scores, agent_state_file, registry),
                             baseline_snapshot=snapshot, attempt_id=attempt_id)
@@ -444,8 +493,27 @@ def run(root, runtime):
                 active["attempt_baseline"] = getattr(args, "attempt_baseline", "")
                 result = gate.load(args.result_file, {})
                 result["registration_id"] = getattr(args, "executed_agent_id", "")
-                result["terminal_status"] = gate.load(args.output_file, {}).get("status", "")
+                terminal = gate.load(args.output_file, {})
+                result["terminal_status"] = terminal.get("status", "")
+                result["agent_timing"] = {key: terminal.get(key) for key in ("elapsed_seconds", "budget_seconds")}
                 result["exit_code"] = code
+                hot_failure = result.get("runtime_error", {})
+                if code and hot_failure.get("phase") == "hot" and hot_failure.get("kind") in (
+                        "ticket_regression", "baseline_regression", "timeout", "undetermined", "task_verify"):
+                    # Preserve exact attempt evidence; never dispatch the original ticket again automatically.
+                    try:
+                        result["recovery_archive"] = str(recover_before_switch(args.attempt_baseline, args.attempt_id))
+                    except RuntimeError:
+                        pass
+                    if hot_failure["kind"] == "baseline_regression":
+                        cases = hot_failure["evidence"]["baseline_failed_cases"]
+                        key = hashlib.sha256(json.dumps([active["base"], cases]).encode()).hexdigest()[:20]
+                        issue = state / "hot-baseline-issues" / f"{key}.json"
+                        if not issue.exists():
+                            gate.save(issue, {"base": active["base"], "cases": cases,
+                                              "blocked_task": active["task_id"], "event": active["event"],
+                                              "action": "Repair baseline and verify the recorded cases before replanning the blocked task."})
+                        result["baseline_issue"] = str(issue)
                 if code == 125:
                     result["outcome"] = "step_budget"
                 if getattr(args, "recovery_failed", False):
@@ -473,7 +541,11 @@ def run(root, runtime):
                     continue
                 if getattr(args, "awaiting_agent", False):
                     msg = f"[AGENT_UNAVAILABLE] {active['task_id']}: no eligible registration remains for this task; task returned to {tasks}. Restart worker or update configuration to retry."
-                    append_once(progress, f"agent_unavailable:{active['task_id']}", msg)
+                    append_once(progress, f"[AGENT_UNAVAILABLE] {active['task_id']}:", msg)
+                    exhausted_head = {"raw": raw, "task_id": active["task_id"],
+                                      "agents": {agent["id"]: fingerprint(agent) for agent in agents},
+                                      "exclusions": agent_state["task_exclusions"].get(active["task_id"], [])}
+                    gate.save(waiting_path, exhausted_head)
                     runtime.insert_task_front(tasks, raw)
                     active_path.unlink(missing_ok=True)
                     if not external:
@@ -504,8 +576,7 @@ def run(root, runtime):
                     if audit["status"]:
                         raise gate.GateError(audit["error"])
                 if finish(active, result):
-                    return 0
-                update("IDLE")
+                    drain_hooks = True
             except Exception as error:
                 if args is not None and getattr(args, "recovery_failed", False):
                     update("RECOVERY_FAILED", active["task_id"])
@@ -517,7 +588,8 @@ def run(root, runtime):
                     stopped.wait(poll)
                     continue
                 result.setdefault("runtime_error", {"phase": "lifecycle", "message": str(error)})
-                score_once(active, result, False)
+                if result.get("runtime_error", {}).get("kind") != "baseline_regression":
+                    score_once(active, result, False)
                 fail(active, result)
     finally:
         stopped.set()

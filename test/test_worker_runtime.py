@@ -122,6 +122,8 @@ def copy_runtime_fixture(destination):
     shutil.copy2(RUNTIME, destination)
     scratch_source = ROOT / "scripts/scratch_review.py" if (ROOT / "scripts").is_dir() else ROOT / "scripts/scratch_review.py"
     shutil.copy2(scratch_source, destination.parent / "scratch_review.py")
+    for name in ("lifecycle.py", "acceptance.py", "acceptance_hooks.py", "hook_control.py", "project_config.py"):
+        shutil.copy2(ROOT / "scripts" / name, destination.parent / name)
     # This fixture deliberately keeps the legacy scripts/ runtime layout, whose
     # runtime state and scratch files live at the repository root.
     legacy_gitignore = destination.parent.parent / ".gitignore"
@@ -2813,7 +2815,7 @@ class WorkerIntegrationTests(unittest.TestCase):
             self.assertEqual(pid_file.read_text(), f"{os.getpid()}\n")
             self.assertFalse((root / "tasks.txt").exists())
 
-    def test_timed_out_task_is_requeued_and_dirty_workspace_is_preserved_then_rolled_back(self):
+    def test_productive_timeout_archives_and_stops_without_requeue(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "repo"
             root.mkdir()
@@ -2851,19 +2853,15 @@ class WorkerIntegrationTests(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertEqual((root / "output.txt").read_text(), "baseline\n")
-            self.assertIn("TASK-T", (root / "tasks.txt").read_text())
-            self.assertEqual((root / "tasks.done").read_text(), "")
-            self.assertEqual(json.loads((root / ".worker-agent-state.default.json").read_text())
-                             ["task_exclusions"], {"TASK-T": ["timeout"]})
-            self.assertIn("Restart worker or update configuration to retry", (root / "progress.log").read_text())
+            self.assertNotIn("TASK-T", (root / "tasks.txt").read_text())
+            self.assertIn("[FAILED] TASK-T", (root / "tasks.done").read_text())
+            self.assertIn("[BLOCKED] TASK-T", (root / "progress.log").read_text())
             scratch = root / "scripts/.scratch" if (root / "scripts/.scratch").exists() else root / ".scratch"
             backups = list((scratch / "failed_tasks").glob("TASK-T_*/changes.diff"))
             self.assertEqual(len(backups), 1)
             self.assertIn("partial", backups[0].read_text())
             self.assertFalse((root / ".worker.pid").exists())
-            score = json.loads((root / ".worker-score-test.json").read_text())
-            self.assertNotIn("TASK-T", score["failures"])
-            self.assertEqual(score["score"], 5)
+
 
     def test_worker_task_failure_with_ignored_scratch_and_build_files_avoids_recursive_backup(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -3228,7 +3226,7 @@ class DaemonLifecycleTests(unittest.TestCase):
         self.start()
         self.wait_for(lambda: "[DONE] TASK-RETRY" in (self.root / "tasks.done").read_text())
 
-    def test_last_timed_out_registration_requeues_task_without_marking_failure(self):
+    def test_exhausted_shared_deadline_blocks_without_requeue(self):
         wrapper = Path(self.directory.name) / "slow-wrapper.py"
         wrapper.write_text(
             "import json,os,time\ntime.sleep(float(os.environ['AGENT_DELAY']))\n"
@@ -3248,11 +3246,9 @@ class DaemonLifecycleTests(unittest.TestCase):
             "TASK_TIMEOUT=0.1\nSTEP_BASE=1\nSTEP_PER_FILE=0\n")
         self.start()
         self.assertEqual(self.process.wait(timeout=10), 0)
-        self.assertEqual(self.state(), "WAITING_FOR_AGENT")
-        self.assertIn("TASK-TIMEOUT", (self.root / "tasks.txt").read_text())
-        self.assertEqual((self.root / "tasks.done").read_text(), "")
-        state = json.loads((self.root / ".worker-agent-state.default.json").read_text())
-        self.assertEqual(state["task_exclusions"], {"TASK-TIMEOUT": ["test"]})
+        self.assertIn(self.state(), ("BLOCKED", "PAUSED_FOR_PLANNER"))
+        self.assertNotIn("TASK-TIMEOUT", (self.root / "tasks.txt").read_text())
+        self.assertIn("[FAILED] TASK-TIMEOUT", (self.root / "tasks.done").read_text())
 
     def test_daemon_stops_on_sighup(self):
         self.start()

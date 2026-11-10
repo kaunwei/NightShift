@@ -235,7 +235,9 @@ pathlib.Path(os.environ['NIGHTSHIFT_RESULT_FILE']).write_text(json.dumps(result)
 
     def test_failure_pause_requires_restart_and_cleans_before_new_worker(self):
         self.task(fail=True)
-        self.assertNotEqual(self.git("status", "--porcelain"), "")
+        self.assertEqual(self.git("status", "--porcelain"), "")
+        report = json.loads(next((acceptance.state_dir(self.root) / "reports").glob("*/report.json")).read_text())
+        self.assertTrue((Path(report["result"]["recovery_archive"]) / "changes.diff").is_file())
         (self.root / "keep.ignored").write_text("keep")
         (self.root / "discard.txt").write_text("discard")
         self.task("TASK-B")
@@ -249,41 +251,39 @@ pathlib.Path(os.environ['NIGHTSHIFT_RESULT_FILE']).write_text(json.dumps(result)
         self.assertTrue((self.root / "keep.ignored").exists())
         self.assertEqual(self.git("stash", "list"), "")
 
-    def test_cold_cadence_silent_success_and_no_score(self):
+    def test_cold_cadence_counts_only_within_a_live_session(self):
         self.cfg["cold_every"] = 2
         self.write_config()
         self.git("add", "nightshift/config.json")
         self.git("commit", "-qm", "cold cadence")
         self.task()
-        self.assertNotIn("[COLD]", (self.root / "nightshift/tasks.txt").read_text())
         self.task("TASK-B")
-        self.assertIn("[COLD]", (self.root / "nightshift/tasks.txt").read_text())
-        head = self.git("rev-parse", "HEAD")
-        scores = [(p, p.read_bytes()) for p in (self.root / "nightshift/.worker-agent-scores").glob("*.json")]
+        self.assertIsNone(self.state("cold.json"))  # Two launches are two fresh counters.
+        queue = self.root / "nightshift/tasks.txt"
+        queue.write_text("".join(f"{identity} [CODE: FIX] | LEVEL: 3 | TARGET: value.txt,test,hot.json | VERIFY: true\n"
+                                 for identity in ("TASK-C", "TASK-D")))
         process = self.cli("daemon", "--root", str(self.root))
-        self.assertEqual(process.stdout, "")
-        self.assertEqual(process.stderr, "")
-        self.assertEqual(self.git("rev-parse", "HEAD"), head)
-        self.assertEqual(self.git("status", "--porcelain"), "")
+        head = self.git("rev-parse", "HEAD")
         self.assertEqual(self.state("cold.json")["passed"], head)
-        for path, content in scores:
-            self.assertEqual(path.read_bytes(), content)
+        self.assertNotIn("[COLD]", queue.read_text())
+        self.assertIn("TASK-D", self.git("log", "-1", "--format=%B"))
+        self.assertNotIn("TASK-COLD", process.stdout)
+        self.assertEqual(self.git("status", "--porcelain"), "")
 
-    def test_cold_failure_diagnoses_without_historical_score_change(self):
+    def test_cold_failure_diagnoses_without_reverting_accepted_commit(self):
         self.cfg.update(cold_every=1, cold="echo COLD_ERROR; exit 2")
         self.write_config()
         self.git("add", "nightshift/config.json")
         self.git("commit", "-qm", "cold failure")
         self.task()
-        scores = [(p, p.read_bytes()) for p in (self.root / "nightshift/.worker-agent-scores").glob("*.json")]
-        self.cli("daemon", "--root", str(self.root))
         self.assertIsNotNone(self.state("paused.json"))
         reports = list((acceptance.state_dir(self.root) / "reports").glob("*/report.json"))
         self.assertIn("COLD_ERROR", reports[-1].read_text())
-        for path, content in scores:
-            self.assertEqual(path.read_bytes(), content)
+        self.assertEqual(self.git("show", "HEAD:value.txt"), "TASK-A")
+        score = json.loads(next((self.root / "nightshift/.worker-agent-scores").glob("*.json")).read_text())
+        self.assertEqual(len(score["success_window"]), 1)
 
-    def test_score_replay_and_cold_deduplication(self):
+    def test_score_replay_does_not_recreate_cold_in_a_new_session(self):
         self.cfg["cold_every"] = 1
         self.write_config()
         self.git("add", "nightshift/config.json")
@@ -297,7 +297,7 @@ pathlib.Path(os.environ['NIGHTSHIFT_RESULT_FILE']).write_text(json.dumps(result)
         self.cli("daemon", "--root", str(self.root))
         score = json.loads(next((self.root / "nightshift/.worker-agent-scores").glob("*.json")).read_text())
         self.assertEqual(len(score["success_window"]), 1)
-        self.assertEqual((self.root / "nightshift/tasks.txt").read_text().count("[COLD]"), 1)
+        self.assertEqual((self.root / "nightshift/progress.log").read_text().count("[HOOK_PASS]"), 1)
 
     def test_workspace_lock_rejects_second_runtime(self):
         with acceptance.workspace(self.root):

@@ -22,11 +22,31 @@ import re
 import shlex
 import subprocess
 import tempfile
+import time
 import uuid
 
 
 class GateError(ValueError):
     pass
+
+
+class HotFailure(GateError):
+    def __init__(self, kind, message, evidence):
+        super().__init__(message)
+        self.kind, self.evidence = kind, evidence
+
+
+def verify_evidence(output, budget, started):
+    return {"timed_out": getattr(output, "timed_out", False),
+            "elapsed_seconds": round(getattr(output, "elapsed", time.monotonic() - started), 3),
+            "budget_seconds": getattr(output, "budget", budget)}
+
+
+def remaining(deadline):
+    value = deadline - time.monotonic()
+    if value <= 0:
+        raise HotFailure("timeout", "shared hot deadline exhausted before the next phase", {})
+    return value
 
 
 def git(root, *args):
@@ -145,9 +165,13 @@ def config(root):
         value.setdefault("version", raw["version"])
     if not isinstance(value, dict) or value.get("version") != 1:
         raise GateError("acceptance config requires version 1")
-    timeout = value.get("timeout", 180)
-    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not math.isfinite(timeout) or timeout <= 0:
-        raise GateError("acceptance timeout must be finite and positive")
+    for field in ("timeout", "hot_timeout", "cold_timeout"):
+        if field in value:
+            timeout = value[field]
+            if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not math.isfinite(timeout) or timeout <= 0:
+                raise GateError(f"acceptance {field} must be finite and positive")
+    value.setdefault("hot_timeout", phase_timeout(value, "hot"))
+    value.setdefault("cold_timeout", phase_timeout(value, "cold"))
     interval = value.get("cold_every")
     if interval is not None and (type(interval) is not int or interval < 1):
         raise GateError("cold_every must be a positive integer or absent")
@@ -155,6 +179,13 @@ def config(root):
     if not isinstance(wiring, list) or any(not safe_path(item) for item in wiring):
         raise GateError("wiring must list exact project-relative files")
     return value
+
+
+
+def phase_timeout(cfg, phase):
+    """Explicit phase budget wins; legacy timeout remains an explicit fallback."""
+    defaults = {"hot": 300, "cold": 1800}
+    return cfg.get(phase + "_timeout", cfg.get("timeout", defaults[phase]))
 
 
 def safe_path(name):
@@ -182,9 +213,10 @@ class AcceptanceRunner:
 class DefaultAcceptanceRunner(AcceptanceRunner):
     """Default runner executing configured commands with TDD evidence checking."""
 
-    def invoke(self, root, cfg, name, phase, base, run, task="", required=()):
+    def invoke(self, root, cfg, name, phase, base, run, task="", required=(),
+               deadline=None, only=(), allow_failure=False, evidence_root=None):
         nonce = uuid.uuid4().hex
-        output = state_dir(root) / "evidence" / f"{nonce}.json"
+        output = state_dir(evidence_root or root) / "evidence" / f"{nonce}.json"
         output.parent.mkdir(parents=True, exist_ok=True)
         environment = {"NIGHTSHIFT_PHASE": phase, "NIGHTSHIFT_RESULT": str(output.resolve()),
                        "NIGHTSHIFT_RUN": nonce, "NIGHTSHIFT_BASE": base,
@@ -194,17 +226,25 @@ class DefaultAcceptanceRunner(AcceptanceRunner):
         # Discover permanent membership with no ticket context.
         if phase == "discover":
             environment.update(NIGHTSHIFT_TASK="", NIGHTSHIFT_REQUIRED="[]")
+        environment["NIGHTSHIFT_ONLY_CASES"] = json.dumps(list(only))
+        if only:
+            environment["PROJECT_ROOT"] = str(root.resolve())
         prefix = "env " + " ".join(shlex.quote(f"{key}={val}") for key, val in environment.items())
         actual = f"{prefix} bash -c {shlex.quote(command(cfg, name))}"
-        code, text = run(actual, str(root), "3001", cfg.get("timeout", 180))
+        budget = remaining(deadline) if deadline is not None else phase_timeout(cfg, name)
+        started = time.monotonic()
+        code, text = run(actual, str(root), "3001", budget)
         evidence = {"phase": phase, "command": command(cfg, name), "exit": code,
-                    "output": text[-16384:], "run": nonce}
+                    "output": text[-16384:], "run": nonce, **verify_evidence(text, budget, started)}
         save(output.with_suffix(".log.json"), evidence)
-        if code:
+        if evidence["timed_out"]:
+            raise HotFailure("timeout", f"{name}/{phase} timed out after {budget:.1f}s", evidence)
+        if code and not allow_failure:
             raise GateError(f"{name}/{phase} exited {code}\n{text[-16384:]}")
         data = load(output)
         if not isinstance(data, dict) or data.get("run") != nonce or not isinstance(data.get("cases"), list):
-            raise GateError(f"{name}/{phase}: missing or stale case evidence: {output}")
+            raise HotFailure("undetermined", f"{name}/{phase}: missing or stale case evidence: {output}", evidence)
+        evidence["supports_case_selection"] = data.get("supports_case_selection") is True
         cases = {}
         for case in data["cases"]:
             if not isinstance(case, dict) or not isinstance(case.get("id"), str) or not case["id"] or case["id"] in cases:
@@ -212,10 +252,55 @@ class DefaultAcceptanceRunner(AcceptanceRunner):
             cases[case["id"]] = case
         return cases, evidence
 
+    def classify_failure(self, root, cfg, args, run, permanent, executed, evidence):
+        failed = sorted(identity for identity, case in executed.items() if case.get("status") == "failed")
+        details = {"candidate": evidence, "failed_cases": failed}
+        if not failed or any(c.get("status") not in ("passed", "failed") for c in executed.values()):
+            return HotFailure("undetermined", "hot did not produce conclusive assertion results", details)
+        baseline_candidates = [identity for identity in failed if identity in permanent
+                               and permanent[identity].get("baseline_fingerprint") is not None]
+        if not baseline_candidates:
+            return HotFailure("ticket_regression", "new hot case failed on the ticket", details)
+        if not evidence.get("supports_case_selection"):
+            return HotFailure("undetermined", "hot runner does not support isolated case selection", details)
+        deadline = time.monotonic() + phase_timeout(cfg, "hot")
+        try:
+            # A linked worktree retains the Git metadata required by the hot protocol.
+            with tempfile.TemporaryDirectory(prefix="nightshift-hot-base-") as temp:
+                checkout = Path(temp) / "checkout"
+                git(root, "worktree", "add", "--quiet", "--detach", str(checkout), args.base)
+                try:
+                    baseline_cfg = dict(cfg)
+                    argv = shlex.split(command(cfg, "hot"))
+                    if len(argv) == 2 and argv[0] == "bash" and Path(argv[1]).is_absolute():
+                        script = Path(argv[1]).resolve()
+                        if script.is_relative_to(root.resolve()):
+                            baseline_cfg["hot"] = shlex.join(["bash", str(checkout / script.relative_to(root.resolve()))])
+                    baseline, record = self.invoke(checkout, baseline_cfg, "hot", "run", args.base,
+                                                   run, args.task_id, baseline_candidates, deadline=deadline,
+                                                   only=baseline_candidates, allow_failure=True, evidence_root=root)
+                    details["baseline"] = record
+                finally:
+                    git(root, "worktree", "remove", "--force", str(checkout))
+        except (OSError, ValueError, subprocess.SubprocessError) as error:
+            details["baseline_error"] = str(error)
+            return HotFailure("undetermined", "isolated hot baseline could not be verified", details)
+        if (not record["supports_case_selection"] or set(baseline) != set(baseline_candidates)
+                or any(case.get("status") not in ("passed", "failed") or
+                       case.get("fingerprint") != permanent[identity].get("baseline_fingerprint")
+                       for identity, case in baseline.items())):
+            return HotFailure("undetermined", "isolated hot baseline evidence is incomplete", details)
+        baseline_red = sorted(identity for identity, case in baseline.items() if case["status"] == "failed")
+        details["baseline_failed_cases"] = baseline_red
+        if baseline_red:
+            return HotFailure("baseline_regression", "hot also fails on the accepted baseline; repair it before retrying", details)
+        return HotFailure("ticket_regression", "hot fails on the ticket but passes on its baseline", details)
+
     def run_hot(self, args, result, run):
         root = Path(args.work_dir)
         print(f"\n[HOT_GATE] >>> Starting Hot Acceptance Gate for task: {args.task_id}", flush=True)
         cfg = config(root)
+        deadline = time.monotonic() + phase_timeout(cfg, "hot")
         for name in cfg.get("wiring", []):
             if subprocess.run(["git", "-C", str(root), "check-ignore", "-q", "--", name]).returncode == 0:
                 raise GateError(f"persistent hot wiring must be delivered in Git: {name}")
@@ -223,7 +308,7 @@ class DefaultAcceptanceRunner(AcceptanceRunner):
         if not isinstance(declarations, list) or not declarations:
             raise GateError("development handoff requires nonempty tdd_cases")
         print(f"[HOT_GATE] Discovering permanent test cases (baseline={args.base[:8]})...", flush=True)
-        permanent, discovery = self.invoke(root, cfg, "hot", "discover", args.base, run)
+        permanent, discovery = self.invoke(root, cfg, "hot", "discover", args.base, run, deadline=deadline)
         declared, canonical, dropped, seen = {}, [], [], set()
         original = json.loads(json.dumps(declarations))
         for item in declarations:
@@ -285,9 +370,10 @@ class DefaultAcceptanceRunner(AcceptanceRunner):
             explicit = [part.strip() for part in explicit.split(",") if part.strip()]
         required.update(explicit)
         print(f"[HOT_GATE] Running hot test suite with {len(required)} required TDD cases...", flush=True)
-        executed, execution = self.invoke(root, cfg, "hot", "run", args.base, run, args.task_id, sorted(required))
-        if not executed or any(case.get("status") != "passed" for case in executed.values()):
-            raise GateError("hot contains failed, skipped or invalid case results")
+        executed, execution = self.invoke(root, cfg, "hot", "run", args.base, run, args.task_id, sorted(required),
+                                          deadline=deadline, allow_failure=True)
+        if execution["exit"] or not executed or any(case.get("status") != "passed" for case in executed.values()):
+            raise self.classify_failure(root, cfg, args, run, permanent, executed, execution)
         for identity in required:
             if executed.get(identity, {}).get("status") != "passed":
                 raise GateError(f"required case did not execute and pass: {identity}")
@@ -295,12 +381,16 @@ class DefaultAcceptanceRunner(AcceptanceRunner):
                                             for field in ("source", "fingerprint")):
                 raise GateError(f"case evidence changed between discovery and execution: {identity}")
         evidence = [discovery, execution]
-        if args.verify and args.verify.lower() not in ("none", "report_only"):
+        if args.verify and args.verify.lower() not in ("none", "report_only") and args.verify.strip() != command(cfg, "hot").strip():
             print(f"[HOT_GATE] Running task verify command: {args.verify}...", flush=True)
-            code, output = run(args.verify, str(root), args.worker_port, cfg.get("timeout", 180))
-            evidence.append({"phase": "task", "command": args.verify, "exit": code, "output": output[-16384:]})
+            budget, started = remaining(deadline), time.monotonic()
+            code, output = run(args.verify, str(root), args.worker_port, budget)
+            record = {"phase": "task_verify", "command": args.verify, "exit": code,
+                      "output": output[-16384:], **verify_evidence(output, budget, started)}
+            evidence.append(record)
             if code:
-                raise GateError(f"task VERIFY exited {code}\n{output[-16384:]}")
+                raise HotFailure("timeout" if record["timed_out"] else "task_verify",
+                                 f"task VERIFY exited {code}\n{output[-16384:]}", record)
         print(f"[HOT_GATE] <<< Hot Acceptance Gate PASSED cleanly for {args.task_id}!\n", flush=True)
         return {"cases": sorted(executed), "evidence": evidence, "tdd_reconciliation": reconciliation}
 
@@ -311,28 +401,12 @@ class DefaultAcceptanceRunner(AcceptanceRunner):
                 proc = subprocess.run(cmd, cwd=cwd, shell=True, capture_output=True, text=True, timeout=timeout)
                 return proc.returncode, proc.stdout + proc.stderr
             runner = default_runner
+        # Compatibility for direct project runner callers; lifecycle uses the same executor.
+        import acceptance_hooks as hooks
         cfg = config(root)
         head = git(root, "rev-parse", "HEAD")
-        path = state_dir(root) / "cold.json"
-        state = load(path, {"commits": [], "pending": False})
-        if state.get("passed") == head:
-            state.update(commits=[], pending=False)
-            save(path, state)
-            return
-        ignored = re.compile(r"(?:^|/)(?:scripts/|nightshift/)?(?:progress\.log|tasks\.txt|tasks\.done|worker\..*\.status|\.preview|\.reports|\.worker.*|\.scratch)")
-        def product_status():
-            raw = git(root, "status", "--porcelain", "--untracked-files=all")
-            return [line for line in raw.splitlines() if line and not ignored.search(line[3:])]
-
-        before = product_status()
-        if before:
-            raise GateError("cold requires a clean product tree")
-        code, output = runner(command(cfg, "cold"), str(root), "3001", cfg.get("timeout", 180))
-        after = product_status()
-        if code or before != after or git(root, "rev-parse", "HEAD") != head:
-            raise GateError(f"cold failed or changed product files (exit {code}) at {head}\n{output[-16384:]}")
-        state.update(passed=head, commits=[], pending=False)
-        save(path, state)
+        run = hooks.make_run(hooks.cold_spec(cfg), "direct", head, "TASK-COLD", head, cfg)
+        return hooks.execute(root, run, runner, allow_custom_cold=False)
 
 
 def get_runner(root, cfg=None):
@@ -423,28 +497,6 @@ def pause(root, task, detail):
     if not path.exists():
         save(path, {"task": task, "detail": detail})
         print(f"[PLANNER_REQUIRED] {task}: {detail}", flush=True)
-
-
-def schedule_cold(root, commit, tasks, insert):
-    try:
-        cfg = config(root)
-    except GateError:
-        return
-    interval = cfg.get("cold_every")
-    if interval is None:
-        return
-    path = state_dir(root) / "cold.json"
-    state = load(path, {"commits": [], "pending": False})
-    # A ledger survives completed intervals so replay cannot count a commit twice.
-    counted = state.setdefault("counted", [])
-    if commit and commit not in counted:
-        counted.append(commit)
-        state["commits"].append(commit)
-    if len(state["commits"]) >= interval or state["pending"]:
-        state["pending"] = True
-        save(path, state)
-        insert(tasks, "TASK-COLD [COLD] | LEVEL: 1 | ACTION: project cold")
-    save(path, state)
 
 
 def hot(args, result, run):

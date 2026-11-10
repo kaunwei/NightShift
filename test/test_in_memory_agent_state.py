@@ -79,7 +79,7 @@ class InMemoryAgentStateTests(unittest.TestCase):
             installation = workspace / "nightshift"
             installation.mkdir()
             shutil.copytree(ROOT / "scripts" / "adapters", installation / "adapters")
-            for name in ("worker.sh", "worker_runtime.py", "lifecycle.py", "acceptance.py",
+            for name in ("worker.sh", "worker_runtime.py", "lifecycle.py", "acceptance.py", "acceptance_hooks.py", "hook_control.py",
                          "scratch_review.py", "project_config.py", "status.sh", "watch_worker.sh", "reorder_queue.sh"):
                 shutil.copy2(ROOT / "scripts" / name, installation / name)
 
