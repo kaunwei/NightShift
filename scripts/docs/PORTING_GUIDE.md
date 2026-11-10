@@ -1,12 +1,12 @@
 # NightShift External Project Architecture Guide
 
-External architecture isolates NightShift runtime state, task queues, and AST indices from the target repository. Target repositories retain zero NightShift footprint.
+External architecture isolates NightShift runtime state, task queues, and AST indices from the target repository. Target repositories retain zero NightShift runtime footprint; project-owned automation stays with product source.
 
 ## 1. Directory Structure
 
 - Core: NightShift engine, adapters, and agent skills.
-- Runner Workspace: Project state directory under `projects/<project_name>/`.
-- Target Project: Clean git worktree containing only product source and tests.
+- Runner Workspace: One directory per project, containing its activator, configuration and temporary state. `projects/<project_name>/` is an example grouping; `<runner>/<project_name>/` is equally valid.
+- Target Project: Product Git worktree containing source, tests, permanent documentation and project-owned automation.
 
 ```text
 runner-workspace/
@@ -27,9 +27,62 @@ runner-workspace/
       reports/             # Failure diagnostic reports
 ```
 
+### Ownership and project selection
+
+Treat the selected project's runner as a directory. For example,
+`NightShift_runner/slugbox/` contains `env.sh`, `config.json` and that project's
+state. Preserve the user's chosen directory layout; the optional `projects/`
+grouping above does not require another nesting level.
+
+| Content | Maintained location |
+| --- | --- |
+| Shared engine, adapters and skills | NightShift core |
+| Per-project `env.sh` activator and `config.json` | Selected project's runner directory |
+| Queues, status, logs, temporary specs, tickets, handoffs, notes and indices | Same project's runner directory |
+| Hot/cold test runners, framework evidence adapters, release/demo/build/serve scripts and export presets | Target project, using its existing script/configuration conventions |
+| Generated regression reports, build/demo artifacts, import caches and local TLS keys | Selected project's runner directory, in appropriate temporary subdirectories |
+
+Project selection means sourcing that directory's activator in the current
+terminal:
+
+```bash
+cd /absolute/path/to/NightShift_runner/slugbox
+source env.sh
+ns-status
+```
+
+The runner's "launcher" is this `env.sh` activator. Keep `config.json` beside it
+with `state: "."`. An instruction to keep launchers and temporary files in the
+runner retains this per-project directory and its configuration. It does not ask
+for an executable file named `slugbox`, a project-selection CLI or a new subshell.
+Create such interfaces only when explicitly requested.
+
+The runner needs no Git repository or Git protection. Keep project-specific
+script implementations under the product's version control; the external config
+invokes them from the product root. Temporary outputs go to the selected runner.
+NightShift's product commit/scope audits still apply to the target worktree.
+
+### Migration checks
+
+Before moving files, read this guide completely and identify the core, product
+and chosen per-project runner paths. Classify each moved file using the table.
+Keep existing queues, references and generated artifacts intact during migration.
+
+Before declaring the port complete, verify all of the following:
+
+- Sourcing `env.sh` selects the intended product and exports absolute config,
+  state and temporary-document paths in the current terminal.
+- `env.sh` and `config.json` remain together in that project's runner directory;
+  `state: "."` resolves there. Switching projects replaces every exported path.
+- Hot/cold and artifact hooks invoke product-maintained scripts; their generated
+  outputs stay in the selected runner.
+- With an empty queue, `RUN_ONCE=1 ns-worker` exits cleanly and `ns-status` reads
+  the same project's state. Existing work is not dispatched just to test setup.
+
 ## 2. Configuration: config.json
 
-Place `config.json` in `projects/<project_name>/config.json`:
+Place `config.json` beside the selected runner's `env.sh` (for example,
+`projects/<project_name>/config.json` or `slugbox/config.json`):
 
 ```json
 {
@@ -66,7 +119,8 @@ Place `config.json` in `projects/<project_name>/config.json`:
 ## 3. Environment Anchor: env.sh
 
 `env.sh` anchors agent and terminal sessions to the project runner state.
-Always source it: `source projects/<project_name>/env.sh`.
+Always source the selected project's file, for example
+`source projects/<project_name>/env.sh` or `source slugbox/env.sh`.
 
 Template for `projects/<project_name>/env.sh`:
 
