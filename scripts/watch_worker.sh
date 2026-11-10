@@ -33,10 +33,10 @@ while [ $# -gt 0 ]; do
   esac
 done
 if [ -z "$CONFIG_FILE" ]; then
-  if [ -f "$NIGHTSHIFT_DIR/config.json" ]; then
-    CONFIG_FILE="$NIGHTSHIFT_DIR/config.json"
-  elif [ -n "${NIGHTSHIFT_CONFIG_FILE:-}" ]; then
+  if [ -n "${NIGHTSHIFT_CONFIG_FILE:-}" ]; then
     CONFIG_FILE="$NIGHTSHIFT_CONFIG_FILE"
+  elif [ -f "$NIGHTSHIFT_DIR/config.json" ]; then
+    CONFIG_FILE="$NIGHTSHIFT_DIR/config.json"
   fi
 fi
 if [ -z "$PROJECT_SELECTION" ] && [ -n "${NIGHTSHIFT_PROJECT_NAME:-}" ]; then
@@ -53,7 +53,7 @@ cd "$PROJECT_ROOT" || exit 1
 
 # Explicit planner routing; legacy positional invocation remains stdout-only.
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
-  echo "Usage: $0 [--agent codex|agy --planner-id ID] [timeout_seconds [interval_seconds [task_id]]]"
+  echo "Usage: $0 [--config PATH] [--project NAME] [--agent codex|agy --planner-id ID] [timeout_seconds [interval_seconds [task_id]]]"
   echo "--agent selects the Planner notification target, independently of Worker agent."
   echo "Codex: queue --thread ID --resume; AgY: --conversation ID -p EVENT."
   echo "Without --agent, events are emitted on stdout for an existing host integration."
