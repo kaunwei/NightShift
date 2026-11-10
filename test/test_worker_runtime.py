@@ -151,7 +151,7 @@ def codex_registration(registration_id, executable="codex", model="", **settings
 
 
 def generic_registration(registration_id, executable, args=(), env=None, **settings):
-    overrides = {"executable": str(executable), "args": list(args), "env": env or {}, **settings}
+    overrides = {"executable": str(executable), "args": list(args), "env": env or {}, "initial_score": 5, **settings}
     return {"id": registration_id, "adapter": "generic", "command": sys.executable,
             "args": [str(ROOT / "scripts/adapters/generic.py")], "overrides": overrides}
 
@@ -159,7 +159,7 @@ def generic_registration(registration_id, executable, args=(), env=None, **setti
 def task_cli_adapter(adapter, executable, **settings):
     return ["--adapter", adapter, "--executable", sys.executable,
             "--extra-arg", str(ROOT / "scripts/adapters" / f"{adapter}.py"),
-            "--overrides", json.dumps({"executable": str(executable), **settings})]
+            "--overrides", json.dumps({"executable": str(executable), **({"initial_score": 5} if adapter == "generic" else {}), **settings})]
 
 
 class WorkerPromptContractTests(unittest.TestCase):
@@ -390,7 +390,7 @@ class AgentScoreContractTests(unittest.TestCase):
                                "--output-file", root / f"{registration_id}.log",
                                "--result-file", root / f"{registration_id}.json",
                                "--score-state-file", state_root, "--base", "HEAD",
-                               "--task-id", f"TASK-{registration_id}")
+                               "--task-id", f"TASK-{registration_id}", "--level", "3")
             low = execute("low")
             high = execute("high")
             self.assertEqual(low.returncode, 0, low.stderr)
@@ -3474,7 +3474,7 @@ class InstallerIntegrationTests(unittest.TestCase):
                 "--executable",sys.executable,"--extra-arg",str(adapter),"--work-dir",str(repo),
                 "--prompt-file",str(Path(directory)/"prompt.txt"),"--output-file",str(Path(directory)/"run.log"),
                 "--result-file",str(Path(directory)/"result.json"),"--task-id","TASK-INSTALLED",
-                "--target",".","--base","HEAD"],cwd=target,capture_output=True,text=True,timeout=15)
+                "--target",".","--base","HEAD","--level","3"],cwd=target,capture_output=True,text=True,timeout=15)
             self.assertEqual(result.returncode,0,result.stdout+result.stderr)
             self.assertEqual(json.loads((Path(directory)/"result.json").read_text())["outcome"],"no_change")
 

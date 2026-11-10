@@ -41,9 +41,9 @@ class InMemoryAgentStateTests(unittest.TestCase):
             )
 
             agents = [
-                {"id": "agent-a", "adapter": "generic", "command": "cmd-a", "worker": {
+                {"id": "agent-a", "adapter": "generic", "overrides": {"initial_score": 5}, "command": "cmd-a", "worker": {
                     "task_timeout_seconds": 10, "step_base": {"L1": 20, "L2": 20, "L3": 20}}},
-                {"id": "agent-b", "adapter": "generic", "command": "cmd-b", "worker": {
+                {"id": "agent-b", "adapter": "generic", "overrides": {"initial_score": 5}, "command": "cmd-b", "worker": {
                     "task_timeout_seconds": 10, "step_base": {"L1": 20, "L2": 20, "L3": 20}}},
             ]
 
@@ -134,13 +134,13 @@ pathlib.Path(os.environ["NIGHTSHIFT_RESULT_FILE"]).write_text(json.dumps(result)
                     "agent_alpha": {
                         "default": True,
                         "worker": {"task_timeout_seconds": 10, "step_base": {"L1": 20, "L2": 20, "L3": 20}},
-                        "agent": {"adapter": "generic", "command": sys.executable, "args": [str(worker_runner)],
+                        "agent": {"adapter": "generic", "config": {"initial_score": 5}, "command": sys.executable, "args": [str(worker_runner)],
                                   "env": {"NIGHTSHIFT_AGENT_ID": "agent_alpha"}}
                     },
                     "agent_beta": {
                         "default": False,
                         "worker": {"task_timeout_seconds": 10, "step_base": {"L1": 20, "L2": 20, "L3": 20}},
-                        "agent": {"adapter": "generic", "command": sys.executable, "args": [str(worker_runner)],
+                        "agent": {"adapter": "generic", "config": {"initial_score": 5}, "command": sys.executable, "args": [str(worker_runner)],
                                   "env": {"NIGHTSHIFT_AGENT_ID": "agent_beta"}}
                     }
                 }

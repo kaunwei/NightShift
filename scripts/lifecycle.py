@@ -471,7 +471,10 @@ def run_session(root, runtime, scheduler):
                     stopped.wait(poll)
                     continue
             try:
-                raw = runtime.pop_task(tasks, claim_path=active_path, validate=ticket_policy.validate)
+                def validate_claim(raw):
+                    ticket_policy.validate(raw)
+                    runtime.validate_task_capacity(runtime.load_agent_registry(registry), raw, agent_scores)
+                raw = runtime.pop_task(tasks, claim_path=active_path, validate=validate_claim)
             except ValueError as error:
                 diagnostic = {"status": "contract-blocked", "reason": str(error)}
                 if gate.load(state / "contract.json", {}) != diagnostic:

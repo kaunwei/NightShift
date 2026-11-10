@@ -71,12 +71,12 @@ class HotBaselineTests(unittest.TestCase):
 
 
 class SharedAgentBudgetTests(unittest.TestCase):
-    def exercise(self, elapsed, actions):
+    def exercise(self, elapsed, actions, fallback_score=5):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             args = argparse.Namespace(work_dir=temp, task_id="TASK-X", title="TASK-X",
                                       timeout=10, output_file=str(root / "out"), result_file=str(root / "result"))
-            agents = [{"id": name, "adapter": "generic", "command": "test",
+            agents = [{"id": name, "adapter": "generic", "overrides": {"initial_score": 5 if name == "a" else fallback_score}, "command": "test",
                        "worker": {"task_timeout_seconds": 6}} for name in ("a", "b")]
             clock, budgets, rollbacks = [100], [], []
 
@@ -100,6 +100,9 @@ class SharedAgentBudgetTests(unittest.TestCase):
 
     def test_fallback_receives_only_remaining_time(self):
         self.assertEqual(self.exercise(6, 0), (0, [6, 4]))
+
+    def test_failover_never_assigns_broad_work_to_lower_capability(self):
+        self.assertEqual(self.exercise(6, 0, fallback_score=1), (0, [6]))
 
     def test_expired_or_productive_ticket_does_not_restart_on_another_adapter(self):
         self.assertEqual(self.exercise(10, 0), (124, [6]))

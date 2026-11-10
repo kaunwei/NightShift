@@ -805,7 +805,7 @@ def adapter_callback(command, callback, request, extra_args=(), timeout=30):
 
 def execute_adapter_protocol(command, request, extra_args=(), trace=None,
                              callback_timeout=30, execution_timeout=1800,
-                             start_callback="start"):
+                             start_callback="start", authorize=None):
     """Run one external adapter execution through config, asynchronous start and status."""
     base = {"protocol_version": ADAPTER_PROTOCOL_VERSION, **request}
     if trace:
@@ -829,6 +829,8 @@ def execute_adapter_protocol(command, request, extra_args=(), trace=None,
         raise ValueError("adapter get_config limits must be an object")
     if not isinstance(configuration.get("configuration", {}), dict):
         raise ValueError("adapter get_config configuration must be an object")
+    if authorize:
+        authorize(configuration)
     callback_timeout = configuration.get("limits", {}).get(
         "callback_timeout_seconds", callback_timeout)
     if not isinstance(callback_timeout, (int, float)) or callback_timeout <= 0:
@@ -986,6 +988,35 @@ def agent_supports_task(agent, title, constraints=""):
     return scratch_review.is_review(title) or is_research_task(title)
 
 
+def agent_allows_level(agent, title, score_root=""):
+    """Read capability without creating score state or starting model work."""
+    if scratch_review.is_review(title):
+        return True
+    score_path = registered_agent_score_path(score_root, agent["id"]) if isinstance(score_root, (str, Path)) and score_root else None
+    if score_path and score_path.is_file():
+        score = read_agent_score_state(score_root, agent["id"])["score"]
+    else:
+        try:
+            configuration = adapter_callback(sys.executable, "get_config", {
+                "protocol_version": ADAPTER_PROTOCOL_VERSION,
+                "registration_id": agent["id"], "overrides": agent.get("overrides", {})},
+                [str(Path(__file__).resolve().parent / "adapters" / f"{agent['adapter']}.py")])
+        except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
+            raise ValueError(f"cannot verify Worker capability for {agent['id']}: {error}") from error
+        score = configuration.get("initial_score")
+        if configuration.get("protocol_version") != ADAPTER_PROTOCOL_VERSION or type(score) is not int or not 1 <= score <= 5:
+            raise ValueError(f"invalid adapter capability for {agent['id']}")
+    level = int(task_field(title, "LEVEL") or "1")
+    return level >= score_task_level(score)
+
+
+def validate_task_capacity(agents, title, score_root):
+    candidates = [agent for agent in agents if agent_supports_task(agent, title)]
+    if candidates and not any(agent_allows_level(agent, title, score_root) for agent in candidates):
+        raise ValueError(f"LEVEL {task_field(title, 'LEVEL') or '1'} exceeds all eligible Worker capabilities; "
+                         "Planner must narrow the ticket LEVEL/scope or select a capable registration")
+
+
 def execute_registered_agents(args, agents, state_path, rollback):
     state = read_agent_state(state_path)
     is_memory = isinstance(state_path, dict)
@@ -997,7 +1028,9 @@ def execute_registered_agents(args, agents, state_path, rollback):
     task_exclusions = state.get("task_exclusions", {}).get(args.task_id, [])
     task_agents = [agent for agent in agents
                    if agent_supports_task(agent, getattr(args, "title", ""),
-                                          getattr(args, "constraints", ""))]
+                                          getattr(args, "constraints", ""))
+                   and agent_allows_level(agent, getattr(args, "title", ""),
+                                          getattr(args, "agent_score_state_file", ""))]
     available = [agent for agent in task_agents
                  if agent["id"] not in task_exclusions]
     if not available:
@@ -1024,6 +1057,14 @@ def execute_registered_agents(args, agents, state_path, rollback):
     deadline = time.monotonic() + args.timeout
     while True:
         agent = available[current_index]
+        if not agent_allows_level(agent, getattr(args, "title", ""),
+                                  getattr(args, "agent_score_state_file", "")):
+            available.pop(current_index)
+            if not available:
+                args.awaiting_agent = True
+                return 0, False
+            current_index %= len(available)
+            continue
         attempt = argparse.Namespace(**vars(args))
         attempt.attempt_id = str(uuid.uuid4())
         snapshot_root = Path(getattr(args, "attempt_snapshot_root", "") or
@@ -1189,7 +1230,15 @@ def poll_next(args):
                                      and Path(args.dispatch_gate).exists()):
         fields[0] = "paused"
         return fields
-    raw = pop_task(args.tasks, validate=ticket_policy.validate)
+    config_candidate = (Path(args.work_dir) / "scripts/config.json"
+                        if (Path(args.work_dir) / "scripts/config.json").is_file()
+                        else Path(args.work_dir) / "nightshift/config.json")
+    def validate_claim(raw):
+        ticket_policy.validate(raw)
+        if config_candidate.is_file():
+            validate_task_capacity(load_agent_registry(config_candidate), raw,
+                                   config_candidate.parent / ".worker-agent-scores")
+    raw = pop_task(args.tasks, validate=validate_claim)
     def count(path):
         source = Path(path)
         if not source.exists():
@@ -1777,9 +1826,24 @@ def execute_adapter_task(args):
     }
     acceptance.save(acceptance.state_dir(args.work_dir) / "last-adapter.json",
                     {"request": request, "command": adapter_command, "args": list(adapter_args)})
+    def authorize_level(configuration):
+        if scratch_review.is_review(getattr(args, "title", "")):
+            return
+        score_root = getattr(args, "agent_score_state_file", "")
+        score_path = registered_agent_score_path(score_root, request["registration_id"]) if score_root else None
+        score = (read_agent_score_state(score_root, request["registration_id"])["score"]
+                 if score_path and score_path.is_file() else configuration["initial_score"])
+        level = int(task_field(getattr(args, "title", ""), "LEVEL") or getattr(args, "level", 1))
+        if level not in (1, 2, 3):
+            raise ValueError("LEVEL must be 1, 2 or 3")
+        args.level = str(level)
+        if level < score_task_level(score):
+            raise ValueError(f"LEVEL {level} exceeds Worker {request['registration_id']} capability "
+                             f"(score {score}; requires L{score_task_level(score)} or narrower)")
     status = execute_adapter_protocol(adapter_command, request, adapter_args,
                                       callback_timeout=getattr(args, "callback_timeout", 30),
-                                      execution_timeout=getattr(args, "execution_timeout", args.timeout))
+                                      execution_timeout=getattr(args, "execution_timeout", args.timeout),
+                                      authorize=authorize_level)
     score_root = getattr(args, "agent_score_state_file", "")
     if score_root and status.get("adapter_initial_score") is not None:
         initialize_agent_score(score_root, request["registration_id"],

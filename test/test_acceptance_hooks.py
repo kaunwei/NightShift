@@ -117,7 +117,7 @@ class HookTests(unittest.TestCase):
                            "with open(os.environ['NIGHTSHIFT_RESULT_FILE'], 'w') as out:\n"
                            "    json.dump({'outcome':'complete','changed':True,'commit_message':'test: fixture'}, out)\n")
         self.write_config({"fixture": {"worker": {"step_base": {"L1": 10, "L2": 10, "L3": 10}},
-                                      "agent": {"adapter": "generic", "command": sys.executable, "args": [str(adapter)]}}})
+                                      "agent": {"adapter": "generic", "config": {"initial_score": 5}, "command": sys.executable, "args": [str(adapter)]}}})
         marker = self.runner / "launcher-marker"
         spec = {"id": "launch", "after": "TASK-A", "argv": [sys.executable, "-c",
                 f"open({str(marker)!r}, 'a').write('ran\\n')"]}

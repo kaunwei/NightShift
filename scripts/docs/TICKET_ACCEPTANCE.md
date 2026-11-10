@@ -2,7 +2,26 @@
 
 Implemented 2026-11-10. This amendment supersedes earlier descriptions of
 recursive target budgets and automatic same-task hard-failure penalties.
-Planner skill slicing guidance remains a separate, deferred change.
+Existing Planner skills remain unchanged by owner decision.
+
+## Worker capability ceiling
+
+LEVEL communicates the permitted task scope; Workers need not receive exactly
+their recommended level. Script enforces the one-way ceiling: score 5 can take
+L1/L2/L3, scores 3-4 can take L2/L3, and scores 1-2 can take L3 only. Smaller
+numeric levels mean broader work. Missing LEVEL defaults to L1.
+
+Before claim, runtime requires a task-compatible registration with sufficient
+capability. Routing and every failover start check again. Direct task-cli also
+checks before adapter start; the ticket LEVEL controls the subsequent scope
+audit even if a conflicting CLI level is supplied. Persisted registration score
+takes precedence; an uninitialized registration uses get_config.initial_score
+without starting model work or creating score state. No qualified registration
+leaves the FIFO untouched under CONTRACT_BLOCKED, without feedback penalties.
+Internal scratch maintenance remains a runtime operation outside Planner task
+sizing. Existing TARGET, assertion and per-level deletion checks remain active;
+script does not infer semantic scope from prose or impose a new file-count cap.
+Planner skill changes are not needed for this enforcement.
 
 ## Evidence contract
 

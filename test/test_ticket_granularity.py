@@ -74,6 +74,57 @@ Path(os.environ['NIGHTSHIFT_RESULT_FILE']).write_text(json.dumps(result))
     def score(self):
         return json.loads(runtime.registered_agent_score_path(self.runner / ".worker-agent-scores", "fixture").read_text())
 
+    def test_low_initial_capability_keeps_broad_task_queued_then_accepts_narrow_task(self):
+        cfg = json.loads(self.config_path.read_text())
+        cfg["agents"]["fixture"]["agent"]["config"]["initial_score"] = 1
+        self.config_path.write_text(json.dumps(cfg))
+        self.plan.write_text('{}')
+        title = "TASK-L [CODE: REFACTOR] | LEVEL: 1 | TARGET: calc.py | EVIDENCE: EXISTING | CASES: test_behavior.Behavior.test_existing"
+        queue = self.runner / "tasks.txt"; queue.write_text(title + "\n")
+        blocked = self.cli("daemon", "--root", self.root, "--config", self.config_path)
+        self.assertEqual(blocked.returncode, 2, blocked.stdout + blocked.stderr)
+        self.assertIn("exceeds all eligible Worker capabilities", blocked.stdout)
+        self.assertEqual(queue.read_text(), title + "\n")
+        self.assertFalse((self.runner / ".worker-agent-scores").exists())
+        self.assertEqual(self.git("rev-parse", "HEAD").decode().strip(), self.head)
+        self.dispatch(title.replace("LEVEL: 1", "LEVEL: 3"))
+        self.assertEqual(self.score()["score"], 1)
+        self.assertEqual(self.score()["success_window"], ["TASK-L"])
+
+    def test_persisted_low_score_overrides_high_adapter_initial_score(self):
+        runtime.initialize_agent_score(self.runner / ".worker-agent-scores", "fixture", 1)
+        queue = self.runner / "tasks.txt"
+        queue.write_text("TASK-L [CODE: FIX] | LEVEL: 2 | TARGET: calc.py\n")
+        before = self.score()
+        blocked = self.cli("daemon", "--root", self.root, "--config", self.config_path)
+        self.assertEqual(blocked.returncode, 2, blocked.stdout + blocked.stderr)
+        self.assertEqual(self.score(), before)
+        self.assertIn("TASK-L", queue.read_text())
+
+    def test_direct_task_cli_cannot_bypass_level_guard(self):
+        prompt = self.base / "direct-prompt"; prompt.write_text("fixture")
+        marker = self.base / "unauthorized-start"
+        blocked = self.cli("task-cli", "--adapter", "generic", "--executable", sys.executable,
+            "--extra-arg", SCRIPTS / "adapters/generic.py", "--overrides",
+            json.dumps({"initial_score": 1, "executable": sys.executable,
+                        "args": ["-c", f"from pathlib import Path;Path({str(marker)!r}).touch()"]}),
+            "--work-dir", self.root, "--prompt-file", prompt,
+            "--output-file", self.base / "direct-output", "--title", "TASK-L | LEVEL: 1", "--level", "3")
+        self.assertNotEqual(blocked.returncode, 0)
+        self.assertIn("exceeds Worker", blocked.stdout + blocked.stderr)
+        self.assertFalse(marker.exists())
+
+    def test_routing_skips_weak_default_for_capable_registration(self):
+        cfg = json.loads(self.config_path.read_text())
+        strong = json.loads(json.dumps(cfg["agents"]["fixture"]))
+        cfg["agents"]["fixture"]["agent"]["config"]["initial_score"] = 1
+        cfg["agents"]["strong"] = strong
+        self.config_path.write_text(json.dumps(cfg))
+        self.dispatch("TASK-L [CODE: REFACTOR] | LEVEL: 1 | TARGET: calc.py | EVIDENCE: EXISTING | CASES: test_behavior.Behavior.test_existing")
+        records = [json.loads(p.read_text()) for p in (self.runner / "lifecycle/tasks").glob("*.json")]
+        self.assertEqual(records[0]["result"]["registration_id"], "strong")
+        self.assertFalse(runtime.registered_agent_score_path(self.runner / ".worker-agent-scores", "fixture").exists())
+
     def test_l3_mechanical_ticket_reuses_pinned_cases_and_full_hot(self):
         self.dispatch("TASK-M [CODE: REFACTOR] | LEVEL: 3 | TARGET: calc.py | EVIDENCE: EXISTING | CASES: test_behavior.Behavior.test_existing | VERIFY: true")
         records = [json.loads(p.read_text()) for p in (self.runner / "lifecycle/tasks").glob("*.json")]
@@ -168,6 +219,16 @@ Path(os.environ['NIGHTSHIFT_RESULT_FILE']).write_text(json.dumps(result))
 
 
 class BudgetAndScoreTests(Fixture):
+    def test_level_permission_matrix_and_missing_level_default(self):
+        scores = self.runner / "scores"
+        for score in range(1, 6):
+            agent = {"id": str(score)}
+            runtime.initialize_agent_score(scores, agent["id"], score)
+            for level in (1, 2, 3):
+                self.assertEqual(runtime.agent_allows_level(agent, f"TASK-X | LEVEL: {level}", scores),
+                                 level >= runtime.score_task_level(score))
+            self.assertEqual(runtime.agent_allows_level(agent, "TASK-X", scores), score == 5)
+
     def test_directory_contents_do_not_change_planned_count_and_floor(self):
         (self.root / "src").mkdir()
         for i in range(100): (self.root / "src" / str(i)).write_text("unrelated")

@@ -52,7 +52,7 @@ class Fixture(unittest.TestCase):
         path = self.base / "config.json"
         path.write_text(json.dumps({"version": 1, "agents": {"fixture": {
             "worker": {"step_base": {"L1": 10, "L2": 10, "L3": 10}, **(worker or {})},
-            "agent": {"adapter": "generic", "command": sys.executable}}},
+            "agent": {"adapter": "generic", "config": {"initial_score": 5}, "command": sys.executable}}},
             "acceptance": {"version": 1, "hot": "true", **(acceptance or {})}}))
         return path
 

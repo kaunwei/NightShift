@@ -52,7 +52,7 @@ class WaitingForAgentTests(unittest.TestCase):
     def write_registry(self, slow):
         entry = {'default': True, 'worker': {'step_base': {'L1': 10, 'L2': 10, 'L3': 10},
                                              'task_timeout_seconds': 0.5},
-                 'agent': {'adapter': 'generic', 'command': sys.executable, 'args': [str(self.adapter)],
+                 'agent': {'adapter': 'generic', 'config': {'initial_score': 5}, 'command': sys.executable, 'args': [str(self.adapter)],
                            'env': {'FIXTURE_SLOW': '1' if slow else '0'}}}
         temp = self.config.with_suffix('.tmp')
         temp.write_text(json.dumps({'version': 1, 'projects': {'fixture': {'path': str(self.project),
