@@ -31,12 +31,14 @@
     "verify_process.py",
     "evidence_capabilities.py",
     "acceptance_hooks.py",
+    "background_hooks.py",
     "hook_control.py",
     "docs/RUNTIME_HARDENING.md",
     "docs/AGENT_CONTRACT_REVIEW.md",
     "ticket_policy.py",
     "outcome_policy.py",
-    "docs/TICKET_ACCEPTANCE.md"
+    "docs/TICKET_ACCEPTANCE.md",
+    "docs/BACKGROUND_HOOKS.md"
   ],
   "skill_files": [
     {

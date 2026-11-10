@@ -59,18 +59,25 @@ argv, cwd, env, prompt, result, status, log = sys.argv[1:]
 code = subprocess.run(json.loads(argv) + [open(prompt, encoding="utf-8").read()], cwd=cwd,
     env={**os.environ, **json.loads(env)}, stdout=open(log,"w"), stderr=subprocess.STDOUT,
     text=True, check=False).returncode
+invalid_result=False
 try:
     payload=json.load(open(result,encoding="utf-8"))
     if not isinstance(payload,dict) or payload.get("outcome") not in ("complete","no_change","closeout_required","blocked","scope_blocked","guidance","failure"):
         raise ValueError("unsupported outcome")
     outcome=payload["outcome"]
 except (OSError,ValueError,TypeError) as error:
+    invalid_result=True
     payload={"outcome":"failure","diagnostic":f"wrapper must write a structured JSON result to NIGHTSHIFT_RESULT_FILE: {error}"}
     json.dump(payload,open(result,"w",encoding="utf-8")); outcome="failure"
 if code and outcome in ("complete","no_change"): outcome="failure"
 diagnostic=open(log,encoding="utf-8",errors="replace").read()
-state="execution_timeout" if "print timeout after" in diagnostic.lower() else ("complete" if outcome=="no_change" else outcome)
-json.dump({"status":state,"result_location":result,"exit_code":code},open(status,"w",encoding="utf-8"))
+state=("execution_timeout" if "print timeout after" in diagnostic.lower() else
+       "complete" if outcome in ("complete","no_change") else
+       "closeout_required" if outcome=="closeout_required" else "failed")
+command_failed=(state=="failed" and outcome=="failure" and (code!=0 or invalid_result)
+                and json.loads(env).get("NIGHTSHIFT_EXECUTION_KIND")!="closeout")
+json.dump({"status":state,"result_location":result,"exit_code":code,
+           **({"command_failed":True} if command_failed else {})},open(status,"w",encoding="utf-8"))
 '''
     argv = [cfg["executable"], *cfg["args"]]
     proc = subprocess.Popen([sys.executable, "-c", runner, json.dumps(argv),

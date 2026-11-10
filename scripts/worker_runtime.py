@@ -805,7 +805,7 @@ def adapter_callback(command, callback, request, extra_args=(), timeout=30):
 
 def execute_adapter_protocol(command, request, extra_args=(), trace=None,
                              callback_timeout=30, execution_timeout=1800,
-                             start_callback="start", authorize=None):
+                             start_callback="start", authorize=None, cancel_event=None):
     """Run one external adapter execution through config, asynchronous start and status."""
     base = {"protocol_version": ADAPTER_PROTOCOL_VERSION, **request}
     if trace:
@@ -838,6 +838,8 @@ def execute_adapter_protocol(command, request, extra_args=(), trace=None,
     base["configuration"] = configuration.get("configuration", {})
     base["limits"] = {**configuration.get("limits", {}), **base.get("limits", {})}
     started = time.monotonic()
+    if cancel_event is not None and cancel_event.is_set():
+        return {"status": "execution_timeout", "stopped": True, "diagnostic": "cancelled before start"}
     try:
         execution = adapter_callback(command, start_callback, base, extra_args,
                                      timeout=min(callback_timeout, execution_timeout))
@@ -892,6 +894,8 @@ def execute_adapter_protocol(command, request, extra_args=(), trace=None,
 
     while True:
         elapsed = time.monotonic() - started
+        if cancel_event is not None and cancel_event.is_set():
+            return cancel("execution_timeout")
         if elapsed >= execution_timeout:
             return cancel("execution_timeout")
         try:
@@ -925,7 +929,11 @@ def execute_adapter_protocol(command, request, extra_args=(), trace=None,
             interval = max(0.01, float(interval))
         except (TypeError, ValueError) as error:
             raise ValueError("adapter poll_interval_seconds must be a positive number") from error
-        time.sleep(min(interval, max(0, execution_timeout - (time.monotonic() - started))))
+        wait = min(interval, max(0, execution_timeout - (time.monotonic() - started)))
+        if cancel_event is not None:
+            cancel_event.wait(wait)
+        else:
+            time.sleep(wait)
 
 
 def should_failover_agent(exit_code, result_text):
@@ -1859,7 +1867,11 @@ def execute_adapter_task(args):
     result = json.loads(result_path.read_text(encoding="utf-8")) if result_path.exists() else {}
     terminal_failure = (isinstance(result, dict) and result.get("outcome") in
                         ("blocked", "scope_blocked", "guidance", "failure"))
-    if terminal_failure and status.get("status") in ("complete", "closeout_required", "failed"):
+    if status.get("command_failed"):
+        code = status.get("exit_code") or 1
+        result["runtime_error"] = {"phase": "agent", "kind": "command_failure", "code": code,
+                                   "message": result.get("diagnostic", "wrapper command failed")}
+    elif terminal_failure and status.get("status") in ("complete", "closeout_required", "failed"):
         code = finalize_structured_adapter_result(args, result)
         try:
             args.diagnostic_only = True

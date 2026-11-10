@@ -12,10 +12,10 @@ import uuid
 import acceptance
 
 
-def run(command, work_dir, port, timeout, output_type):
+def run(command, work_dir, port, timeout, output_type, *, cancel_fd=None, environment=None, directory=None):
     started = time.monotonic()
     try:
-        directory = acceptance.state_dir(work_dir) / "verify"
+        directory = Path(directory) if directory is not None else acceptance.state_dir(work_dir) / "verify"
     except OSError as error:
         if os.environ.get("NIGHTSHIFT_STATE_DIR") or error.errno not in (errno.EACCES, errno.EROFS, errno.EPERM):
             raise
@@ -25,7 +25,7 @@ def run(command, work_dir, port, timeout, output_type):
     directory.mkdir(parents=True, exist_ok=True)
     log_path = directory / (uuid.uuid4().hex + ".log")
     metadata_path = log_path.with_suffix(".json")
-    environment = {**os.environ, "PORT": str(port), "TEST_PORT": str(port)}
+    environment = {**(os.environ if environment is None else environment), "PORT": str(port), "TEST_PORT": str(port)}
     tail = bytearray()
     total = 0
     scan_tail = b""
@@ -33,6 +33,7 @@ def run(command, work_dir, port, timeout, output_type):
     invalid_repro = False
     eof = False
     timed_out = False
+    cancelled = False
     with log_path.open("xb", buffering=0) as log:
         process = subprocess.Popen(["bash", "-c", command], cwd=work_dir, env=environment,
                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
@@ -43,7 +44,9 @@ def run(command, work_dir, port, timeout, output_type):
         os.set_blocking(process.stdout.fileno(), False)
 
         def drain(wait):
-            nonlocal eof, total, scan_tail, empty_test_run, invalid_repro
+            nonlocal eof, total, scan_tail, empty_test_run, invalid_repro, cancelled
+            if cancel_fd is not None and select.select([cancel_fd], [], [], 0)[0]:
+                cancelled = not os.read(cancel_fd, 1)
             if eof:
                 time.sleep(min(wait, .02))
                 return
@@ -73,13 +76,15 @@ def run(command, work_dir, port, timeout, output_type):
 
         try:
             while process.poll() is None or not eof:
+                if cancelled:
+                    break
                 remaining = started + timeout - time.monotonic()
                 if remaining <= 0:
                     timed_out = True
                     break
                 drain(min(.1, remaining))
-            if timed_out:
-                stop(signal.SIGTERM)
+            if timed_out or cancelled:
+                stop(signal.SIGKILL if cancelled else signal.SIGTERM)
                 end = time.monotonic() + 2
                 while (process.poll() is None or not eof) and time.monotonic() < end:
                     drain(.05)
@@ -89,14 +94,14 @@ def run(command, work_dir, port, timeout, output_type):
                     while (process.poll() is None or not eof) and time.monotonic() < end:
                         drain(.02)
                 process.wait(timeout=1)
-            code = 124 if timed_out else process.wait(timeout=1)
+            code = 130 if cancelled else 124 if timed_out else process.wait(timeout=1)
         except BaseException:
             stop(signal.SIGKILL)
             process.wait(timeout=1)
             raise
         finally:
             process.stdout.close()
-        record.update(status="timeout" if timed_out else "exited", exit=code,
+        record.update(status="cancelled" if cancelled else "timeout" if timed_out else "exited", exit=code,
                       elapsed_seconds=round(time.monotonic() - started, 3), output_bytes=total)
         acceptance.save(metadata_path, record)
     output = output_type(bytes(tail).decode("utf-8", "replace"), timed_out=timed_out,
@@ -105,4 +110,5 @@ def run(command, work_dir, port, timeout, output_type):
     output.output_bytes = total
     output.empty_test_run = empty_test_run
     output.invalid_repro = invalid_repro
+    output.cancelled = cancelled
     return code, output

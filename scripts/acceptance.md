@@ -162,6 +162,11 @@ Upgrade preserves project configuration; it does not invent a hot gate for you.
 
 ## Worker handoff
 
+Custom periodic hooks can add an optional second_stage. See
+[two-stage background hooks](docs/BACKGROUND_HOOKS.md) for configuration,
+artifact/report variables, commit-only counts, isolated clones, failure diagnosis
+and session-only restart behavior.
+
 The [ticket contract](docs/TICKET_ACCEPTANCE.md) defines planned FILES budgets,
 the common preparation floor, explicit REFACTOR/EXISTING and VERIFY-only modes,
 preclaim validation, and evidence-backed automatic scoring. Default development

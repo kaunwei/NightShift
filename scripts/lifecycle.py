@@ -19,6 +19,7 @@ import hook_control
 import preflight
 import ticket_policy
 import outcome_policy
+import background_hooks
 
 
 def task_level(raw):
@@ -140,8 +141,11 @@ def run_session(root, runtime, scheduler):
     signals = [signal.SIGTERM, signal.SIGINT]
     if hasattr(signal, "SIGHUP"):
         signals.append(signal.SIGHUP)
+    def stop_session(*_):
+        stopped.set()
+        scheduler.background.cancel()
     for sig in signals:
-        previous[sig] = signal.signal(sig, lambda *_: stopped.set())
+        previous[sig] = signal.signal(sig, stop_session)
     running = {"state": "IDLE", "current_task": None, "pid": os.getpid(),
                "work_dir": str(root), "worker_id": os.environ.get("WORKER_ID", "default"),
                "os": os.environ.get("OS_TYPE", "auto"), "platform": os.name,
@@ -277,7 +281,8 @@ def run_session(root, runtime, scheduler):
         if journal.get("phase") != "accepted":
             scheduled_hook = scheduler.accepted(
                 active["task_id"], active["event"], commit or active["base"],
-                committed=bool(commit and commit != active["base"] and not runtime.is_research_task(active["raw"])))
+                committed=bool(commit and commit != active["base"] and not runtime.is_research_task(active["raw"])),
+                registration=next((agent for agent in agents if agent["id"] == result.get("registration_id")), None))
         journal.update(phase="accepted", commit=commit, result=result, event=active["event"],
                        metrics=journal.get("metrics") or metrics(active, result))
         gate.save(journal_path, journal)
@@ -288,15 +293,49 @@ def run_session(root, runtime, scheduler):
     drain_hooks = False
     try:
         while not stopped.is_set():
+            # Process completion only at a task boundary, before all dispatch gates.
+            completed = scheduler.background.poll()
+            if completed:
+                hook, receipt = completed
+                if receipt["status"] == "passed":
+                    append_once(progress, hook["id"], f"[HOOK_PASS] {hook['hook']} | Background_Run: {hook['id']} | Revision: {hook['revision']}")
+                else:
+                    hook_id = "TASK-HOOK-" + hook["id"]
+                    update("VERIFYING", hook_id, "hook_diagnostic")
+                    try:
+                        current_agents = runtime.load_agent_registry(registry)
+                    except (OSError, ValueError):
+                        current_agents = []
+                    receipt["ghost"] = background_hooks.diagnose(hook, runtime, current_agents, stopped=stopped)
+                    gate.save(Path(hook["directory"]) / "result.json", receipt)
+                    append_once(progress, hook["id"], f"[BLOCKED] {hook_id} | Report: {hook['directory']}/result.json | Priority: repair")
+                    append_once(done, hook["id"], f"[FAILED] {hook_id} [HOOK] | Report: {hook['directory']}/result.json")
+                    update("BLOCKED", hook_id, "post_acceptance_hook")
+                    print(f"[HOOK_FAILED] {hook_id}: priority Planner repair; report={hook['directory']}/result.json", flush=True)
+                    if once:
+                        return 0
+                    continue
+            if scheduler.background.blocked():
+                update("PAUSED_FOR_PLANNER", phase="post_acceptance_hook")
+                if once:
+                    return 0
+                stopped.wait(poll)
+                continue
             if (state / "paused.json").exists() or dispatch_gate.exists():
                 update("PAUSED_FOR_PLANNER")
                 if once:
+                    if scheduler.background.busy():
+                        stopped.wait(min(poll, .1))
+                        continue
                     return 0
                 stopped.wait(poll)
                 continue
             if pause.exists():
                 update("PAUSED")
                 if once:
+                    if scheduler.background.busy():
+                        stopped.wait(min(poll, .1))
+                        continue
                     return 0
                 stopped.wait(poll)
                 continue
@@ -402,7 +441,30 @@ def run_session(root, runtime, scheduler):
                     scheduler.settle(hook["id"], "failed", error=failure)
                 continue
             if drain_hooks:
-                return 0
+                if not scheduler.background.has_work():
+                    return 0
+            preparation = scheduler.background.next(root, state / "background-hooks")
+            if preparation:
+                update("VERIFYING", "TASK-HOOK-" + preparation["id"], "hook_first_stage")
+                try:
+                    def prepare_verify(command, work_dir, port, timeout):
+                        started = time.monotonic()
+                        code, output = runtime.run_verify(command, work_dir, port, timeout)
+                        gate.save(Path(preparation["directory"]) / "first-stage.json", {
+                            "exit": code, "output": str(output)[-16384:],
+                            **gate.verify_evidence(output, timeout, started)})
+                        return code, output
+                    first_run = {**preparation, "environment": {**preparation["environment"],
+                                 "NIGHTSHIFT_HOOK_ARTIFACT_DIR": preparation["prepared"]}}
+                    hooks.execute(root, first_run, prepare_verify, cfg=scheduler.cfg)
+                    scheduler.background.launch(root, preparation)
+                    print(f"[HOOK_BACKGROUND] {preparation['hook']} | Revision: {preparation['revision']} | Run: {preparation['id']}", flush=True)
+                except (OSError, ValueError, subprocess.SubprocessError, RuntimeError) as error:
+                    scheduler.background.failed_preparation(preparation, error)
+                continue
+            if drain_hooks:
+                stopped.wait(min(poll, .1))
+                continue
             if time.monotonic() - scratch_checked >= 60:
                 runtime.scratch_review.check(owned, tasks, runtime.insert_task_front, runtime.atomic_write)
                 scratch_checked = time.monotonic()
@@ -489,6 +551,9 @@ def run_session(root, runtime, scheduler):
                 if running["state"] != "BLOCKED":
                     update("IDLE")
                 if once:
+                    if scheduler.background.has_work():
+                        stopped.wait(min(poll, .1))
+                        continue
                     if not is_silent_cold:
                         print("[WORKER] Queue is empty and RUN_ONCE is enabled. Exiting.")
                     return 0
@@ -666,6 +731,7 @@ def run_session(root, runtime, scheduler):
                 fail(active, result)
     finally:
         stopped.set()
+        scheduler.background.close()
         thread.join(timeout=2)
         if running["state"] not in ("BLOCKED", "PAUSED", "PAUSED_FOR_PLANNER", "AGENT_NO_RESPONSE", "RECOVERY_FAILED", "WAITING_FOR_AGENT", "ENVIRONMENT_BLOCKED", "HOOK_INTERRUPTED", "CONTRACT_BLOCKED"):
             update("STOPPED")

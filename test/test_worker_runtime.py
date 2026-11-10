@@ -122,7 +122,7 @@ def copy_runtime_fixture(destination):
     shutil.copy2(RUNTIME, destination)
     scratch_source = ROOT / "scripts/scratch_review.py" if (ROOT / "scripts").is_dir() else ROOT / "scripts/scratch_review.py"
     shutil.copy2(scratch_source, destination.parent / "scratch_review.py")
-    for name in ("attempt_archive.py", "preflight.py", "environment_probe.py", "verify_process.py", "evidence_capabilities.py", "ticket_policy.py", "outcome_policy.py", "lifecycle.py", "acceptance.py", "acceptance_hooks.py", "hook_control.py", "project_config.py"):
+    for name in ("attempt_archive.py", "preflight.py", "environment_probe.py", "verify_process.py", "evidence_capabilities.py", "ticket_policy.py", "outcome_policy.py", "lifecycle.py", "acceptance.py", "acceptance_hooks.py", "background_hooks.py", "hook_control.py", "project_config.py"):
         shutil.copy2(ROOT / "scripts" / name, destination.parent / name)
     # This fixture deliberately keeps the legacy scripts/ runtime layout, whose
     # runtime state and scratch files live at the repository root.

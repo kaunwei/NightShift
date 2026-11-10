@@ -12,14 +12,15 @@ import time
 import uuid
 
 import acceptance as gate
+import background_hooks
 
 
 COLD_ID = "nightshift-cold"
 
 
 def spec(value, trigger):
-    if not isinstance(value, dict) or set(value) - {"id", trigger, "argv", "timeout"}:
-        raise gate.GateError(f"invalid acceptance hook: expected id, {trigger}, argv, optional timeout")
+    if not isinstance(value, dict) or set(value) - {"id", trigger, "argv", "timeout", "second_stage"}:
+        raise gate.GateError(f"invalid acceptance hook: expected id, {trigger}, argv, optional timeout/second_stage")
     identity, when, argv = (value.get(key) for key in ("id", trigger, "argv"))
     if not isinstance(identity, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", identity):
         raise gate.GateError("invalid hook id")
@@ -32,6 +33,11 @@ def spec(value, trigger):
     timeout = value.get("timeout")
     if "timeout" in value and (type(timeout) not in (int, float) or not math.isfinite(timeout) or timeout <= 0):
         raise gate.GateError("hook timeout must be finite and positive")
+    if "second_stage" in value:
+        second = value["second_stage"]
+        if trigger != "every" or not isinstance(second, dict) or set(second) - {"argv", "timeout"}:
+            raise gate.GateError("second_stage is supported only on periodic hooks with argv and optional timeout")
+        spec({"id": identity, "every": 1, **second}, "every")
     return dict(value)
 
 
@@ -68,7 +74,9 @@ def make_run(hook, trigger, event, task, revision, cfg):
 class Scheduler:
     def __init__(self, cfg, *, state_path=None, project=None):
         self.cfg = cfg
-        self.periodic = configured(cfg)
+        all_hooks = configured(cfg)
+        self.background = background_hooks.BackgroundHooks([h for h in all_hooks if "second_stage" in h], cfg)
+        self.periodic = [h for h in all_hooks if "second_stage" not in h]
         self.lock = threading.Lock()
         self.events = {}
         self.oneshots = {}
@@ -134,6 +142,7 @@ class Scheduler:
             registrations = [{"id": value["spec"]["id"], "after": value["spec"]["after"], "fired": value["fired"]}
                              for value in list(self.oneshots.values())[offset:offset + 20]]
             return {"durable": self.state_path is not None, "runs": rows, "registrations": registrations,
+                    "background": self.background.list(offset),
                     "offset": offset, "total_runs": len(runs), "total_registrations": len(self.oneshots)}
 
     def interrupted(self):
@@ -142,6 +151,8 @@ class Scheduler:
 
     def cancel(self, identity):
         with self.lock:
+            if self.background.cancel_run(identity):
+                return
             run = self.runs.get(identity)
             if run is not None:
                 if run["status"] not in ("pending", "failed", "interrupted"):
@@ -174,11 +185,12 @@ class Scheduler:
             self.runs[run["id"]] = run
             self.pending.append(run["id"])
 
-    def accepted(self, task, event, revision, *, committed=False):
+    def accepted(self, task, event, revision, *, committed=False, registration=None):
         with self.lock:
             if event in self.events:
                 return False
             self.events[event] = task
+            self.background.accepted(task, event, revision, committed, registration)
             previous = len(self.pending)
             for hook in self.periodic:
                 if hook.get("count") == "commits" and not committed:
@@ -253,6 +265,7 @@ def execute(root, run, verify, *, allow_custom_cold=True, cold_passed=None, cfg=
         "NIGHTSHIFT_HOOK_ID": run["hook"], "NIGHTSHIFT_HOOK_RUN_ID": run["id"],
         "NIGHTSHIFT_HOOK_REVISION": run["revision"], "NIGHTSHIFT_HOOK_TASK": run["trigger_task"],
     }
+    variables.update(run.get("environment", {}))
     started = time.monotonic()
     runner = gate.get_runner(root, cfg) if is_cold and allow_custom_cold else None
     if runner is not None and getattr(type(runner), "run_cold", None) is not gate.DefaultAcceptanceRunner.run_cold:

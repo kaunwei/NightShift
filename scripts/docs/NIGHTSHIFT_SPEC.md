@@ -290,6 +290,26 @@ TARGET/assertion/deletion audits remain; there is no new semantic-prose or file
 count limit. Runtime-owned scratch maintenance is exempt. No skill change is
 required; Planner retains its task-scope and natural-language sizing judgment.
 
+31. Two-stage periodic hooks (2026-11-11): the optional second_stage extension
+is specified in [BACKGROUND_HOOKS.md](BACKGROUND_HOOKS.md). Existing unextended
+hooks keep their synchronous accepted-event semantics. Dual-stage hooks count
+only accepted development commits, run preparation synchronously, seal copied
+artifacts, then analyze an exact revision in an independent clone without
+worktree/alternates/hardlinks. A single project slot and saturated counters
+coalesce busy triggers into latest-revision work, with fair rotation and no
+background pending-run queue. Completion is collected only between tickets;
+failed work gets a bounded, non-editing ghost using its original registration,
+then a volatile priority-repair hold without Worker scoring or journal mutation.
+Live hook-cancel acknowledges the failure; new development commits re-enable
+background scheduling. State remains RAM-only even with durable legacy hooks.
+A pipe-owned supervisor terminates command groups on daemon shutdown/death;
+RUN_ONCE drains background work. Reports/logs and failed snapshots are retained
+as evidence, not recovery state. Manifest/revision and live freshness metadata
+prevent older analysis from masquerading as current acceptance. Skills remain
+unchanged. Generic adapter maps blocked/failure outcomes to protocol failed,
+retaining structured outcomes for diagnostic callbacks. Main wrapper command
+errors/malformed results remain single-attempt failures without ghost/failover.
+
 ## Testing Decisions
 
 - Test each NightShift role at its highest stable CLI/state contract. Assert observable dispatch, report freshness/artifacts, persisted state, process outcome, audit, or handoff; avoid private helpers, prompt wording, and chain-of-thought. Planner/Explore CLI/state seams describe role-level verification, not a claim that separate executable schedulers already exist.
