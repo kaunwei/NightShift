@@ -5,6 +5,10 @@ explicitly restarts after failures. Setup is required; legacy VERIFY alone is
 not evidence that a new TDD case ran. Generated lifecycle state lives under
 `git rev-parse --git-path nightshift`; it is outside Git history and cleanup.
 
+See [script-only runtime follow-ups](docs/RUNTIME_HARDENING.md) for retained
+attempts, configurable readiness probes, POSIX live logs, optional evidence
+capabilities, opt-in durable hooks and capacity inspection.
+
 ## Configure a project
 
 Track `scripts/config.json` with the project's acceptance and agent commands:
@@ -57,7 +61,8 @@ accepted development commits as before. Manual `[COLD]` tickets enter the same
 hook ledger. Cold retains its per-revision pass record and silent success;
 it does not change score or Git history. Counts and the per-session pass cache
 start empty on every worker launch. The last cold result file is audit output,
-not control input. Outputs must be ignored by Git.
+not control input. Outputs must be ignored by Git. With `durable_hooks: true`,
+counters and the per-revision pass cache persist in the dedicated hook ledger.
 
 `wiring` lists exact configuration/registration files Ghost may edit to connect
 existing tests. Include those files and tests in task TARGET. Ghost also may supply
@@ -96,14 +101,16 @@ The CLI sends commands to the live worker through a private local pipe. It
 does not register work when no worker is running. The worker owns one in-memory
 scheduler; it does not poll or replay an acceptance hook ledger. Relaunching
 `worker.sh` loads config and starts with no one-shots, counters, pending runs,
-or retry state. Register one-shots again after relaunching. A manually queued
+or retry state by default. Opting into `acceptance.durable_hooks` persists these
+obligations and deduplication identities; interrupted effects require explicit
+review and retry/cancel. Register session-only one-shots again after relaunching. A manually queued
 `[COLD]` ticket remains part of the ordinary task queue.
 
 Nonzero exits and timeouts use the cold-style failure report and pause dispatch;
 accepted commits, reports and explicit pause controls are preserved. To retry a
 failed hook in the same live worker, run `hook-retry --root . --config ... --run-id RUN_ID`,
 then the Planner `restart` command to clear the failure pause without relaunching.
-A relaunched worker cannot retry a previous session's hook. Treat registered
+A relaunched session-only worker cannot retry a previous session's hook. Treat registered
 argv as trusted project code; do not embed secrets in it.
 
 ## Hot failure triage and adapter deadlines
@@ -248,7 +255,8 @@ not in runtime heuristics.
    checking for a clean worktree, including generated product files under `scripts/`.
    Runner state is preserved. A changed HEAD or cleanup failure pauses dispatch
    again; restarting without a failure pause does not authorize cleanup.
-   No failed patch is stashed, archived or continued. Configured PAUSE and agent
+   A restore-verified attempt package is retained before destructive cleanup;
+   failed patches are not automatically continued. Configured PAUSE and agent
    event gates remain separate controls. Cleanup failure keeps dispatch paused.
 
 Cold failure uses the same diagnosis and restart flow, treated as a new issue;

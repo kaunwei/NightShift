@@ -44,6 +44,11 @@ def respond(message, path, scheduler):
         elif request["command"] == "retry":
             scheduler.retry(request["run_id"])
             response = {"retry_pending": request["run_id"]}
+        elif request["command"] == "list":
+            response = scheduler.list_runs(request.get("offset", 0))
+        elif request["command"] == "cancel":
+            scheduler.cancel(request["run_id"])
+            response = {"cancelled": request["run_id"]}
         else:
             raise gate.GateError("unknown hook control command")
     except (OSError, ValueError, KeyError, TypeError) as error:

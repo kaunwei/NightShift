@@ -24,7 +24,15 @@
     "lifecycle.py",
     "unittest_hot.py",
     "acceptance.md",
-    "PORTING_GUIDE.md"
+    "PORTING_GUIDE.md",
+    "attempt_archive.py",
+    "preflight.py",
+    "environment_probe.py",
+    "verify_process.py",
+    "evidence_capabilities.py",
+    "acceptance_hooks.py",
+    "hook_control.py",
+    "docs/RUNTIME_HARDENING.md"
   ],
   "skill_files": [
     {

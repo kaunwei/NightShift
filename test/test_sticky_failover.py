@@ -21,6 +21,8 @@ class StickyFailoverTests(unittest.TestCase):
         (self.root / "scripts").mkdir()
         shutil.copy2(ROOT / "scripts/worker_runtime.py", self.root / "scripts/worker_runtime.py")
         shutil.copy2(ROOT / "scripts/scratch_review.py", self.root / "scripts/scratch_review.py")
+        for name in ('attempt_archive.py', 'preflight.py', 'environment_probe.py', 'verify_process.py', 'evidence_capabilities.py'):
+            shutil.copy2(ROOT / "scripts" / name, self.root / "scripts" / name)
         shutil.copytree(ROOT / "scripts/adapters", self.root / "scripts/adapters")
 
         subprocess.run(["git", "init", "-q", str(self.root)], check=True)

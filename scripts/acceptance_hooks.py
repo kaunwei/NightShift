@@ -3,6 +3,7 @@
 from collections import deque
 from pathlib import Path
 import hashlib
+import json
 import math
 import re
 import shlex
@@ -65,7 +66,7 @@ def make_run(hook, trigger, event, task, revision, cfg):
 
 
 class Scheduler:
-    def __init__(self, cfg):
+    def __init__(self, cfg, *, state_path=None, project=None):
         self.cfg = cfg
         self.periodic = configured(cfg)
         self.lock = threading.Lock()
@@ -75,6 +76,83 @@ class Scheduler:
         self.runs = {}
         self.pending = deque()
         self.cold_passed = None
+        self.state_path = Path(state_path) if state_path else None
+        self.project = str(Path(project).resolve()) if project else ""
+        self.config_hash = hashlib.sha256(json.dumps(self.periodic, sort_keys=True).encode()).hexdigest()
+        self.persistence_failed = False
+        if type(cfg.get("durable_hooks", False)) is not bool:
+            raise gate.GateError("durable_hooks must be boolean")
+        if cfg.get("durable_hooks"):
+            if self.state_path is None or not self.project:
+                raise gate.GateError("durable hooks require explicit project and state path")
+            self._restore()
+        else:
+            self.state_path = None
+
+    def _persist(self):
+        if self.state_path is not None:
+            try:
+                gate.save(self.state_path, {"version": 1, "project": self.project,
+                          "config_hash": self.config_hash, "events": self.events,
+                          "oneshots": self.oneshots, "counts": self.counts, "runs": self.runs,
+                          "pending": list(self.pending), "cold_passed": self.cold_passed})
+                self.state_path.chmod(0o600)
+            except OSError:
+                self.persistence_failed = True
+                raise
+
+    def _restore(self):
+        if not self.state_path.exists():
+            return
+        data = json.loads(self.state_path.read_text())
+        if (data.get("version") != 1 or data.get("project") != self.project
+                or data.get("config_hash") != self.config_hash):
+            raise gate.GateError("durable hook state belongs to an incompatible project/configuration; retained for review")
+        for name in ("events", "oneshots", "counts", "runs"):
+            if not isinstance(data.get(name), dict):
+                raise gate.GateError(f"invalid durable hook {name}")
+            setattr(self, name, data[name])
+        if not isinstance(data.get("pending"), list) or len(set(data["pending"])) != len(data["pending"]):
+            raise gate.GateError("invalid durable hook pending list")
+        self.pending = deque(data["pending"])
+        for identity in self.pending:
+            if self.runs.get(identity, {}).get("status") != "pending":
+                raise gate.GateError("invalid pending hook reference")
+        for run in self.runs.values():
+            if run.get("status") == "running":
+                run.update(status="interrupted", error="worker stopped before recording completion; inspect side effects before retry")
+        self.cold_passed = data.get("cold_passed")
+        self._persist()
+
+    def list_runs(self, offset=0):
+        with self.lock:
+            if type(offset) is not int or offset < 0:
+                raise gate.GateError("hook list offset must be a nonnegative integer")
+            runs = list(self.runs.values())
+            rows = [{key: run.get(key) for key in ("id", "hook", "status", "revision", "trigger_task")}
+                    for run in runs[offset:offset + 20]]
+            registrations = [{"id": value["spec"]["id"], "after": value["spec"]["after"], "fired": value["fired"]}
+                             for value in list(self.oneshots.values())[offset:offset + 20]]
+            return {"durable": self.state_path is not None, "runs": rows, "registrations": registrations,
+                    "offset": offset, "total_runs": len(runs), "total_registrations": len(self.oneshots)}
+
+    def interrupted(self):
+        with self.lock:
+            return any(run.get("status") == "interrupted" for run in self.runs.values())
+
+    def cancel(self, identity):
+        with self.lock:
+            run = self.runs.get(identity)
+            if run is not None:
+                if run["status"] not in ("pending", "failed", "interrupted"):
+                    raise gate.GateError("only pending, failed or interrupted hooks can be cancelled")
+                run["status"] = "cancelled"
+                self.pending = deque(n for n in self.pending if n != identity)
+            elif identity in self.oneshots and not self.oneshots[identity]["fired"]:
+                del self.oneshots[identity]
+            else:
+                raise gate.GateError("unknown or already fired hook")
+            self._persist()
 
     def register(self, value):
         hook = spec(value, "after")
@@ -87,6 +165,7 @@ class Scheduler:
             if hook["after"] in self.events.values():
                 raise gate.GateError("target task already accepted in this session; call the script directly")
             self.oneshots[hook["id"]] = {"spec": hook, "fired": False}
+            self._persist()
             return True
 
     def _schedule(self, hook, trigger, event, task, revision):
@@ -114,18 +193,25 @@ class Scheduler:
                 if not entry["fired"] and hook["after"] == task:
                     self._schedule(hook, "one-shot", event, task, revision)
                     entry["fired"] = True
+            self._persist()
             return len(self.pending) != previous
 
     def enqueue_cold(self, active):
         with self.lock:
             self._schedule(cold_spec(self.cfg), "manual", active["event"], active["task_id"], active["base"])
+            self._persist()
 
     def next_run(self):
         with self.lock:
+            if self.persistence_failed:
+                raise gate.GateError("hook persistence failed; restart after repairing storage")
+            if any(run.get("status") == "interrupted" for run in self.runs.values()):
+                raise gate.GateError("interrupted hook requires explicit retry or cancel")
             if not self.pending:
                 return None
             run = self.runs[self.pending.popleft()]
             run["status"] = "running"
+            self._persist()
             return dict(run)
 
     def settle(self, run_id, status, **extra):
@@ -134,18 +220,23 @@ class Scheduler:
             if status == "passed":
                 if run["kind"] == "cold":
                     self.cold_passed = run["revision"]
-                del self.runs[run_id]
+                if self.state_path is None:
+                    del self.runs[run_id]
+                else:
+                    run.update(status="passed", **extra)
             else:
                 run.update(status=status, **extra)
+            self._persist()
 
     def retry(self, run_id):
         with self.lock:
             run = self.runs.get(run_id, {})
-            if run.get("status") != "failed":
-                raise gate.GateError("only a failed hook in the live worker session can be retried")
+            if run.get("status") not in ("failed", "interrupted"):
+                raise gate.GateError("only a failed or interrupted hook can be retried")
             run.update(status="pending", audit_event=uuid.uuid4().hex)
             run.pop("error", None)
             self.pending.appendleft(run_id)
+            self._persist()
 
 
 def execute(root, run, verify, *, allow_custom_cold=True, cold_passed=None, cfg=None):

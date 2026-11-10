@@ -21,7 +21,7 @@ class SingleConfigTests(unittest.TestCase):
             root = Path(directory)
             owned = root / 'nightshift'
             owned.mkdir()
-            for name in ('worker.sh', 'worker_runtime.py', 'lifecycle.py', 'acceptance.py', 'acceptance_hooks.py', 'hook_control.py', 'scratch_review.py', 'project_config.py'):
+            for name in ('worker.sh', 'worker_runtime.py', 'lifecycle.py', 'acceptance.py', 'acceptance_hooks.py', 'hook_control.py', 'scratch_review.py', 'attempt_archive.py', 'preflight.py', 'environment_probe.py', 'verify_process.py', 'evidence_capabilities.py', 'project_config.py'):
                 shutil.copy2(ROOT / 'scripts' / name, owned / name)
             (owned / 'adapters').mkdir()
             agent = {'default': True, 'worker': {'step_base': {'L1': 60, 'L2': 40, 'L3': 20}}, 'agent': {'adapter': 'generic', 'command': 'unused'}}

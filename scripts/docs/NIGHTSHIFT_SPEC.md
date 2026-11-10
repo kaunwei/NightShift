@@ -207,6 +207,13 @@ These specifications are the behavior contract for future edits to NightShift-ow
 
 The source audit and coverage index in [NIGHTSHIFT_SOURCE_COVERAGE.md](NIGHTSHIFT_SOURCE_COVERAGE.md) enumerate every NightShift-owned input and runtime function. Preserve both the skill requirements above and the as-built behavior below when simplifying; changes to either require an explicit decision.
 
+Script-only follow-ups approved on 2026-11-10 are specified in
+[runtime hardening](RUNTIME_HARDENING.md). They extend evidence retention and
+opt-in hook persistence without changing role skills or adding verification
+resume. This amendment takes precedence over older as-built notes about failed
+archive completeness, session-only hooks when opted in, and unbounded in-memory
+VERIFY output.
+
 ### As-built behavior and limits (source audit)
 
 The following records what scripts actually do, including differences from the skill contract. These differences are documentation findings, not implementation changes.
@@ -239,6 +246,24 @@ The following records what scripts actually do, including differences from the s
 
 26. End-to-end startup/helpers require Bash/Git and shell tools; process-control branches alone do not establish native Windows deployment. Research product-read-only and ghost no-edit checks are not OS sandboxes. Planner/Explore remain agent skills, not executable schedulers. Some existing skill text still references shared scores or reading the removed worker env file for trial pause resolution; those instructions are stale and must follow the per-registration and launch-configuration contracts above. Source inspection is not proof that all acceptance scenarios have passed.
 27. Successful audit records include a pending Planner review field. Review recording identifies the exact task and audit timestamp, updates only that record, and uses the configured progress-log path. Progress prepends and review writes share a bounded lock so concurrent journal updates preserve unrelated history. A repeated identical review does not record score feedback again; a different result against an already reviewed audit is an explicit conflict. An older audit without the field is left unchanged and is not automatically scored.
+
+28. Script-only hardening: destructive recovery first captures a private,
+restore-verified HEAD bundle, separate index/worktree diffs and nonignored
+untracked payloads; preservation or verification failure refuses cleanup. Clean
+restart keeps its existing baseline semantics and never resumes verification.
+Configured registration preflight argv executes before claim; environment failure
+holds the unchanged queue without feedback penalties. Without argv, only host
+directory/output access is checked. POSIX VERIFY retains a full live log with
+PID/deadline metadata and at most 64 KiB in memory, preserving owned-process
+deadlines and bounded cleanup. Optional acceptance capabilities declare framework
+ID prefixes and selection support without replacing strict discovery or source/
+nonce/fingerprint gates. Opt-in `durable_hooks` saves project/config-bound hook
+definitions, events, counters and run outcomes; interrupted effects hold dispatch
+for explicit retry/cancel. Default hooks remain session-only. `hook-list` and
+`hook-cancel` use the live control channel. `capacity` reads recent outcomes,
+task metrics and readiness without initializing missing score/state; unknown
+history stays unknown and score arithmetic is unchanged. These additions do not
+implement automatic host repair, project framework execution or deployment.
 
 ## Testing Decisions
 

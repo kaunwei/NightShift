@@ -31,6 +31,8 @@ import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import scratch_review
+import attempt_archive
+import preflight
 def _import_nightshift_module(name):
     try:
         return importlib.import_module(name)
@@ -172,8 +174,20 @@ def score_task_level(score):
 
 
 def score_summary(state):
+    feedback = state.get("feedback", [])[-20:]
+    counts = {name: sum(item.get("result") == name for item in feedback)
+              for name in ("accept", "reject", "no_fault", "hard_failure")}
+    streak = 0
+    for item in reversed(feedback):
+        if item.get("result") in ("no_fault", "success"):
+            continue
+        if item.get("result") != "accept":
+            break
+        streak += 1
     return {"score": state["score"], "task_level": score_task_level(state["score"]),
-            "successes_in_window": len(state["success_window"])}
+            "successes_in_window": len(state["success_window"]),
+            "recent_outcomes": counts, "feedback_window_size": len(feedback),
+            "recent_accept_streak": streak, "recent_evidence": feedback}
 
 
 def registered_agent_score_path(root, registration_id):
@@ -664,9 +678,11 @@ def load_agent_registry(config_file):
         agent = profile.get("agent")
         if not isinstance(worker, dict):
             raise ValueError(f"agent {name} worker config must be an object")
-        worker_unknown = set(worker) - {"task_timeout_seconds", "research_step_budget", "step_base"}
+        worker_unknown = set(worker) - {"task_timeout_seconds", "research_step_budget", "step_base", "preflight"}
         if worker_unknown:
             raise ValueError(f"agent {name} worker config has unknown fields: {', '.join(sorted(worker_unknown))}")
+        if "preflight" in worker:
+            preflight.validate(worker["preflight"])
         timeout = worker.get("task_timeout_seconds")
         if timeout is not None and (isinstance(timeout, bool) or not isinstance(timeout, (int, float))
                                     or not math.isfinite(timeout) or timeout <= 0):
@@ -1459,6 +1475,7 @@ def bounded_verify_evidence(output):
     return {"verify_output": encoded[-limit:].decode("utf-8", errors="ignore"),
             "verify_output_truncated": len(encoded) > limit,
             "verify_output_limit_bytes": limit,
+            "verify_log_path": getattr(output, "log_path", None),
             "stream_mode": "stdout_stderr_combined"}
 
 
@@ -2029,6 +2046,9 @@ class VerifyOutput(str):
 
 
 def run_verify(command, work_dir, port, timeout):
+    if os.name == "posix":
+        import verify_process
+        return verify_process.run(command, work_dir, port, timeout, VerifyOutput)
     started = time.monotonic()
     environment = os.environ.copy()
     environment.update(PORT=str(port), TEST_PORT=str(port))
@@ -2163,8 +2183,8 @@ def mechanical_audit(args):
         messages.append(f"[WORKER_GUARD] 🔍 Executing Mechanical Audit ([DIAGNOSTIC]): {verify or 'None'}")
         if verify:
             verify_exit, output = run_with_evidence(verify)
-            if re.search(r"error: cannot find|syntax error|compilation failed|build failed|undefined symbol",
-                         output, re.I):
+            if (getattr(output, "invalid_repro", False) or
+                    re.search(r"error: cannot find|syntax error|compilation failed|build failed|undefined symbol", output, re.I)):
                 guard_status = 4
                 reason = "False Red-Light Detected: Repro failed on compilation/syntax error instead of test assertion."
     elif research:
@@ -2232,7 +2252,8 @@ def mechanical_audit(args):
             if verify_exit:
                 guard_status = 6
                 reason = f"Mechanical Verification Failed: '{verify}' returned exit code {verify_exit} (Expected 0)."
-            elif re.search(r"(0 tests passed|0 passed|ran 0 tests|0 suites passed|No matching tests)", output, re.I):
+            elif (getattr(output, "empty_test_run", False) or
+                  re.search(r"(0 tests passed|0 passed|ran 0 tests|0 suites passed|No matching tests)", output, re.I)):
                 guard_status = 9
                 reason = "Empty Test Run Detected (Anti-Idle): VERIFY ran 0 tests. Possible test filter typo."
             elif (Path(args.work_dir) / "Package.swift").is_file():
@@ -2474,6 +2495,9 @@ def recover_attempt_baseline(work_dir, snapshot_path, archive_path, runtime_path
         raise FileExistsError(f"attempt archive already exists: {archive_path}")
 
     archive_path.mkdir(parents=True)
+    attempt_archive.capture(work_dir, archive_path / "attempt", context={
+        "task_id": metadata.get("task_id"), "attempt_id": metadata.get("attempt_id"),
+        "baseline_head": baseline_head, "baseline_snapshot": str(snapshot_path)})
     diff = subprocess.run(["git", "-C", str(work_dir), "diff", "--binary", baseline_head],
                           check=True, capture_output=True).stdout
     (archive_path / "changes.diff").write_bytes(diff)
@@ -2552,6 +2576,7 @@ def rollback_failed_task(root, work_dir, task_id, runtime_paths, baseline_snapsh
         backup = _scratch_state_root(root) / "failed_tasks" / f"{task_id}_{stamp}_{suffix}"
         suffix += 1
     backup.mkdir(parents=True)
+    attempt_archive.capture(work_dir, backup / "attempt", context={"task_id": task_id, "kind": "legacy_rollback"})
     print(f"[WORKER] Isolating failed changes to {backup} and resetting clean git tree...",
           file=sys.stderr)
 
@@ -2752,14 +2777,16 @@ def main(argv=None):
     restart.add_argument("--root", required=True)
     restart.add_argument("--config", default="")
     restart.add_argument("--project", default=None)
-    for hook_command in ("hook-register", "hook-retry"):
+    for hook_command in ("hook-register", "hook-retry", "hook-list", "hook-cancel", "capacity"):
         hook_parser = commands.add_parser(hook_command)
         hook_parser.add_argument("--root", required=True)
         hook_parser.add_argument("--config", default="")
         hook_parser.add_argument("--project", default=None)
         if hook_command == "hook-register":
             hook_parser.add_argument("--spec", required=True, help="JSON one-shot hook definition")
-        else:
+        elif hook_command == "hook-list":
+            hook_parser.add_argument("--offset", type=int, default=0)
+        elif hook_command in ("hook-retry", "hook-cancel"):
             hook_parser.add_argument("--run-id", required=True)
     info = commands.add_parser("project-info")
     info.add_argument("--root", required=True)
@@ -2780,7 +2807,7 @@ def main(argv=None):
         print(json.dumps({"name": name, "root": str(root), "state": str(state) if state else None,
                           "skills": str(Path(__file__).resolve().parent.parent / ".agents/skills"),
                           "index": str(state / "code-index/INDEX.md") if state else str(root / "scripts/.scratch/code-index/INDEX.md" if (root / "scripts").is_dir() else root / "nightshift/.scratch/code-index/INDEX.md")}))
-    elif args.command in ("restart", "hook-register", "hook-retry"):
+    elif args.command in ("restart", "hook-register", "hook-retry", "hook-list", "hook-cancel", "capacity"):
         if args.config:
             name, root, state = project_config.resolve_project(args.config, args.project, args.root)
             if name is not None:
@@ -2790,7 +2817,34 @@ def main(argv=None):
                 args.root = str(root)
         elif args.project:
             raise ValueError("--project requires --config")
-        if args.command == "restart":
+        if args.command == "capacity":
+            root = Path(args.root).resolve()
+            selected = os.environ.get("NIGHTSHIFT_STATE_DIR")
+            owned = Path(selected) if selected else _runtime_state_root(root)
+            config_file = Path(args.config) if args.config else owned / "config.json"
+            agents = load_agent_registry(config_file)
+            summaries = []
+            for agent in agents:
+                path = registered_agent_score_path(owned / ".worker-agent-scores", agent["id"])
+                summary = score_summary(json.loads(path.read_text())) if path.is_file() else {"score": None, "history": "unknown"}
+                summaries.append({"registration_id": agent["id"], **summary})
+            # Read-only: unlike state_dir(), do not create a lifecycle directory.
+            if selected:
+                readiness_path = owned / "lifecycle/preflight.json"
+            else:
+                git_state = Path(acceptance.git(root, "rev-parse", "--git-path", "nightshift"))
+                readiness_path = (git_state if git_state.is_absolute() else root / git_state) / "preflight.json"
+            lifecycle_state = readiness_path.parent
+            candidates = [*list((lifecycle_state / "tasks").glob("*.json")),
+                          *list((lifecycle_state / "reports").glob("*/report.json"))]
+            recent_tasks = []
+            for path in sorted(candidates, key=lambda p: p.stat().st_mtime, reverse=True)[:20]:
+                record = acceptance.load(path, {})
+                recent_tasks.append({"outcome": record.get("phase", record.get("result", {}).get("outcome", "unknown")),
+                                     **record.get("metrics", {})})
+            print(json.dumps({"agents": summaries, "recent_tasks": recent_tasks,
+                              "preflight": acceptance.load(readiness_path, {"status": "unknown"})}))
+        elif args.command == "restart":
             state = acceptance.state_dir(args.root)
             paused = state / "paused.json"
             if os.environ.get("NIGHTSHIFT_CONFIG_FILE") and paused.is_file():
@@ -2806,7 +2860,8 @@ def main(argv=None):
             import hook_control
             try:
                 request = ({"command": "register", "spec": json.loads(args.spec)} if args.command == "hook-register"
-                           else {"command": "retry", "run_id": args.run_id})
+                           else {"command": "list", "offset": args.offset} if args.command == "hook-list"
+                           else {"command": "cancel" if args.command == "hook-cancel" else "retry", "run_id": args.run_id})
                 print(json.dumps(hook_control.request(args.root, request)))
             except (OSError, ValueError) as error:
                 parser.exit(2, f"acceptance hook: {error}\n")

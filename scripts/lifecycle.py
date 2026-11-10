@@ -16,6 +16,7 @@ import uuid
 import acceptance as gate
 import acceptance_hooks as hooks
 import hook_control
+import preflight
 
 
 def task_level(raw):
@@ -71,7 +72,8 @@ def diagnose(root, runtime, active, result):
     directory.mkdir(parents=True, exist_ok=True)
     detail = result.get("runtime_error", {}).get("message") or result.get("diagnostic") or result.get("outcome", "execution failed")
     report = {"task": active["raw"], "base": active.get("base"),
-              "head": gate.git(root, "rev-parse", "HEAD"), "result": result}
+              "head": gate.git(root, "rev-parse", "HEAD"), "result": result,
+              "metrics": active.get("metrics", {})}
     gate.save(directory / "report.json", report)
     (directory / "REPORT.md").write_text(
         "# Task failure\n\n" + json.dumps(report, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
@@ -91,7 +93,7 @@ def run(root, runtime):
         cfg = gate.config(root)
     except gate.GateError:
         cfg = {}
-    scheduler = hooks.Scheduler(cfg)
+    scheduler = hooks.Scheduler(cfg, state_path=gate.state_dir(root) / "hook-state.json", project=root)
     with hook_control.serve(root, scheduler):
         return run_session(root, runtime, scheduler)
 
@@ -188,7 +190,17 @@ def run_session(root, runtime, scheduler):
     def fingerprint(agent):
         return hashlib.sha256(json.dumps(agent, sort_keys=True).encode()).hexdigest()
 
+    def metrics(active, result):
+        targets = runtime.task_field(active["raw"], "TARGET")
+        return {"task_id": active["task_id"], "level": int(task_level(active["raw"])),
+                "target_entries": len([item for item in targets.split(",") if item.strip()]),
+                "actions_used": result.get("actions_used"),
+                "elapsed_seconds": round(time.monotonic() - began[0], 3),
+                "failure_phase": result.get("runtime_error", {}).get("phase"),
+                "failure_kind": result.get("runtime_error", {}).get("kind", "unknown")}
+
     def fail(active, result):
+        active["metrics"] = metrics(active, result)
         if not has_acceptance(root) and active.get("attempt_baseline") and not result.get("recovery_archive"):
             try:
                 runtime.rollback_failed_task(
@@ -254,7 +266,8 @@ def run_session(root, runtime, scheduler):
             scheduled_hook = scheduler.accepted(
                 active["task_id"], active["event"], commit or active["base"],
                 committed=bool(commit and commit != active["base"] and not runtime.is_research_task(active["raw"])))
-        journal.update(phase="accepted", commit=commit, result=result, event=active["event"])
+        journal.update(phase="accepted", commit=commit, result=result, event=active["event"],
+                       metrics=journal.get("metrics") or metrics(active, result))
         gate.save(journal_path, journal)
         active_path.unlink(missing_ok=True)
         print(f"[DONE] <<< Task {active['task_id']} accepted and verified cleanly!\n", flush=True)
@@ -348,6 +361,14 @@ def run_session(root, runtime, scheduler):
                 # Interrupted model execution is not safe to repeat or clean without Planner.
                 fail(active, {"diagnostic": "interrupted task; schedule a new task and restart"})
                 continue
+            if scheduler.interrupted():
+                if running.get("state") != "HOOK_INTERRUPTED":
+                    print("[HOOK_INTERRUPTED] Inspect hook-list; explicitly cancel or retry interrupted effects.", flush=True)
+                update("HOOK_INTERRUPTED", phase="post_acceptance_hook")
+                if once:
+                    return 2
+                stopped.wait(poll)
+                continue
             hook = scheduler.next_run()
             if hook:
                 is_cold = hook.get("kind") == "cold"
@@ -424,6 +445,19 @@ def run_session(root, runtime, scheduler):
                                                                    if identity not in changed]
                 exhausted_head = None
                 waiting_path.unlink(missing_ok=True)
+            if tasks.is_file() and any(line.strip() and not line.lstrip().startswith("#")
+                                       for line in tasks.read_text().splitlines()):
+                readiness = preflight.check(root, state, agents, runtime.run_verify)
+                previous_readiness = gate.load(state / "preflight.json", {})
+                gate.save(state / "preflight.json", readiness)
+                if readiness["status"] != "ready":
+                    if preflight.identity(readiness) != preflight.identity(previous_readiness):
+                        print("[ENVIRONMENT_BLOCKED] " + json.dumps(readiness), flush=True)
+                    update("ENVIRONMENT_BLOCKED", phase="preflight")
+                    if once:
+                        return 2
+                    stopped.wait(poll)
+                    continue
             raw = runtime.pop_task(tasks, claim_path=active_path)
             if not raw:
                 if running["state"] != "BLOCKED":

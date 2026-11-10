@@ -38,6 +38,8 @@ class HotFailure(GateError):
 
 def verify_evidence(output, budget, started):
     return {"timed_out": getattr(output, "timed_out", False),
+            "log_path": getattr(output, "log_path", None),
+            "output_bytes": getattr(output, "output_bytes", len(str(output).encode())),
             "elapsed_seconds": round(getattr(output, "elapsed", time.monotonic() - started), 3),
             "budget_seconds": getattr(output, "budget", budget)}
 
@@ -165,6 +167,9 @@ def config(root):
         value.setdefault("version", raw["version"])
     if not isinstance(value, dict) or value.get("version") != 1:
         raise GateError("acceptance config requires version 1")
+    if "capabilities" in value:
+        import evidence_capabilities
+        evidence_capabilities.validate(value["capabilities"])
     for field in ("timeout", "hot_timeout", "cold_timeout"):
         if field in value:
             timeout = value[field]
@@ -215,6 +220,8 @@ class DefaultAcceptanceRunner(AcceptanceRunner):
 
     def invoke(self, root, cfg, name, phase, base, run, task="", required=(),
                deadline=None, only=(), allow_failure=False, evidence_root=None):
+        if only and "capabilities" in cfg and not cfg["capabilities"].get("case_selection", False):
+            raise GateError("isolated case selection unsupported by declared adapter capabilities")
         nonce = uuid.uuid4().hex
         output = state_dir(evidence_root or root) / "evidence" / f"{nonce}.json"
         output.parent.mkdir(parents=True, exist_ok=True)
@@ -245,11 +252,21 @@ class DefaultAcceptanceRunner(AcceptanceRunner):
         if not isinstance(data, dict) or data.get("run") != nonce or not isinstance(data.get("cases"), list):
             raise HotFailure("undetermined", f"{name}/{phase}: missing or stale case evidence: {output}", evidence)
         evidence["supports_case_selection"] = data.get("supports_case_selection") is True
+        if "capabilities" in cfg:
+            import evidence_capabilities
+            capabilities = evidence_capabilities.validate(cfg["capabilities"])
+            if ("case_selection" in capabilities and
+                    evidence["supports_case_selection"] != capabilities["case_selection"]):
+                raise GateError("adapter case-selection evidence contradicts declared capabilities")
+            if only and not capabilities.get("case_selection", False):
+                raise GateError("isolated case selection unsupported by declared adapter capabilities")
         cases = {}
         for case in data["cases"]:
             if not isinstance(case, dict) or not isinstance(case.get("id"), str) or not case["id"] or case["id"] in cases:
                 raise GateError("case evidence requires unique nonempty IDs")
             cases[case["id"]] = case
+            if "capabilities" in cfg and not evidence_capabilities.supports(capabilities, case["id"]):
+                raise GateError(f"adapter emitted unsupported framework/ID namespace: {case['id']}")
         return cases, evidence
 
     def classify_failure(self, root, cfg, args, run, permanent, executed, evidence):
@@ -324,6 +341,10 @@ class DefaultAcceptanceRunner(AcceptanceRunner):
                     break
                 identity = identity[len("test."):]
             if len(candidates) != 1:
+                if "capabilities" in cfg:
+                    import evidence_capabilities
+                    if not evidence_capabilities.supports(cfg["capabilities"], item["id"]):
+                        raise GateError(f"TDD framework/ID namespace unsupported: {item['id']}")
                 raise GateError(f"TDD case ID unknown or ambiguous: {item['id']}")
             identity = candidates.pop()
             if identity in seen:
@@ -455,6 +476,8 @@ def invoke(root, cfg, name, phase, base, run, task="", required=()):
 
 def clean(root, *, external=False):
     """Authorized clean-start policy. Never discard commits or ignored files."""
+    import attempt_archive
+    attempt_archive.capture(root, state_dir(root) / "retained" / uuid.uuid4().hex)
     if external:
         # External runners own their configuration/state outside product paths;
         # product scripts and generated UID files are not runner state.

@@ -24,7 +24,7 @@ For every later simplification, compare the changed source hashes and each affec
 | [nightshift/status.sh](../status.sh) | 2896954c5e6972d2c6985a79535b9e6a7cf2325b334d650d4d2dddb57c1257f3 |
 | [nightshift/watch_worker.sh](../watch_worker.sh) | 5030632dbebb92a2985e7b0adaae7bdd738c25f15bc2eb265e2adcd9428b9baa |
 | [nightshift/worker.sh](../worker.sh) | d430417b8f221222763e0885aa3a7c2d0e9681da2cda4de00e9d22c9005e0cb9 |
-| [nightshift/worker_runtime.py](../worker_runtime.py) | 59a8ec1924060551724798a92a54243f6430aa051d1a893fa3ae8b575ba2af51 |
+| [nightshift/worker_runtime.py](../worker_runtime.py) | 6b72f4306167313f995c150785e5543985b5f989b3bb00b970cd9fd7d4075c5f |
 | [nightshift/tools/README.md](../tools/README.md) | a35532892107d432df3c4b2175516b28e4310ec3aee357d3184591c2f960c811 |
 | [nightshift/tools/index.py](../tools/index.py) | 3c42160f91ae8152b7a272614dc9e0732493caa7aef6cce65751b952bd199b56 |
 | [nightshift/tools/languages.json](../tools/languages.json) | fc7f10de17095f0a0930fd7e344bd4d787ecc57ee4f3c4202224485e718faa13 |
@@ -32,95 +32,106 @@ For every later simplification, compare the changed source hashes and each affec
 | [nightshift/tools/setup.sh](../tools/setup.sh) | a2cbd18108502b18d4f1a8ad83c3455a94888fbd6cbe65a4ee53c5c1075b3644 |
 | [nightshift/tools/setup.ps1](../tools/setup.ps1) | 31fbe3b44ed2b160342d0b507931f1e23f1ba57f62ceba03ec92d7e4cf0802b6 |
 | [nightshift/scratch_review.py](../scratch_review.py) | 146f28c2325e9bfee6c3c94877bb37bffbd9dc45d00db16204f4722df4e7964c |
-| [nightshift/install-manifest.json](../install-manifest.json) | eb84195699956a7d644a272804b4ddd18ef607bd7a50fd6895fef3ad49a5bfaf |
+| [nightshift/install-manifest.json](../install-manifest.json) | 9fdcf8e1271fefa0ee53c12a7bce8100f7bb4ba46244df0cc233536b75d0374c |
 | [install.sh](../../install.sh) | fdeeb5921379ed67e230dcc3672017dcd5a2fbc09e0ffbe8059ff89edbd007c0 |
 | [remove.sh](../../remove.sh) | dc903ef55e497f8eeaaf5829ffc46f0c0cf81aa72fe78f670a8b3c314837242e |
 | [README.md](../../README.md) | dcb943b41c867909a7f697836c2e4a176e7d403d938b4b4ad4c8b3dbf9b81374 |
 | [test/README.md](../../test/README.md) | f08d9ab6eb15eb369421ef3b4bc405c8f0f2dd26f60b89aac24dbc139b6a409b |
-| [nightshift/docs/NIGHTSHIFT_SPEC.md](../docs/NIGHTSHIFT_SPEC.md) | 051ca650d9c7cec57c408133a8ff4bd546d592a1ce24a914810f069dca6009af |
+| [nightshift/docs/NIGHTSHIFT_SPEC.md](../docs/NIGHTSHIFT_SPEC.md) | 6dbcfde4a876b7627d504205e0c45d24c17b1cad23900208aa0ab5463a56458d |
 | [nightshift/docs/PORTING_GUIDE.md](../docs/PORTING_GUIDE.md) | 712fb3d98a5ac77068ccad9dcbc54695af8c7ea82a98dcfa7f8d1346ced65fe8 |
 | [nightshift/docs/DETERMINISTIC_EXPLORE_STRATEGY.md](../docs/DETERMINISTIC_EXPLORE_STRATEGY.md) | c832795fb51c7e8ad65e66de0116629a70480172d0628217cb3aafb12683e896 |
 | [nightshift/docs/DETERMINISTIC_EXPLORE_RESULTS.md](../docs/DETERMINISTIC_EXPLORE_RESULTS.md) | a624dfe4d49bc5fe167e597b71f86e1c3d86610b9e6084fc0e1d3c49721b068c |
+| [scripts/attempt_archive.py](../attempt_archive.py) | 543e1da1ea2effb5e75ac08f642bb67eb438d6fa02bf3604aab4ffbeeb68270c |
+| [scripts/preflight.py](../preflight.py) | f41998fdf14d3cca01ae4bd1f6ced0f49de33545e2142742f0c311ca5e8c551c |
+| [scripts/environment_probe.py](../environment_probe.py) | 7a6663e1c66b68a2f34df53d11bb84ad31d3439710c40257527241e48cf5f2ca |
+| [scripts/verify_process.py](../verify_process.py) | 010aae6a725d3c40e03f37d4ddb08d7a1d5e8729f8efc22cc0c28290bcd066ac |
+| [scripts/evidence_capabilities.py](../evidence_capabilities.py) | 570201cfca85010e38a5d4976bc0c1a5616ab1514cd28a4c4e59b3de72cfd91f |
+| [scripts/acceptance_hooks.py](../acceptance_hooks.py) | ee9f97b5aa9d96d8fcb318462872a2be3a117b4754fd703249edb3c3809bbfab |
+| [scripts/hook_control.py](../hook_control.py) | 66a8ecf356c8376684720fd98faa21a32f034730ec0780b6169585152a976567 |
+| [scripts/acceptance.py](../acceptance.py) | f817bb5b9ba59dd37d78ca1556b1dd8f374bea48877c1659d66a5ee05676520f |
+| [scripts/lifecycle.py](../lifecycle.py) | 9aee33108bf0c2d8e7e691c5d778224de2d1a2d33d73738501ae4773a34ea691 |
+| [scripts/docs/RUNTIME_HARDENING.md](../docs/RUNTIME_HARDENING.md) | 1861f7017002808e79d98e46ae714c0e15c19a9c05c8a5fb3fae3c3ad404cdba |
+
 ## Runtime function coverage
 
 74 top-level runtime functions are mapped below to numbered clauses in the spec's As-built behavior and limits section; nested closures are covered by their owning function. Anchors are refreshed from the current Python AST, and this is not a regression-test result.
 
 | Function | As-built clause |
 | --- | --- |
-| [serialize_workspace_state](../worker_runtime.py#L43) | 5, 25 |
-| [atomic_write](../worker_runtime.py#L52) | 25 |
-| [prepend_progress](../worker_runtime.py#L72) | 25 |
-| [update_planner_review](../worker_runtime.py#L90) | 12 |
-| [read_score_state](../worker_runtime.py#L129) | 12 |
-| [score_task_level](../worker_runtime.py#L145) | 12 |
-| [score_summary](../worker_runtime.py#L149) | 12 |
-| [registered_agent_score_path](../worker_runtime.py#L154) | 12 |
-| [initialize_agent_score](../worker_runtime.py#L160) | 12 |
-| [read_agent_score_state](../worker_runtime.py#L189) | 12 |
-| [append_agent_event](../worker_runtime.py#L199) | 12 |
-| [_read_json_lines](../worker_runtime.py#L237) | 12 |
-| [_watch_agent_events_locked](../worker_runtime.py#L255) | 12 |
-| [watch_agent_events](../worker_runtime.py#L295) | 12 |
-| [acknowledge_agent_event](../worker_runtime.py#L315) | 12 |
-| [record_agent_score_result](../worker_runtime.py#L345) | 12 |
-| [_record_score_result](../worker_runtime.py#L364) | 12 |
-| [record_score_result](../worker_runtime.py#L394) | 12 |
-| [build_ghost_closeout_prompt](../worker_runtime.py#L415) | 10 |
-| [workspace_snapshot](../worker_runtime.py#L433) | 10 |
-| [pop_task](../worker_runtime.py#L454) | 1–2 |
-| [restore_task_front](../worker_runtime.py#L479) | 1–2 |
-| [insert_task_front](../worker_runtime.py#L501) | 1–2, 20 |
-| [parse_agent_registry](../worker_runtime.py#L533) | 11, 25 |
-| [load_agent_registry](../worker_runtime.py#L580) | 11, 25 |
-| [adapter_callback](../worker_runtime.py#L655) | 6–11 |
-| [execute_adapter_protocol](../worker_runtime.py#L704) | 6–11 |
-| [should_failover_agent](../worker_runtime.py#L825) | 11, 19 |
-| [read_agent_state](../worker_runtime.py#L840) | 11 |
-| [agent_supports_task](../worker_runtime.py#L857) | 11, 19 |
-| [execute_registered_agents](../worker_runtime.py#L864) | 11–12, 19 |
-| [progress_bar](../worker_runtime.py#L995) | 1–2 |
-| [poll_next](../worker_runtime.py#L1002) | 1–2 |
-| [task_field](../worker_runtime.py#L1040) | 1–2 |
-| [write_status](../worker_runtime.py#L1053) | 5 |
-| [display_status](../worker_runtime.py#L1080) | 5 |
-| [run_with_timeout](../worker_runtime.py#L1098) | 9 |
-| [temporary_git_index](../worker_runtime.py#L1134) | 10 |
-| [worktree_tree](../worker_runtime.py#L1146) | 19 |
-| [attempt_audit_trees](../worker_runtime.py#L1152) | 10, 13 |
-| [changed_tree_paths](../worker_runtime.py#L1164) | 10, 13, 19 |
-| [run_code_index](../worker_runtime.py#L1168) | CLI inventory |
-| [code_index_inputs](../worker_runtime.py#L1179) | 6 |
-| [ensure_code_index_after_commit](../worker_runtime.py#L1199) | 6 |
-| [finalize_task_git](../worker_runtime.py#L1220) | 6, 10 |
-| [finalize_structured_adapter_result](../worker_runtime.py#L1278) | 6, 10 |
-| [claim_ghost_allowance](../worker_runtime.py#L1342) | 10 |
-| [run_adapter_ghost](../worker_runtime.py#L1370) | 10 |
-| [execute_adapter_task](../worker_runtime.py#L1439) | 10 |
-| [build_task_prompt](../worker_runtime.py#L1539) | 6, 25 |
-| [env_bool](../worker_runtime.py#L1571) | 25–26 |
-| [acquire_worker_lock](../worker_runtime.py#L1575) | 3–5 |
-| [worker_daemon](../worker_runtime.py#L1608) | 3–5, 11–12, 17, 19, 25 |
-| [git_audit](../worker_runtime.py#L2305) | 13–16 |
-| [run_verify](../worker_runtime.py#L2389) | 13–16 |
-| [first_report](../worker_runtime.py#L2425) | 13–16 |
-| [publish_research_reports](../worker_runtime.py#L2445) | 13–16 |
-| [mechanical_audit](../worker_runtime.py#L2481) | 13–16 |
-| [report_archive_path](../worker_runtime.py#L2580) | 18 |
-| [cleanup_invalid_reports](../worker_runtime.py#L2591) | 18 |
-| [settle_invalid_reports](../worker_runtime.py#L2608) | 18 |
-| [report_source_paths](../worker_runtime.py#L2642) | 18 |
-| [report_staleness](../worker_runtime.py#L2662) | 18 |
-| [refresh_active_reports](../worker_runtime.py#L2697) | 18 |
-| [archive_active_reports](../worker_runtime.py#L2715) | 18 |
-| [archive_overlapping_reports](../worker_runtime.py#L2728) | 18 |
-| [_git_path_state](../worker_runtime.py#L2733) | 19 |
-| [_runtime_state_root](../worker_runtime.py#L2743) | 5, 19 |
-| [_scratch_state_root](../worker_runtime.py#L2748) | 5, 19 |
-| [_git_names](../worker_runtime.py#L2753) | 19 |
-| [capture_attempt_baseline](../worker_runtime.py#L2760) | 19 |
-| [recover_attempt_baseline](../worker_runtime.py#L2784) | 19 |
-| [rollback_failed_task](../worker_runtime.py#L2862) | 19 |
-| [main](../worker_runtime.py#L2925) | CLI inventory |
+| [serialize_workspace_state](../worker_runtime.py#L70) | 5, 25 |
+| [atomic_write](../worker_runtime.py#L79) | 25 |
+| [prepend_progress](../worker_runtime.py#L99) | 25 |
+| [update_planner_review](../worker_runtime.py#L117) | 12 |
+| [read_score_state](../worker_runtime.py#L156) | 12 |
+| [score_task_level](../worker_runtime.py#L172) | 12 |
+| [score_summary](../worker_runtime.py#L176) | 12 |
+| [registered_agent_score_path](../worker_runtime.py#L193) | 12 |
+| [initialize_agent_score](../worker_runtime.py#L199) | 12 |
+| [read_agent_score_state](../worker_runtime.py#L228) | 12 |
+| [append_agent_event](../worker_runtime.py#L238) | 12 |
+| [_read_json_lines](../worker_runtime.py#L276) | 12 |
+| [_watch_agent_events_locked](../worker_runtime.py#L303) | 12 |
+| [watch_agent_events](../worker_runtime.py#L342) | 12 |
+| [acknowledge_agent_event](../worker_runtime.py#L362) | 12 |
+| [record_agent_score_result](../worker_runtime.py#L392) | 12 |
+| [_record_score_result](../worker_runtime.py#L411) | 12 |
+| [record_score_result](../worker_runtime.py#L445) | 12 |
+| [build_ghost_closeout_prompt](../worker_runtime.py#L466) | 10 |
+| [workspace_snapshot](../worker_runtime.py#L486) | 10 |
+| [pop_task](../worker_runtime.py#L508) | 1–2 |
+| [restore_task_front](../worker_runtime.py#L557) | 1–2 |
+| [insert_task_front](../worker_runtime.py#L579) | 1–2, 20 |
+| [parse_agent_registry](../worker_runtime.py#L611) | 11, 25 |
+| [load_agent_registry](../worker_runtime.py#L658) | 11, 25 |
+| [adapter_callback](../worker_runtime.py#L744) | 6–11 |
+| [execute_adapter_protocol](../worker_runtime.py#L793) | 6–11 |
+| [should_failover_agent](../worker_runtime.py#L916) | 11, 19 |
+| [read_agent_state](../worker_runtime.py#L931) | 11 |
+| [agent_supports_task](../worker_runtime.py#L969) | 11, 19 |
+| [execute_registered_agents](../worker_runtime.py#L976) | 11–12, 19 |
+| [progress_bar](../worker_runtime.py#L1165) | 1–2 |
+| [poll_next](../worker_runtime.py#L1172) | 1–2 |
+| [task_field](../worker_runtime.py#L1229) | 1–2 |
+| [write_status](../worker_runtime.py#L1242) | 5 |
+| [display_status](../worker_runtime.py#L1269) | 5 |
+| [run_with_timeout](../worker_runtime.py#L1287) | 9 |
+| [temporary_git_index](../worker_runtime.py#L1323) | 10 |
+| [worktree_tree](../worker_runtime.py#L1335) | 19 |
+| [attempt_audit_trees](../worker_runtime.py#L1341) | 10, 13 |
+| [changed_tree_paths](../worker_runtime.py#L1353) | 10, 13, 19 |
+| [run_code_index](../worker_runtime.py#L1357) | CLI inventory |
+| [code_index_inputs](../worker_runtime.py#L1370) | 6 |
+| [ensure_code_index_after_commit](../worker_runtime.py#L1392) | 6 |
+| [finalize_task_git](../worker_runtime.py#L1413) | 6, 10 |
+| [finalize_structured_adapter_result](../worker_runtime.py#L1581) | 6, 10 |
+| [claim_ghost_allowance](../worker_runtime.py#L1589) | 10 |
+| [run_adapter_ghost](../worker_runtime.py#L1617) | 10 |
+| [execute_adapter_task](../worker_runtime.py#L1708) | 10 |
+| [build_task_prompt](../worker_runtime.py#L1841) | 6, 25 |
+| [env_bool](../worker_runtime.py#L1886) | 25–26 |
+| [acquire_worker_lock](../worker_runtime.py#L1890) | 3–5 |
+| [worker_daemon](../worker_runtime.py#L1923) | 3–5, 11–12, 17, 19, 25 |
+| [git_audit](../worker_runtime.py#L1955) | 13–16 |
+| [run_verify](../worker_runtime.py#L2048) | 13–16 |
+| [first_report](../worker_runtime.py#L2100) | 13–16 |
+| [publish_research_reports](../worker_runtime.py#L2126) | 13–16 |
+| [mechanical_audit](../worker_runtime.py#L2162) | 13–16 |
+| [report_archive_path](../worker_runtime.py#L2269) | 18 |
+| [cleanup_invalid_reports](../worker_runtime.py#L2280) | 18 |
+| [settle_invalid_reports](../worker_runtime.py#L2297) | 18 |
+| [report_source_paths](../worker_runtime.py#L2331) | 18 |
+| [report_staleness](../worker_runtime.py#L2351) | 18 |
+| [refresh_active_reports](../worker_runtime.py#L2386) | 18 |
+| [archive_active_reports](../worker_runtime.py#L2404) | 18 |
+| [archive_overlapping_reports](../worker_runtime.py#L2417) | 18 |
+| [_git_path_state](../worker_runtime.py#L2422) | 19 |
+| [_runtime_state_root](../worker_runtime.py#L2432) | 5, 19 |
+| [_scratch_state_root](../worker_runtime.py#L2441) | 5, 19 |
+| [_git_names](../worker_runtime.py#L2448) | 19 |
+| [capture_attempt_baseline](../worker_runtime.py#L2455) | 19 |
+| [recover_attempt_baseline](../worker_runtime.py#L2479) | 19 |
+| [rollback_failed_task](../worker_runtime.py#L2560) | 19 |
+| [main](../worker_runtime.py#L2624) | CLI inventory |
 
 ## Complete public CLI inventory
 
@@ -162,3 +173,15 @@ Review uses source inspection and function/CLI inventory comparison, without lau
 
 
 Scratch pressure scheduling, completion receipts and the bounded Worker prompt are implemented in `nightshift/scratch_review.py`; see the porting guide’s Scratch review section and `test/test_scratch_review.py`.
+
+## Script-only hardening coverage (2026-11-10)
+
+As-built clause 28 covers `attempt_archive.capture/verify` (restore-verified
+retention before clean/recovery), `preflight.check` and `environment_probe.probe`
+(before-claim prerequisite checks), `verify_process.run` (POSIX live evidence and
+bounded memory/cleanup), `evidence_capabilities.validate/supports` (optional
+framework declarations), Scheduler persistence/recovery and hook control
+list/cancel/retry, and capacity/task metrics. The installer manifest includes the
+new runtime dependencies and operating reference. Regression coverage is in
+`test_runtime_hardening.py` plus the existing recovery, timeout, hook, TDD and
+external-project suites. No skill rules were changed.
