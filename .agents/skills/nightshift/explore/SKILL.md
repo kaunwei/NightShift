@@ -8,9 +8,9 @@ description: "Research code ownership, callers and interface seams for Planner; 
 Deliver evidence. Terminal A reads docs/skills, reports, queue, progress and `$NIGHTSHIFT_STATE_DIR/.worker.notes.md`; the research Worker inspects source.
 
 1. **Scope.** Read `.reports/<slug>/SUMMARY.md`, notes and progress. Reports remain current only while referenced sources are unchanged; runtime archives affected reports after CODE commits and before research. Exclude `.reports/.archive/` from current evidence. Define component, seam and local/sibling repositories through ADDITIONAL_DIRS. Explicit `/explore` forces a fresh probe; otherwise reuse sufficient current evidence. Use the [code index](#code-index) for source lookup and dirty-input errors.
-2. **Research.** Queue RESEARCH with report TARGET paths and `VERIFY: REPORT_ONLY`. Research tasks receive a decoupled, expanded action budget (default 100 actions via `agents.json` or `RESEARCH_STEP_BUDGET`) to explore broad callers without modifying product code. Require verified callers, interface skeletons, coupling, `path#Lline` evidence and an Expand-Migrate-Contract strategy where applicable. Use `"$NIGHTSHIFT_CORE/scripts/reorder_queue.sh"` for live enqueue/preemption. Temporary compiler signature probes must immediately restore task-original source, verify cleanliness and preserve unrelated work. Over-budget research escalates to decomposition review without score penalty.
-3. **Wait.** Delegate `WORKER_INACTIVE_REPEAT=1 bash "$NIGHTSHIFT_CORE/scripts/watch_worker.sh" 0 5 TASK-ID` to a Queue Sentinel (or `ns-watch 0 5 TASK-ID`). Follow Planner's [event gate and acceptance](../planner/SKILL.md#wait-and-accept): long notification-interruptible streaming waits, repeated inactivity relay, and expiry renews waiting on the same watcher. Planner owns the relay contract; RUNNING/heartbeat observations alone require no progress reports. Intervene on BLOCKED, FAIL, SCOPE_BLOCKED, failover or another decision event. Completion requires fresh task-scoped DONE and matching audit, not an idle queue or stale record.
-4. **Verify.** Require passing audit, clean product tree, valid pointers and a headed, nonempty `.reports/<slug>/SUMMARY.md`, <=5 KB. First line:
+2. **Research.** Queue RESEARCH with report TARGET paths and `VERIFY: REPORT_ONLY`. Use the selected config's `worker.research_step_budget` or `RESEARCH_STEP_BUDGET`/runtime fallback (default 100), separate from code budgets. Set the [bounded research](#bounded-research) contract before dispatch; product code stays unchanged. Require verified callers, interface skeletons, coupling, `path#Lline` evidence and an Expand-Migrate-Contract strategy where applicable. Use `"$NIGHTSHIFT_CORE/scripts/reorder_queue.sh"` for live enqueue/preemption. Temporary compiler signature probes must immediately restore task-original source, verify cleanliness and preserve unrelated work. Over-budget research goes to decomposition review; runtime owns scoring.
+3. **Wait.** Delegate `WORKER_INACTIVE_REPEAT=1 bash "$NIGHTSHIFT_CORE/scripts/watch_worker.sh" 0 5 TASK-ID` to a Queue Sentinel (or `ns-watch 0 5 TASK-ID`). Follow Planner's [supervision](../planner/SKILL.md#supervise): long notification-interruptible streaming waits, repeated inactivity relay, and expiry renews waiting on the same watcher. Planner owns the relay contract; RUNNING/heartbeat observations alone require no progress reports. Intervene on BLOCKED, FAIL, SCOPE_BLOCKED, ENVIRONMENT_BLOCKED, HOOK_INTERRUPTED, failover or another decision event. Completion requires fresh task-scoped DONE and matching audit, not an idle queue or stale record.
+4. **Verify.** Require passing audit, clean product tree, valid pointers and a headed, nonempty `SUMMARY.md` in the declared `.reports/<slug>/` or selected runner reports directory, <=5 KB. First line:
 
    ```text
    <!-- REPORT_META: Task=<id> | Commit=<sha> -->
@@ -26,6 +26,18 @@ Deliver evidence. Terminal A reads docs/skills, reports, queue, progress and `$N
    Glossary Additions: <domain terms, if any>
    Refactor Strategy: <Vertical-Slice | Expand-Migrate-Contract>
    ```
+
+## Bounded research
+
+Before dispatch, state the question, attempt cap, total/per-trial deadlines,
+commands, required artifacts and next decision. Stop at the first useful failing
+sample or the declared bound. Record outcomes, source/revision pointers, method,
+limits and unresolved defects; preserve logs even when nothing reproduces.
+A valid, complete report may return `outcome=complete` with
+`research_conclusion=positive|negative|inconclusive`. Missing artifacts or an
+invalid method remain blocked. Unreproduced is not disproved or fixed. Keep the
+defect in backlog; dispatch repair only from sufficient evidence. Reopen bounded
+research for new evidence, rather than repeating an unchanged reproduction loop.
 
 ## Code index
 

@@ -105,6 +105,17 @@ class RetentionTests(Fixture):
 
 
 class ReadinessTests(Fixture):
+    def test_public_daemon_keeps_environment_blocked_status_after_run_once(self):
+        config = self.config(worker={"preflight": {"argv": [sys.executable, "-c", "raise SystemExit(3)"]}})
+        queue = self.runner / "tasks.txt"
+        queue.write_text("TASK-X | TARGET: file\n")
+        result = subprocess.run([sys.executable, str(SCRIPTS / "worker_runtime.py"), "daemon",
+                                 "--root", str(self.root), "--config", str(config)],
+                                env={**os.environ, "WORKER_ID": "default"}, capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertEqual(json.loads((self.runner / "worker.status").read_text())["state"], "ENVIRONMENT_BLOCKED")
+        self.assertEqual(queue.read_text(), "TASK-X | TARGET: file\n")
+
     def test_failure_before_claim_keeps_queue_and_feedback_and_deduplicates(self):
         self.config(worker={"preflight": {"argv": [sys.executable, "-c", "import sys;print('uid map denied',file=sys.stderr);sys.exit(3)"]}})
         queue = self.runner / "tasks.txt"
@@ -221,6 +232,18 @@ class CapabilityTests(Fixture):
 
 
 class DurableHookTests(Fixture):
+    def test_public_daemon_preserves_interrupted_status_after_run_once(self):
+        cfg = {"durable_hooks": True, "hooks": [{"id": "once", "every": 1, "argv": ["true"]}]}
+        config = self.config(acceptance=cfg)
+        scheduler = hooks.Scheduler(cfg, state_path=self.runner / "lifecycle/hook-state.json", project=self.root)
+        scheduler.accepted("TASK-A", "a", self.head)
+        scheduler.next_run()
+        result = subprocess.run([sys.executable, str(SCRIPTS / "worker_runtime.py"), "daemon",
+                                 "--root", str(self.root), "--config", str(config)],
+                                env={**os.environ, "WORKER_ID": "default"}, capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertEqual(json.loads((self.runner / "worker.status").read_text())["state"], "HOOK_INTERRUPTED")
+
     def scheduler(self, **extra):
         return hooks.Scheduler({"durable_hooks": True, "hooks": [{"id": "periodic", "every": 2, "argv": ["true"]}], **extra},
                                state_path=self.runner / "hooks.json", project=self.root)

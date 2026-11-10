@@ -85,6 +85,18 @@ class SentinelCompletionTests(unittest.TestCase):
         self.audit('TASK-ONE[RESEARCH]')
         self.assert_completed()
 
+    def test_queue_prerequisites_notify_before_claim_on_late_watch_start(self):
+        for state in ('ENVIRONMENT_BLOCKED', 'HOOK_INTERRUPTED'):
+            with self.subTest(state=state):
+                (self.ns / 'tasks.txt').write_text('TASK-ONE [CODE] | TARGET: src\n')
+                self.status(state)
+                self.start()
+                out, err = self.process.communicate(timeout=5)
+                self.assertEqual(self.process.returncode, 1, out + err)
+                self.assertIn('[SENTINEL_BLOCKED]', out)
+                self.assertIn(state, out)
+                self.assertIn('TASK-ONE', (self.ns / 'tasks.txt').read_text())
+
     def test_done_is_retained_until_delayed_audit_arrives(self):
         self.start()
         self.done()

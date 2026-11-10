@@ -32,7 +32,8 @@
     "evidence_capabilities.py",
     "acceptance_hooks.py",
     "hook_control.py",
-    "docs/RUNTIME_HARDENING.md"
+    "docs/RUNTIME_HARDENING.md",
+    "docs/AGENT_CONTRACT_REVIEW.md"
   ],
   "skill_files": [
     {

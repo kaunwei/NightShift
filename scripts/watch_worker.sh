@@ -384,6 +384,15 @@ while true; do
   fi
 
   # Running/verification and an unrelated task's status cannot wake Planner.
+  # These prerequisites block the queue before a task is claimed. Deliver the
+  # state through the existing blocked relay, including on a late watcher start.
+  if [ "$ACTIVE_TASK" -eq 0 ] && { [ "$STATE" = "ENVIRONMENT_BLOCKED" ] || [ "$STATE" = "HOOK_INTERRUPTED" ]; }; then
+    if [ -z "$EXPECTED_TASK_ID" ] || task_ids_from_file "$TASKS_FILE" | grep -Fxq "$EXPECTED_TASK_ID"; then
+      echo "[SENTINEL_BLOCKED] Worker entered state: $STATE (queue prerequisite; watch elapsed: ${ELAPSED}s)."
+      exit 1
+    fi
+  fi
+
   STATUS_RELEVANT=1
   if [ -z "$EXPECTED_TASK_ID" ] && [ "$STATE|$CURRENT_TASK" = "$INITIAL_STATE|$INITIAL_TASK" ]; then
     STATUS_RELEVANT=0

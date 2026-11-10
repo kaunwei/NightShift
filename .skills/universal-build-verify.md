@@ -16,7 +16,7 @@ Runtime owns Git writes, hot acceptance, scores and task state. Work on the curr
   requested report, keeping product files unchanged. [DIAGNOSTIC]: diagnose and
   add tests within scope; project hot defines passing behavior.
 - Work only in declared `TARGET:` paths. If a necessary change is outside scope, stop and report `[SCOPE_BLOCKED] (Need Target: path#Lline)`; do not expand scope yourself.
-- `[CODE: FIX]` cannot change tests. `[CODE: REFACTOR]` can change tests only when declared, and may not reduce the total assertion count. `[DIAGNOSTIC]` may add a compile-clean repro that fails on the bug, but cannot modify product code. `[RESEARCH]` is read-only for product code and produces the requested report under a dedicated expanded action budget.
+- `[CODE: FIX]` may add or strengthen regression tests in TARGET; preserve existing assertion strength/count. `[CODE: REFACTOR]` can change tests only when declared, and may not reduce the total assertion count. `[DIAGNOSTIC]` may add a compile-clean repro that fails on the bug, but cannot modify product code. `[RESEARCH]` is read-only for product code and produces the requested report under a dedicated expanded action budget.
 - Respect `FORBIDDEN_SHORTCUTS:` and `CONSTRAINTS:`. Do not weaken assertions, hide errors, add dummy behavior, or use thread sleeps to mask a race. Never use `sudo` or host package managers.
 - Stay within the assigned level's deletion limit: L3 40 lines, L2 150 lines, L1 bounded by `TARGET:`. If compiler fallout points outside scope, stop rather than patching unrelated files.
 - Require zero compiler warnings (`-Wall -Wextra` where supported) and a clean linter. Make each action independently reviewable. Emit `[EXEC] <brief action>` immediately before each tool call when the runtime uses that marker for action accounting. Never combine actions or fabricate markers to evade accounting.
@@ -29,7 +29,7 @@ Runtime owns Git writes, hot acceptance, scores and task state. Work on the curr
 - Make at most three implementation attempts, restoring only the task's original changes before an alternative fix. After the third failure, report `[BLOCKED]`; the runtime preserves failed work and restores the task baseline. Never reset unrelated work. The runtime owns progress and mechanical audits.
 - Do not stage or commit. Return a structured result with the proposed `commit_message`; the host runtime verifies, audits, and commits the declared changes. Do not edit the runtime-owned `progress.log`. The runtime rejects non-runtime uncommitted or untracked files after the task.
 - Leave stage/commit and scoring to runtime. Ghost can supply missing metadata or hot wiring for existing tests; product/test repairs need a new Planner task.
-- Do not self-adjust the shared Worker score; the Planner records the result and evidence pointer.
+- Runtime records outcomes and scores. Use its commands for authorized feedback; never edit live score state.
 
 ## Handoff
 
@@ -43,6 +43,7 @@ Return exactly one JSON object with no text before or after it: outcome, commit_
 - task CASES lists required stable IDs; VERIFY adds a required command to hot.
 - outcome: complete, closeout_required, blocked, scope_blocked, guidance, failure,
   or no_change. `attempts`=integer; `confidence`=HIGH|MED|LOW. no_change requires a reason and no product changes.
+- Research completion follows [bounded research](../.agents/skills/nightshift/explore/SKILL.md#bounded-research): a valid inconclusive report can be complete while its defect remains unresolved.
 - If verification fails, return blocked or failure; closeout_required cannot repair failed tests.
 - On failure, report exact command, output and scope. Planner reschedules issues
   and explicitly restarts. Keep progress and queue records runtime-owned.

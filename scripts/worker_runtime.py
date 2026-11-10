@@ -1869,13 +1869,14 @@ START
 RULES
 {budget_rule}
 - Writes only in TARGET ({target or 'declared paths'}), except moving a proven-stale report into `.reports/.invalid/`. Honor FORBIDDEN_SHORTCUTS/CONSTRAINTS; wider code scope requires [SCOPE_BLOCKED] with `path#Lline`.
-- Deletion caps: L3 40 lines, L2 150, L1 TARGET only. [CODE: FIX] must not change tests; [CODE: REFACTOR] must not reduce assertions. [DIAGNOSTIC] may add only a compile-clean repro test; [RESEARCH] reads source and writes reports only.
+- Deletion caps: L3 40 lines, L2 150, L1 TARGET only. [CODE: FIX] may add or strengthen regression tests in TARGET; preserve existing assertion strength/count. [CODE: REFACTOR] must not reduce assertions. [DIAGNOSTIC] may add only a compile-clean repro test; [RESEARCH] reads source and writes reports only.
 - Never weaken tests, hide errors, fake behavior, mask races with sleeps, use sudo/host package managers, or destructively reset. Do not edit {progress_file}; runtime owns `progress.log`/`tasks.done` (leave unstaged).
 
 CLOSEOUT
 - Development handoff requires nonempty `tdd_cases` with exact `id`/project-relative `source` pairs from permanent hot discovery. Only new or meaningfully modified behavior cases belong here; omit unchanged baseline cases.
 - For unittest hot discovery, recursively flatten `unittest.TestLoader().discover("test")` (or the configured start directory). Copy `test.id()` and `inspect.getfile(type(test))` relative to project root. Do not prepend `test.` or infer IDs from file paths. For example, `test_input.InputTests.test_empty` maps to `test/test_input.py`. Run declared cases explicitly before handoff; do not invent IDs.
 - Run focused red/green cases before handoff. For a change, runtime owns hot and ticket VERIFY ({verify or 'none'}); do not repeat a full regression unless the ticket explicitly requires it. For no_change, run the declared VERIFY and report actual results. At most 3 implementation attempts; on blocker, return [BLOCKED] with cause.
+- [RESEARCH]: Follow the ticket's attempt/time bounds and artifact contract. A valid complete report may use outcome=complete with research_conclusion=positive|negative|inconclusive; unreproduced is not fixed. Missing evidence or invalid method remains blocked. Keep unresolved defects in backlog; new evidence gates further reproduction or repair.
 - Never stage/commit or change Worker score. Do not self-adjust the shared Worker score. Runtime verifies, audits and commits using your message; Planner accepts. Do not adjust scope for the adapter.
 - Return exactly one JSON object with no text before or after it. Fields: `outcome`=complete|closeout_required|blocked|scope_blocked|guidance|failure|no_change; `changed`=boolean; `verification_evidence`; `commit_message`; `no_change_reason` when relevant; `attempts`=integer; `confidence`=HIGH|MED|LOW. `complete`=finished/verified; `no_change`=no edits needed; `closeout_required`=verification/message pending. If verification fails, return blocked or failure; closeout_required cannot repair failed tests. Never invent evidence/messages from logs.
 
@@ -1945,7 +1946,7 @@ def worker_daemon(root):
         try:
             if status_file.is_file():
                 status_data = json.loads(status_file.read_text(encoding="utf-8"))
-                if status_data.get("state") not in ("BLOCKED", "PAUSED", "PAUSED_FOR_PLANNER", "AGENT_NO_RESPONSE", "RECOVERY_FAILED", "WAITING_FOR_AGENT", "WAITING_CLEAN_WORKTREE"):
+                if status_data.get("state") not in ("BLOCKED", "PAUSED", "PAUSED_FOR_PLANNER", "AGENT_NO_RESPONSE", "RECOVERY_FAILED", "WAITING_FOR_AGENT", "WAITING_CLEAN_WORKTREE", "ENVIRONMENT_BLOCKED", "HOOK_INTERRUPTED"):
                     status_data["state"] = "STOPPED"
                     atomic_write(status_file, json.dumps(status_data) + "\n")
         except Exception:
@@ -1995,8 +1996,7 @@ def git_audit(args):
     if not diagnostic and not research and not has_hot_config:
         tests = [name for name in changed if re.search(r"(^tests/|^Tests/|^test/|Test\.[a-z]+$|_test\.[a-z]+$)", name, re.I)]
         if tests:
-            unauthorized = (task_header_has_tag(args.title, r"\[CODE:\s*FIX\]")
-                            or not re.search(r"tests/|Tests/|test", args.target, re.I))
+            unauthorized = not re.search(r"tests/|Tests/|test", args.target, re.I)
             if unauthorized and not re.search(r"test refactor approved", args.constraints, re.I):
                 return 5, f"Test Immutability Violation: Modified test files without authorization in TARGET ({', '.join(tests)})."
             diff = git("diff", *diff_base, "--", *tests).decode("utf-8", "replace")

@@ -8,6 +8,19 @@ import worker_runtime
 
 
 class WorkerPromptTDDContractTests(unittest.TestCase):
+    def test_fix_and_bounded_research_prompts_match_supported_contracts(self):
+        prompt = worker_runtime.build_task_prompt(
+            'TASK-X [CODE: FIX] | ACTION: fix behavior', 'TASK-X', '2', 'src,test',
+            'test command', '', '', 40, 2, 40, 0, '/runner/progress.log')
+        self.assertIn('may add or strengthen regression tests in TARGET', prompt)
+        self.assertIn('preserve existing assertion strength/count', prompt)
+        self.assertNotIn('[CODE: FIX] must not change tests', prompt)
+        research = worker_runtime.build_task_prompt(
+            'TASK-R [RESEARCH] | ACTION: bounded reproduction', 'TASK-R', '2', '.reports/r',
+            'REPORT_ONLY', '', '', 100, 1, 40, 0, '/runner/progress.log')
+        self.assertIn('research_conclusion=positive|negative|inconclusive', research)
+        self.assertIn('Missing evidence or invalid method remains blocked', research)
+
     def test_prompt_requires_discovered_case_identity_and_changed_behavior(self):
         prompt = worker_runtime.build_task_prompt(
             'TASK-X | ACTION: fix behavior', 'TASK-X', '2', 'src,test',

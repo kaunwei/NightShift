@@ -37,6 +37,7 @@ If running un-sourced, discover paths via:
 
    Score 5: L1 vertical slice. Score 3-4: L2 one module/seam. Score 1-2: L3 exact
    behavior, inputs/outputs and red/green steps. Shrink scope as score falls.
+   Runtime owns score arithmetic; use score-read, without a separate capacity review.
 3. Queue blockers first. Include product, tests and permanent hot wiring in TARGET:
 
        TASK-ID [CODE: FIX] | LEVEL: 2 | TARGET: src,test | ACTION: behavior | CASES: stable.case.id | VERIFY: command
@@ -45,6 +46,8 @@ If running un-sourced, discover paths via:
 
        python3 "$NIGHTSHIFT_CORE/scripts/worker_runtime.py" queue-insert --tasks "$TASKS_FILE" --task 'TASK-ISSUE | LEVEL: 2 | TARGET: src,test | ACTION: fix issue | VERIFY: command'
 
+   FIX includes scoped regression tests; preserve existing assertion strength/count.
+   Research tickets use [bounded research](../explore/SKILL.md#bounded-research).
    Use green intermediate phases for interface migrations. Every ten completed
    development tasks, queue a bounded hotspot review of the last twenty commits.
 
@@ -59,17 +62,26 @@ Delegate queue monitoring to Queue Sentinel and end the turn. Never poll status 
 Worker owns execution and drains tasks autonomously. Wake Planner only on:
 - `[SENTINEL_COMPLETED]`: Entire queue drained (`IDLE`).
 - `[BLOCKED]` / `PAUSED_FOR_PLANNER`: Unrecoverable failure or needs decomposition.
+- `ENVIRONMENT_BLOCKED` / `HOOK_INTERRUPTED`: Follow the recovery branches below.
 - `[SENTINEL_INACTIVE]`: Stale heartbeat; send a user-facing inactivity reminder using send_message from the same watcher process, ignoring observer fault.
 
 Normal task completions and heartbeats require zero Planner intervention. Stale timeout is not task failure-require fresh evidence before acting.
 
 ## Recover
 
+- `ENVIRONMENT_BLOCKED`: Read `$NIGHTSHIFT_STATE_DIR/lifecycle/preflight.json`.
+  Repair the reported prerequisite within authorized scope; polling retries it.
+  Queue and scores stay intact. Privileged host changes require owner action.
+- `HOOK_INTERRUPTED`: Use `hook-list` to inspect the run and prior side effects.
+  Choose `hook-cancel` or `hook-retry` with `--run-id ID`; hook commands use
+  `--root . --config "$NIGHTSHIFT_CONFIG_FILE"`. Read runtime acceptance docs for durable
+  hook configuration, revision guards and any separate failure pause.
+
 On verification failure, the runtime automatically pauses dispatch and records a diagnostic
-report under `$NIGHTSHIFT_STATE_DIR/reports/` (and logs `[BLOCKED]` in `$PROGRESS_FILE`). Execution remains
+report under `$NIGHTSHIFT_STATE_DIR/lifecycle/reports/` (and logs `[BLOCKED]` in `$PROGRESS_FILE`). Execution remains
 paused until Planner reviews the report, replans the FIFO queue, and explicitly resumes.
 
-1. Read the failure report under `$NIGHTSHIFT_STATE_DIR/reports/`. Inspect dirty files before
+1. Read the failure report under `$NIGHTSHIFT_STATE_DIR/lifecycle/reports/`. Inspect dirty files before
    restart if needed.
 2. Read scores, revise prompts and use scheduling scripts to put ordinary issue
    tasks as early in FIFO as possible:
@@ -85,10 +97,13 @@ paused until Planner reviews the report, replans the FIFO queue, and explicitly 
    Honor configured PAUSE and agent-event gates separately. Queue edits alone do
    not resume; dispatch remains paused until `restart`. Next Worker discards
    tracked/nonignored uncommitted work; ignored files and reports survive.
-   Failed patches are not stashed or continued.
+   Inspect retained attempt packages before restart; they preserve diagnosis, not
+   permission to continue rejected work. Verification resume has no runtime CLI;
+   use a new bounded task and clean restart, not an invented resume operation.
 
-Five accepted tasks raise score by one (max five); failure resets the streak.
-Existing timeout/budget penalties remain. Read
+Five accepts raise score by one (max five); reject resets the streak; no_fault is
+excluded. The same task's second/third hard timeout or budget failure lowers score.
+Runtime applies these rules; failure attribution is not a separate Planner step. Read
 `$NIGHTSHIFT_CORE/scripts/acceptance.md` for hook setup,
 TDD evidence, cadence and restart state.
 

@@ -80,7 +80,7 @@ SlugBox 已提交版本會輸出 START／log path，因此不能描述成完全�
 
 目前一般 reject 清除 success window，並不直接扣分；五次 accept 提升一分且上限五分，同 task 的第二、第三次 hard failure 才各扣一分，`no_fault` 排除在外，event ID 會去重。因此「7 accepts、9 rejects 仍顯示 5」與公式相容，不足以證明 defect。[實際算式](../../scripts/worker_runtime.py#L397)。部分研究失敗已有 neutral 分類，baseline regression 也有免 score 路徑，不能描述成完全沒有歸因。[failure scoring](../../scripts/lifecycle.py#L228)、[baseline 例外](../../scripts/lifecycle.py#L605)。
 
-先建立 failure taxonomy，分開 product regression、Planner contract、host fault、unsupported evidence、operator interruption、superseded requirement 與 unknown，再展示 rolling outcomes、streak、task size、實際 actions、phase／wall time 和 confidence。對無法確認原因的失敗保留 unknown，不能為了 score 好看直接洗成 no-fault。score 是粗粒度、有上限的歷史指標，不是校準後成功率；後續八個較窄任務連過支持「值得繼續觀察粒度」，不能證明縮小任務是唯一原因。[原觀測與驗收方向](../../todo/05-outcome-aware-scoring.md#L9)。維持 runtime 擁有 score、event idempotency；先不自動增加 budget 或改公式。
+先建立 failure taxonomy，分開 product regression、Planner contract、host fault、unsupported evidence、operator interruption、superseded requirement 與 unknown，再展示 rolling outcomes、streak、task size、實際 actions、phase／wall time 和 confidence。對無法確認原因的失敗保留 unknown，不能為了 score 好看直接洗成 no-fault。score 是粗粒度、有上限的歷史指標，不是校準後成功率；後續八個較窄任務連過支持「值得繼續觀察粒度」，不能證明縮小任務是唯一原因。[原觀測與驗收方向](../../../NightShift_runner/slugbox/notes/worker-capacity-review.md#L3)。維持 runtime 擁有 score、event idempotency；先不自動增加 budget 或改公式。
 
 ## 06：跨 daemon 重啟保留 pending hooks
 
@@ -135,3 +135,9 @@ SlugBox 已提交版本會輸出 START／log path，因此不能描述成完全�
 2026-11-10 已完成六張較窄的 script-only tickets：還原驗證封存、明確配置的環境 probe、POSIX live log、可選能力宣告、opt-in durable hooks、read-only capacity 摘要。原始 01/02/03/04/05/07 仍有超出這六張 ticket 的剩餘範圍；08 涉及研究派工規則尚未更動。已完成的 00 和 06 本機 todo 檔案已刪除，其餘只保留待辦；上文是實作前基準研究，程式行號以該基準為準。
 
 需討論的 skills 政策為 FIX/TDD 一致性、有界研究成功與停止條件、明確 verification-resume；另外新 runtime 狀態與 capacity 資訊的 Planner 使用指引可以一併同步。詳見[實作操作說明](../../scripts/docs/RUNTIME_HARDENING.md)。
+
+Follow-up policy alignment: ASCII role contracts now cover scoped FIX regression
+tests, bounded/inconclusive research and blocked-state recovery. Item 05 is
+withdrawn: Planner uses score-read directly; script scoring and optional diagnostics
+are unchanged. Verification-resume remains unimplemented. See the
+[old/new contract review](../../scripts/docs/AGENT_CONTRACT_REVIEW.md).

@@ -88,7 +88,7 @@ Explore supplies read-only, evidence-based knowledge of code ownership, callers,
 - **Worker owns:** one ticket's bounded implementation, research, or trial delivery; declared verification; structured outcomes, evidence, attempts/confidence, and commit message. Worker does not commit, set score, widen scope, change models, edit runtime-owned progress, or use ghost for further implementation.
 - **Explore owns:** read-only source topology discovery for the Planner. Reports contain topology/callers, interface skeletons, coupling bottlenecks, source pointers, and migration strategy. Explicit Explore invocation requests a new probe; cache reuse is allowed only when source references remain current.
 - **Queue ticket contract:** `TASK-ID | LEVEL | [AFTER: TASK-ID] | TARGET: paths | ACTION: observable change | VERIFY: command | FORBIDDEN_SHORTCUTS: ... | CONSTRAINTS: ...`. `[GUIDANCE]` carries human clarification. New IDs mean changed scope/granularity; unchanged retries keep the original ID.
-- **Task type contract:** `[CODE: FIX]` may change product files but not tests. `[CODE: REFACTOR]` may change declared tests, preserves assertion count, and proves structural closure. `[CODE: EXPAND/MIGRATE/CONTRACT]` is phased green-to-green. `[DIAGNOSTIC]` proves a failing repro without changing product code. `[RESEARCH]` leaves product files untouched and emits validated reports. `[BENCHMARK]` reports measured results.
+- **Task type contract:** `[CODE: FIX]` may change product files and add/strengthen declared regression tests, preserving existing assertion strength/count. `[CODE: REFACTOR]` may change declared tests, preserves assertion count, and proves structural closure. `[CODE: EXPAND/MIGRATE/CONTRACT]` is phased green-to-green. `[DIAGNOSTIC]` proves a failing repro without changing product code. `[RESEARCH]` leaves product files untouched and emits validated reports. `[BENCHMARK]` reports measured results.
 - **Granularity:** L1 at score 5 gives bounded acceptance intent/paths and lets Worker choose internals. L2 at score 3–4 names target files, signatures/error boundaries, and deterministic verification. L3 at score 1–2 gives exact behavior, fixtures, and red/green/verify steps. L2 deletion ceiling is 150 lines; L3 is 40; L1 is target bounded. Multi-interface/refactor gate requires inseparability, one cohesive vertical slice, score-compatible blueprint (L3 below 3), and topology proof.
 - **Planner acceptance SOP:** first require mechanical audit PASS, verification exit 0, at least one test for code tasks, whitelist PASS, and clean tree. Then judge requested behavior, evidence quality, test relevance, scope, report pointer validity, and declared confidence. A clean first attempt with HIGH confidence may fast-track integration; retries, MED/LOW confidence, critical seams, audit failure, or `[DEAD_END]` require focused diff and code review. `[DEAD_END]` requires an isolated passing test or runtime evidence that the suspected subsystem is healthy while the symptom remains. Record a compact result and evidence pointer; do not write narrative scoring rationale into script state.
 - **Confidence contract:** HIGH = first attempt with zero warnings; MED = one or two retries; LOW = brittle result or unverified edge cases. Worker reports attempt trace and evidence pointers; runtime prepends task status and mechanical audit to progress.
@@ -301,3 +301,16 @@ Matt skills such as to-spec, to-tickets, tdd, and code-review are workflow refer
 ### Scratch pressure review
 
 The Worker-only pressure monitor and deletion prompt follow [Scratch review](PORTING_GUIDE.md#scratch-review). The monitor enqueues a bounded maintenance task; the Worker decides whether evidence permits deletion. The fixed report is capped at 1,024 bytes and overwritten. No Planner reading or acceptance step is added.
+
+## Agent contract alignment (2026-11-10)
+
+Planner, Worker, Explore and Sentinel keep their existing roles. FIX test policy
+now permits scoped regression coverage instead of a blanket test-edit ban;
+existing scope, assertion, evidence and product-read-only guards remain. Bounded
+research can complete with valid inconclusive evidence, while unresolved defects
+stay in backlog. ENVIRONMENT_BLOCKED and HOOK_INTERRUPTED relay through the
+existing blocked channel, including before claim, and survive RUN_ONCE shutdown.
+Planner reads registration score directly; separate capacity/attribution review
+is withdrawn. The score algorithm is unchanged. Verification resume remains
+unimplemented; retained evidence does not authorize continuation. The preservation
+comparison is in [agent contract review](AGENT_CONTRACT_REVIEW.md).

@@ -138,14 +138,14 @@ class TaskKindPolicyTests(unittest.TestCase):
             self.assertEqual(self.audit("TASK-KIND [DIAGNOSTIC] | ACTION: reproduce",
                                         mechanical=mechanical), 4)
 
-    def test_fix_header_keeps_test_immutability_but_body_reference_does_not(self):
+    def test_fix_and_body_reference_allow_declared_test_maintenance(self):
         content = (self.work / "tests/test_public.py").read_text()
         self.change("tests/test_public.py", content + "# authorized test maintenance\n")
         for mechanical in (False, True):
             self.assertEqual(self.audit("TASK-KIND | AFTER: PREV[CODE: FIX]",
                                         target="tests/test_public.py", mechanical=mechanical), 0)
             self.assertEqual(self.audit("TASK-KIND [CODE: FIX] | ACTION: repair",
-                                        target="tests/test_public.py", mechanical=mechanical), 5)
+                                        target="tests/test_public.py", mechanical=mechanical), 0)
 
     def test_assertion_non_decrease_stays_enforced_despite_body_reference(self):
         self.change("tests/test_public.py", "import unittest\nclass PublicFixture(unittest.TestCase):\n def test_value(self):\n  pass\n")

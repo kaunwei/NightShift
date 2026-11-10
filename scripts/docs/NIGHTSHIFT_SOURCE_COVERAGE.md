@@ -11,9 +11,9 @@ For every later simplification, compare the changed source hashes and each affec
 | Source | SHA-256 |
 | --- | --- |
 | [.gitignore](../../.gitignore) | c4a3201f71eeedc867384e177c8d2d761fe7188e7537854631773de0601dde3b |
-| [.agents/skills/nightshift/explore/SKILL.md](../../.agents/skills/nightshift/explore/SKILL.md) | 381637e3f90d82fa0fdb9ddcfb30c4103a5f3c200dadf978353c06b5d0c3e997 |
-| [.agents/skills/nightshift/planner/SKILL.md](../../.agents/skills/nightshift/planner/SKILL.md) | d5b91113051cfad6a1071c5416c92646b1b663a4480b257a6b5e5980cd8b0fee |
-| [.skills/universal-build-verify.md](../../.skills/universal-build-verify.md) | e48ea16cd6f0db848007ee6ac84802d84bf3fa56389affd2f9c0242db2b00719 |
+| [.agents/skills/nightshift/explore/SKILL.md](../../.agents/skills/nightshift/explore/SKILL.md) | 0c7a2bb4d0acb1a705f609e7a9ddfe83f30ede5c6b7303334ddb894f4d7785b0 |
+| [.agents/skills/nightshift/planner/SKILL.md](../../.agents/skills/nightshift/planner/SKILL.md) | 8b5edb902d832d55ac7daeac92680048dab60bc382d5d9c8bdf0185d5f1ecb07 |
+| [.skills/universal-build-verify.md](../../.skills/universal-build-verify.md) | 240fe45bb911a52888870af8b9c138a7de1b670313db85adf7958c78e1359357 |
 | [nightshift/adapters/agents.json](../adapters/agents.json) | 1dcce30d5fe2ebe49fa57c4ea108cab7e90f5d50a24ac97117183fe13608d2ea |
 | [nightshift/adapters/agy.py](../adapters/agy.py) | 1af2f11c3143d5f6185ee7d8ee67aba11b28076e7d9c1e05e0c3c086601a4eaa |
 | [nightshift/adapters/codex.py](../adapters/codex.py) | 4a3b8ce67ff6ae807ac2487676f6e28bc7f20d25af6719fb6f337e634e210af8 |
@@ -22,9 +22,9 @@ For every later simplification, compare the changed source hashes and each affec
 | [nightshift/probe_line.sh](../probe_line.sh) | 6514cfdd8582fe2508d8779a0d18608201a0f9c655c846f2c5f4c03e49a437e3 |
 | [nightshift/reorder_queue.sh](../reorder_queue.sh) | 68bf2e6b6d212393ef8c087ce27c2b29e642ddfe8d38e9b7b77f567fa7f42363 |
 | [nightshift/status.sh](../status.sh) | 2896954c5e6972d2c6985a79535b9e6a7cf2325b334d650d4d2dddb57c1257f3 |
-| [nightshift/watch_worker.sh](../watch_worker.sh) | 5030632dbebb92a2985e7b0adaae7bdd738c25f15bc2eb265e2adcd9428b9baa |
+| [nightshift/watch_worker.sh](../watch_worker.sh) | a72cb03d984c80cd5de8efe47863f962284aac1b609de8f4f96d8f49f37440ca |
 | [nightshift/worker.sh](../worker.sh) | d430417b8f221222763e0885aa3a7c2d0e9681da2cda4de00e9d22c9005e0cb9 |
-| [nightshift/worker_runtime.py](../worker_runtime.py) | 6b72f4306167313f995c150785e5543985b5f989b3bb00b970cd9fd7d4075c5f |
+| [nightshift/worker_runtime.py](../worker_runtime.py) | 7f12ad992489917016ab47e24f981872a6deb3ae1062fc65af8bd859ceea3970 |
 | [nightshift/tools/README.md](../tools/README.md) | a35532892107d432df3c4b2175516b28e4310ec3aee357d3184591c2f960c811 |
 | [nightshift/tools/index.py](../tools/index.py) | 3c42160f91ae8152b7a272614dc9e0732493caa7aef6cce65751b952bd199b56 |
 | [nightshift/tools/languages.json](../tools/languages.json) | fc7f10de17095f0a0930fd7e344bd4d787ecc57ee4f3c4202224485e718faa13 |
@@ -32,12 +32,12 @@ For every later simplification, compare the changed source hashes and each affec
 | [nightshift/tools/setup.sh](../tools/setup.sh) | a2cbd18108502b18d4f1a8ad83c3455a94888fbd6cbe65a4ee53c5c1075b3644 |
 | [nightshift/tools/setup.ps1](../tools/setup.ps1) | 31fbe3b44ed2b160342d0b507931f1e23f1ba57f62ceba03ec92d7e4cf0802b6 |
 | [nightshift/scratch_review.py](../scratch_review.py) | 146f28c2325e9bfee6c3c94877bb37bffbd9dc45d00db16204f4722df4e7964c |
-| [nightshift/install-manifest.json](../install-manifest.json) | 9fdcf8e1271fefa0ee53c12a7bce8100f7bb4ba46244df0cc233536b75d0374c |
+| [nightshift/install-manifest.json](../install-manifest.json) | ed499435ef033ab6ebc0216dcbf593674b49bbe3704c6202e10844813a704c17 |
 | [install.sh](../../install.sh) | fdeeb5921379ed67e230dcc3672017dcd5a2fbc09e0ffbe8059ff89edbd007c0 |
 | [remove.sh](../../remove.sh) | dc903ef55e497f8eeaaf5829ffc46f0c0cf81aa72fe78f670a8b3c314837242e |
 | [README.md](../../README.md) | dcb943b41c867909a7f697836c2e4a176e7d403d938b4b4ad4c8b3dbf9b81374 |
 | [test/README.md](../../test/README.md) | f08d9ab6eb15eb369421ef3b4bc405c8f0f2dd26f60b89aac24dbc139b6a409b |
-| [nightshift/docs/NIGHTSHIFT_SPEC.md](../docs/NIGHTSHIFT_SPEC.md) | 6dbcfde4a876b7627d504205e0c45d24c17b1cad23900208aa0ab5463a56458d |
+| [nightshift/docs/NIGHTSHIFT_SPEC.md](../docs/NIGHTSHIFT_SPEC.md) | d017c5aa9089d3241a22cbc82ff8910f7978cea2b359b44233b6dcd9138519ff |
 | [nightshift/docs/PORTING_GUIDE.md](../docs/PORTING_GUIDE.md) | 712fb3d98a5ac77068ccad9dcbc54695af8c7ea82a98dcfa7f8d1346ced65fe8 |
 | [nightshift/docs/DETERMINISTIC_EXPLORE_STRATEGY.md](../docs/DETERMINISTIC_EXPLORE_STRATEGY.md) | c832795fb51c7e8ad65e66de0116629a70480172d0628217cb3aafb12683e896 |
 | [nightshift/docs/DETERMINISTIC_EXPLORE_RESULTS.md](../docs/DETERMINISTIC_EXPLORE_RESULTS.md) | a624dfe4d49bc5fe167e597b71f86e1c3d86610b9e6084fc0e1d3c49721b068c |
@@ -49,8 +49,10 @@ For every later simplification, compare the changed source hashes and each affec
 | [scripts/acceptance_hooks.py](../acceptance_hooks.py) | ee9f97b5aa9d96d8fcb318462872a2be3a117b4754fd703249edb3c3809bbfab |
 | [scripts/hook_control.py](../hook_control.py) | 66a8ecf356c8376684720fd98faa21a32f034730ec0780b6169585152a976567 |
 | [scripts/acceptance.py](../acceptance.py) | f817bb5b9ba59dd37d78ca1556b1dd8f374bea48877c1659d66a5ee05676520f |
-| [scripts/lifecycle.py](../lifecycle.py) | 9aee33108bf0c2d8e7e691c5d778224de2d1a2d33d73738501ae4773a34ea691 |
-| [scripts/docs/RUNTIME_HARDENING.md](../docs/RUNTIME_HARDENING.md) | 1861f7017002808e79d98e46ae714c0e15c19a9c05c8a5fb3fae3c3ad404cdba |
+| [scripts/lifecycle.py](../lifecycle.py) | 0f8c9fe30709ee79f09e278ae6d048fb38693eaf29f5c2fe6d8f4b7b3c11be39 |
+| [scripts/docs/RUNTIME_HARDENING.md](../docs/RUNTIME_HARDENING.md) | 227b8a8018e1cda4bdddbea439cc889d089542c6f39c608898f4ffda007315de |
+
+| [scripts/docs/AGENT_CONTRACT_REVIEW.md](../docs/AGENT_CONTRACT_REVIEW.md) | 032398bc970747bcb5e736cf956db145db1b143ce24d1f80c069f442ce4b3c61 |
 
 ## Runtime function coverage
 
@@ -108,10 +110,10 @@ For every later simplification, compare the changed source hashes and each affec
 | [run_adapter_ghost](../worker_runtime.py#L1617) | 10 |
 | [execute_adapter_task](../worker_runtime.py#L1708) | 10 |
 | [build_task_prompt](../worker_runtime.py#L1841) | 6, 25 |
-| [env_bool](../worker_runtime.py#L1886) | 25–26 |
-| [acquire_worker_lock](../worker_runtime.py#L1890) | 3–5 |
-| [worker_daemon](../worker_runtime.py#L1923) | 3–5, 11–12, 17, 19, 25 |
-| [git_audit](../worker_runtime.py#L1955) | 13–16 |
+| [env_bool](../worker_runtime.py#L1887) | 25–26 |
+| [acquire_worker_lock](../worker_runtime.py#L1891) | 3–5 |
+| [worker_daemon](../worker_runtime.py#L1924) | 3–5, 11–12, 17, 19, 25 |
+| [git_audit](../worker_runtime.py#L1956) | 13–16 |
 | [run_verify](../worker_runtime.py#L2048) | 13–16 |
 | [first_report](../worker_runtime.py#L2100) | 13–16 |
 | [publish_research_reports](../worker_runtime.py#L2126) | 13–16 |
@@ -185,3 +187,8 @@ list/cancel/retry, and capacity/task metrics. The installer manifest includes th
 new runtime dependencies and operating reference. Regression coverage is in
 `test_runtime_hardening.py` plus the existing recovery, timeout, hook, TDD and
 external-project suites. No skill rules were changed.
+
+Agent contract alignment retains existing role branches; the old/new comparison,
+intentional FIX permission correction, bounded research policy, blocked-state
+relay/shutdown handling and unchanged score arithmetic are reviewed in
+[AGENT_CONTRACT_REVIEW.md](AGENT_CONTRACT_REVIEW.md).

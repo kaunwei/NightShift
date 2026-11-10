@@ -642,7 +642,7 @@ def run_session(root, runtime, scheduler):
     finally:
         stopped.set()
         thread.join(timeout=2)
-        if running["state"] not in ("BLOCKED", "PAUSED", "PAUSED_FOR_PLANNER", "AGENT_NO_RESPONSE", "RECOVERY_FAILED", "WAITING_FOR_AGENT"):
+        if running["state"] not in ("BLOCKED", "PAUSED", "PAUSED_FOR_PLANNER", "AGENT_NO_RESPONSE", "RECOVERY_FAILED", "WAITING_FOR_AGENT", "ENVIRONMENT_BLOCKED", "HOOK_INTERRUPTED"):
             update("STOPPED")
         for sig, handler in previous.items():
             signal.signal(sig, handler)

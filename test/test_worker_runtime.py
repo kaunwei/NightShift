@@ -1662,10 +1662,18 @@ class GitAuditContractTests(unittest.TestCase):
         result = self.audit_case({"src/a.py": "updated\n"}, title="[DIAGNOSTIC]")
         self.assertEqual(result.returncode, 4)
 
-    def test_fix_cannot_modify_tests(self):
-        result = self.audit_case({"tests/test_a.py": "assert False\n"},
+    def test_fix_accepts_scoped_regression_tests(self):
+        result = self.audit_case({"tests/test_a.py": "assert True\nassert 1 + 1 == 2\n"},
                                  target="tests/test_a.py", title="[CODE: FIX]")
+        self.assertEqual(result.returncode, 0)
+
+    def test_fix_keeps_test_scope_and_assertion_guards(self):
+        result = self.audit_case({"tests/test_a.py": "assert True\nassert 1 + 1 == 2\n"},
+                                 target="src/a.py", title="[CODE: FIX]")
         self.assertEqual(result.returncode, 5)
+        result = self.audit_case({"tests/test_a.py": "pass\n"},
+                                 target="tests/test_a.py", title="[CODE: FIX]")
+        self.assertEqual(result.returncode, 7)
 
     def test_rejects_decreased_assertions(self):
         result = self.audit_case({"tests/test_a.py": "pass\n"},

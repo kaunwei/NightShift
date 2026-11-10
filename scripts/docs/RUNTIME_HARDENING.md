@@ -1,9 +1,10 @@
 # Script-only runtime follow-ups
 
-These changes implement the script-only tickets recorded under
-`.scratch/runtime-hardening/issues/`. They do not change Worker/Planner skills,
-FIX/test permissions, bounded research completion policy, or introduce verification
-resume. Existing daemons load these changes only after an operator restart.
+The initial script-only tickets are recorded under `.scratch/runtime-hardening/issues/`.
+The follow-up [agent contract alignment](AGENT_CONTRACT_REVIEW.md) synchronizes
+FIX regression tests, bounded research and blocked-state handling with the role
+skills. Verification resume remains unavailable. Existing daemons load code
+changes only after an operator restart.
 
 ## Retained attempts
 
@@ -150,3 +151,6 @@ to 20 recent task/failure records, including recorded level, target entry count,
 actions, elapsed time and failure phase/kind. Missing fields remain unknown;
 target entries are not a measurement of lines changed. Richer task-size policy
 and post-execution failure attribution remain future work.
+
+Planner continues to use score-read for task levels. Capacity output is optional
+diagnostics; it adds no required Planner review or failure-attribution step.

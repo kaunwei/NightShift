@@ -23,6 +23,8 @@ Use `--help` for arguments. Batch runs omit task ID.
 Handle only:
 - Queue completed: deliver results.
 - Blocked, failed, paused, dead, no response, or review required: planner Recover.
+  ENVIRONMENT_BLOCKED and HOOK_INTERRUPTED are queue-wide blocked events; relay
+  their exact state even while the ticket remains queued.
 - Inactive: relay the alert and keep waiting; verify before declaring failure.
 
 Normal progress requires no Planner turn. Relay errors require recovery.
