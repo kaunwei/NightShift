@@ -33,10 +33,11 @@ For every later simplification, compare the changed source hashes and each affec
 | [nightshift/tools/setup.ps1](../tools/setup.ps1) | 31fbe3b44ed2b160342d0b507931f1e23f1ba57f62ceba03ec92d7e4cf0802b6 |
 | [nightshift/scratch_review.py](../scratch_review.py) | 146f28c2325e9bfee6c3c94877bb37bffbd9dc45d00db16204f4722df4e7964c |
 | [nightshift/install-manifest.json](../install-manifest.json) | c7c637dd4a1dc59aba51139666a37b083b86b7e106b58563e61f85a8fe7bad1d |
-| [README.md](../../README.md) | 5c4280b8f80f6e66ec033a8493167f702d392cb080180a79f340cc20a0c23612 |
+| [README.md](../../README.md) | 87854c9ba08acfc82b0770e4ff031a7549910bc16b0ecaca1965aba1e9ca2828 |
+| [PORTING_GUIDE.md](../../PORTING_GUIDE.md) | 0f818ecc27bd07ad56afc448e011e11087f00b58ca78e2f837a6c45ae870d622 |
 | [test/README.md](../../test/README.md) | a08e33dc81db9438d740ecb9cf51c11618ac548fe8d0aec4b4104455d93b853f |
 | [nightshift/docs/NIGHTSHIFT_SPEC.md](../docs/NIGHTSHIFT_SPEC.md) | 84dc6b890602341bb7404730b598cdbe475585d4d5caa69162500ba638945766 |
-| [nightshift/docs/PORTING_GUIDE.md](../docs/PORTING_GUIDE.md) | 712fb3d98a5ac77068ccad9dcbc54695af8c7ea82a98dcfa7f8d1346ced65fe8 |
+| [nightshift/docs/PORTING_GUIDE.md](../docs/PORTING_GUIDE.md) | cf73e9baf1c6b10f0be4a94bbaa62a863024545b040f105db6b924a21e62cd24 |
 | [nightshift/docs/DETERMINISTIC_EXPLORE_STRATEGY.md](../docs/DETERMINISTIC_EXPLORE_STRATEGY.md) | c832795fb51c7e8ad65e66de0116629a70480172d0628217cb3aafb12683e896 |
 | [nightshift/docs/DETERMINISTIC_EXPLORE_RESULTS.md](../docs/DETERMINISTIC_EXPLORE_RESULTS.md) | a624dfe4d49bc5fe167e597b71f86e1c3d86610b9e6084fc0e1d3c49721b068c |
 | [scripts/attempt_archive.py](../attempt_archive.py) | 543e1da1ea2effb5e75ac08f642bb67eb438d6fa02bf3604aab4ffbeeb68270c |
@@ -55,7 +56,7 @@ For every later simplification, compare the changed source hashes and each affec
 | [scripts/ticket_policy.py](../ticket_policy.py) | 4dc719b7922a2c60845aefa5dafde1127a94e3653059667ec78c33874e20da5c |
 | [scripts/outcome_policy.py](../outcome_policy.py) | eba3560478e1a3c318cc7cf2e04e0a394c628add4f4fdfa42b703d08661d34a5 |
 | [scripts/docs/TICKET_ACCEPTANCE.md](../docs/TICKET_ACCEPTANCE.md) | 68575a7350345b4717dbbcaf4855fd53b6b5bddc938c7a07bd34747872600397 |
-| [scripts/acceptance.md](../acceptance.md) | 7111d7bf36d6ec05b07875bbd5a13cc6bb05996f1357fd2fafd9747da7cb9a7a |
+| [scripts/acceptance.md](../acceptance.md) | 96afe02ee5fcd992f57dcf356e019661a34149e0759996eeb18dd1e1755dbbd9 |
 
 | [scripts/background_hooks.py](../background_hooks.py) | d0a6b9f80a943b35533b1f42b4a5685cec27d2ad848eea9459c05a4c139ea294 |
 | [scripts/docs/BACKGROUND_HOOKS.md](../docs/BACKGROUND_HOOKS.md) | e2c3cd4d08882509cece809ffc1f402068b6890dfab95ffce11e125d18b5d61a |

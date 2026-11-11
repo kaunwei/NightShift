@@ -2,8 +2,9 @@
 
 Runtime commits and scores on the current branch. Planner schedules work and
 explicitly restarts after failures. Setup is required; legacy VERIFY alone is
-not evidence that a new TDD case ran. Generated lifecycle state lives under
-`git rev-parse --git-path nightshift`; it is outside Git history and cleanup.
+not evidence that a new TDD case ran. External lifecycle state lives under the selected runner
+`lifecycle/` directory. Legacy execution without an external runner uses
+`git rev-parse --git-path nightshift`. Generated state stays outside product history.
 
 See [script-only runtime follow-ups](docs/RUNTIME_HARDENING.md) for retained
 attempts, configurable readiness probes, POSIX live logs, optional evidence
@@ -11,40 +12,17 @@ capabilities, opt-in durable hooks and capacity inspection.
 
 ## Configure a project
 
-Track `scripts/config.json` with the project's acceptance and agent commands:
+Use the selected runner's config.json, with product path, external state and
+named agent registrations as shown in the
+[Porting Guide](docs/PORTING_GUIDE.md#project-configuration). Activate that runner
+or pass --config/--project to the runtime. Embedded scripts/config.json and
+nightshift/config.json remain compatibility fallbacks.
 
-```json
-{
-  "version": 1,
-  "acceptance": {
-    "hot": "python3 scripts/unittest_hot.py --start test",
-    "cold": "python3 -m unittest discover -s test",
-    "cold_every": 5,
-    "hot_timeout": 300,
-    "cold_timeout": 1800,
-    "wiring": []
-  },
-  "agents": {
-    "primary": {
-      "default": true,
-      "worker": {
-        "step_base": {"L1": 60, "L2": 40, "L3": 20},
-        "task_timeout_seconds": 1800,
-        "research_step_budget": 100
-      },
-      "agent": {
-        "adapter": "codex",
-        "command": "codex",
-        "args": [],
-        "env": {},
-        "config": {}
-      }
-    }
-  }
-}
-```
-
-Runtime reads persistent settings only from `scripts/config.json`. Each agent must define positive `worker.step_base` values for L1, L2, and L3. Restart the Worker after editing configuration.
+Set acceptance.hot to a persistent framework discovery/execution adapter, such
+as the core unittest_hot.py helper; plain pytest/unittest output alone is not hot
+evidence. Keep acceptance scripts and permanent cases in product version control.
+Every agent needs positive worker.step_base values for L1/L2/L3. Restart after
+configuration changes; the daemon does not hot-reload configuration or modules.
 
 Acceptance budgets are separate: hot discovery, hot execution and extra task
 VERIFY share one `hot_timeout` deadline (default 300 seconds). Cold uses

@@ -1,105 +1,96 @@
 # NightShift External Project Architecture Guide
 
-External architecture isolates NightShift runtime state, task queues, and AST indices from the target repository. Target repositories retain zero NightShift runtime footprint; project-owned automation stays with product source.
+Set up one shared core and one runner per product Git repository. Keep engine
+files, queues and generated state outside the product. Product-owned automation,
+source, permanent tests and documentation remain version controlled in the product.
 
-## 1. Directory Structure
+The former embedded installer/updater is retired. This guide is the canonical
+porting reference; the root PORTING_GUIDE.md points here.
 
-- Core: NightShift engine, adapters, and agent skills.
-- Runner Workspace: One directory per project, containing its activator, configuration and temporary state. `projects/<project_name>/` is an example grouping; `<runner>/<project_name>/` is equally valid.
-- Target Project: Product Git worktree containing source, tests, permanent documentation and project-owned automation.
+## Layout and ownership
 
 ```text
+NightShift-core/
+  scripts/                   # Engine, adapters, parser and runtime references
+  .agents/skills/            # Shared role/engineering skills
+  .skills/                   # Worker execution contract
 runner-workspace/
-  projects/
-    <project_name>/
-      config.json          # Project configuration (path, state, acceptance, agents)
-      env.sh               # Source: prompt, cd, helper commands and deactivation
-      run_worker.sh        # Standalone worker launcher (core template)
-      tasks.txt            # Worker FIFO queue
-      tasks.done           # Completed task log
-      progress.log         # Audit and progress history
-      worker.status        # Real-time daemon status
-      spec/                # Temporary specifications and design drafts
-      todo/                # Tickets, plans, and unassigned work
-      handoff/             # Agent handoffs and session summaries
-      notes/               # Investigation notes and temporary reports
-      .scratch/            # Disposable development artifacts
-      code-index/          # AST navigation index (INDEX.md, index.json)
-      reports/             # Failure diagnostic reports
+  my-app/
+    config.json              # Product path, state, acceptance and agents
+    env.sh                   # Source in the current terminal
+    run_worker.sh            # Copy of the core launcher template
+    tasks.txt                # FIFO
+    tasks.done               # Outcome history
+    progress.log             # Audit history
+    worker.status            # Worker status
+    .worker-agent-scores/     # Persistent per-registration capability history
+    spec/ todo/ handoff/ notes/
+    .scratch/                # Attempt retention and disposable artifacts
+    code-index/              # AST navigation files
+    lifecycle/
+      preflight.json         # Readiness evidence
+      reports/               # Task failure reports
+      verify/                # Live command logs and metadata
+      background-hooks/      # Hook reports, manifests and retained failures
+product-repository/
+  source, tests, docs, project-owned scripts
 ```
 
-### Ownership and project selection
+Generated directories appear when needed. Preserve the user's chosen runner
+layout: `runner/my-app/` and `runner/projects/my-app/` are both valid. The runner
+needs no Git repository. `state: "."` resolves relative to its config.json.
 
-Treat the selected project's runner as a directory. For example,
-`NightShift_runner/slugbox/` contains `env.sh`, `config.json` and that project's
-state. Preserve the user's chosen directory layout; the optional `projects/`
-grouping above does not require another nesting level.
-
-| Content | Maintained location |
+| Material | Destination |
 | --- | --- |
-| Shared engine, adapters and skills | NightShift core |
-| Per-project `env.sh` activator and `config.json` | Selected project's runner directory |
-| Queues, status, logs, temporary specs, tickets, handoffs, notes and indices | Same project's runner directory |
-| Hot/cold test runners, framework evidence adapters, release/demo/build/serve scripts and export presets | Target project, using its existing script/configuration conventions |
-| Generated regression reports, build/demo artifacts, import caches and local TLS keys | Selected project's runner directory, in appropriate temporary subdirectories |
+| Engine, adapter implementations and shared skills | Core |
+| Config, activator, standalone wrapper and all runtime state | Selected runner |
+| Temporary specs, tickets, handoffs and notes | Runner exports listed below |
+| Framework evidence runners, build/release/demo scripts and export presets | Product's existing script conventions |
+| Generated reports, build/demo outputs, caches and local credentials | Appropriate runner subdirectories |
+| Permanent requirements, ADRs, user docs, source and tests | Product Git history |
 
-Project selection means sourcing that directory's activator in the current
-terminal:
+## Prepare the core and runner
+
+Prerequisites are Python 3, Bash and Git, plus the chosen model CLI. Process and
+hook supervision currently use POSIX facilities. Prepare the parser in the core:
 
 ```bash
-cd /absolute/path/to/NightShift_runner/slugbox
-source env.sh
-ns-status
+export NIGHTSHIFT_CORE=/absolute/path/to/NightShift
+bash "$NIGHTSHIFT_CORE/scripts/tools/setup.sh"
 ```
 
-The runner's "launcher" is this `env.sh` activator. Keep `config.json` beside it
-with `state: "."`. An instruction to keep launchers and temporary files in the
-runner retains this per-project directory and its configuration. It does not ask
-for an executable file named `slugbox`, a project-selection CLI or a new subshell.
-Create such interfaces only when explicitly requested.
+Setup verifies actual C, C++ and Python parsing. Product compilers, engines,
+framework discovery and build dependencies are project-owned prerequisites.
 
-The runner needs no Git repository or Git protection. Keep project-specific
-script implementations under the product's version control; the external config
-invokes them from the product root. Temporary outputs go to the selected runner.
-NightShift's product commit/scope audits still apply to the target worktree.
+Create the runner and copy the existing standalone wrapper:
 
-### Migration checks
+```bash
+mkdir -p /absolute/path/to/runner/my-app
+cp "$NIGHTSHIFT_CORE/scripts/templates/run_worker.sh" /absolute/path/to/runner/my-app/run_worker.sh
+chmod +x /absolute/path/to/runner/my-app/run_worker.sh
+```
 
-Before moving files, read this guide completely and identify the core, product
-and chosen per-project runner paths. Classify each moved file using the table.
-Keep existing queues, references and generated artifacts intact during migration.
+Place config.json and env.sh beside it. The wrapper discovers the core using
+NIGHTSHIFT_CORE and sources the same activator. Set the core default in env.sh or
+export NIGHTSHIFT_CORE before activation; it must point to the local checkout.
+For migration, stop owned execution at a safe boundary and preserve queues,
+references, old reports and user-owned `.worker-tree`/`.preview` data explicitly.
+Sourcing an activator does not move existing files or rewrite queued paths.
 
-Before declaring the port complete, verify all of the following:
+## Project configuration
 
-- Sourcing `env.sh` changes to the intended product and exports absolute config,
-  state and temporary-document paths in the current terminal; an interactive
-  prompt shows `(ns:<project_name>)`, and `ns-help` / `ns-run` are available.
-- Re-sourcing keeps one indicator. `deactivate-ns` restores the previous prompt
-  and directory and clears the selected project's exported paths.
-- `env.sh` and `config.json` remain together in that project's runner directory;
-  `state: "."` resolves there. Switching projects replaces every exported path.
-- Hot/cold and artifact hooks invoke product-maintained scripts; their generated
-  outputs stay in the selected runner.
-- With an empty queue, `RUN_ONCE=1 ns-worker` exits cleanly and `ns-status` reads
-  the same project's state. Existing work is not dispatched just to test setup.
-
-## 2. Configuration: config.json
-
-Place `config.json` beside the selected runner's `env.sh` (for example,
-`projects/<project_name>/config.json` or `slugbox/config.json`):
+Example runner config.json for a Python unittest project:
 
 ```json
 {
   "version": 1,
   "projects": {
-    "<project_name>": {
-      "path": "/absolute/path/to/target/project",
-      "state": "."
-    }
+    "my-app": {"path": "/absolute/path/to/product", "state": "."}
   },
   "acceptance": {
-    "hot": "pytest -q tests/test_fast.py",
-    "cold": "pytest",
+    "version": 1,
+    "hot": "python3 '/absolute/path/to/NightShift/scripts/unittest_hot.py' --start tests",
+    "cold": "python3 -m unittest discover -s tests",
     "hot_timeout": 300,
     "cold_timeout": 1800,
     "cold_every": 5
@@ -109,54 +100,205 @@ Place `config.json` beside the selected runner's `env.sh` (for example,
       "default": true,
       "worker": {
         "task_timeout_seconds": 1800,
-        "step_base": {"L1": 22, "L2": 22, "L3": 22}
+        "research_step_budget": 100,
+        "step_base": {"L1": 60, "L2": 40, "L3": 20},
+        "preparation_steps": 40
       },
-      "agent": {
-        "adapter": "codex",
-        "command": "codex"
-      }
+      "agent": {"adapter": "codex", "command": "codex"}
     }
   }
 }
 ```
 
-## 3. Environment Anchor: env.sh
+Replace both absolute paths and select the intended adapter/model in the agent
+profile. The supplied hot command implements persistent discovery/execution
+receipts. A bare pytest/unittest command can be cold or ticket VERIFY; using it
+as hot requires a [framework evidence adapter](../acceptance.md#framework-adapter-protocol).
+Validate permanent discovery and actual execution before dispatching code work.
 
-`env.sh` anchors agent and terminal sessions to the project runner state.
-Always source the selected project's file, for example
-`source projects/<project_name>/env.sh` or `source slugbox/env.sh`.
+Commands run from the product root. Acceptance budgets are separate from Worker
+execution timeouts. Code actions use max(level base, preparation floor) plus the
+planned file estimate times per-file steps. With the example and default five
+steps per file, one-file L1/L2/L3 budgets are 65/45/45. Research has its own budget.
+An optional registration preflight probe checks the effective sandbox/tooling
+before claim; see [readiness](RUNTIME_HARDENING.md#readiness-before-queue-claim).
 
-Activation changes the current directory to the target product and shows
-`(ns:<project_name>)` in an interactive Bash/Zsh prompt. Re-sourcing replaces the
-context without stacking prompt prefixes. `ns-help` lists available commands;
-`ns-run` aliases `ns-worker`. `deactivate-ns` restores the prior prompt/directory
-and clears the selected project's state and temporary-document exports.
+For multi-project configs, select a project explicitly with --project. An activated
+terminal exports NIGHTSHIFT_PROJECT_NAME; commands below pass it to the CLI.
+Restart the daemon after editing configuration. Existing agents retain inherited
+environment until restarted.
 
-For standalone execution, copy
-[`scripts/templates/run_worker.sh`](scripts/templates/run_worker.sh) beside
-`env.sh` and `config.json`, make it executable and run `./run_worker.sh`. It loads
-the same activator. `RUN_ONCE=1 ./run_worker.sh` honors single-run mode.
+## Activate the selected runner
 
-Set the template's core path to the local NightShift checkout (or export
-`NIGHTSHIFT_CORE` before sourcing it). Use `source env.sh` in Bash/Zsh; executing
-`bash env.sh` only changes the child process and cannot activate the parent shell.
-Custom prompt managers must retain the `(ns:<project_name>)` prefix when rebuilding
-the prompt. Project-specific helpers such as `ns-hot`, `ns-cold` and `ns-demo` can
-call scripts in the target repository.
+Save the [activator template](#activator-template) below as runner env.sh. Source
+it in the current Bash/Zsh terminal:
 
-| Command | Behavior |
+```bash
+source /absolute/path/to/runner/my-app/env.sh
+ns-help
+ns-status
+ns-queue
+```
+
+Activation changes to the product, exports absolute config/state paths and shows
+one `(ns:my-app)` prefix in interactive terminals. Re-sourcing replaces the context.
+`deactivate-ns` restores the previous prompt/directory and clears the runner
+exports. Custom prompt managers should retain the project prefix when rebuilding
+PS1. Running `bash env.sh` affects only its child shell.
+
+The activator creates these temporary-document destinations in the runner:
+
+| Export | Purpose |
 | --- | --- |
-| `ns-run` / `ns-worker` | Start the selected runner's `run_worker.sh` |
-| `ns-help` | List available helpers after activation |
-| `ns-status` / `ns-queue` | Inspect the selected project's status / queue |
-| `ns-watch [--help]` | Watch task completion or worker events |
-| `ns-pause` / `ns-resume` | Set / clear the manual pause file; failure recovery remains separate |
-| `deactivate-ns` | Restore the prior prompt and directory; clear project context |
+| NIGHTSHIFT_SPEC_DIR | Temporary specifications/design drafts |
+| NIGHTSHIFT_TODO_DIR | Tickets, plans and unassigned work |
+| NIGHTSHIFT_HANDOFF_DIR | Handoffs and session summaries |
+| NIGHTSHIFT_NOTES_DIR | Investigation notes and diagnostic reports |
+| NIGHTSHIFT_SCRATCH_DIR | Disposable development artifacts |
 
-The standalone wrapper retries worker exits in persistent mode. `RUN_ONCE=1`
-executes one worker invocation and preserves its exit code without retrying.
+Use these absolute paths in queued references. Environment variables do not
+redirect arbitrary relative writes. Permanent product docs stay with product
+source, and secrets stay out of ticket prose/reports. Switching runners replaces
+every exported document/state path.
 
-Template for `projects/<project_name>/env.sh`:
+## Check setup without dispatching work
+
+Use a fresh runner with an empty queue; preserve an existing nonempty queue.
+Inspect selected paths and exercise the launcher without model work:
+
+```bash
+python3 "$NIGHTSHIFT_CORE/scripts/worker_runtime.py" project-info \
+  --root "$NIGHTSHIFT_PROJECT_ROOT" --config "$NIGHTSHIFT_CONFIG_FILE" \
+  --project "$NIGHTSHIFT_PROJECT_NAME"
+# Only when tasks.txt is empty:
+RUN_ONCE=1 ns-worker
+ns-status
+```
+
+Done means project-info names the intended product/runner, the empty session exits
+cleanly, status reads that runner, the product has no new runtime files, and
+activation/deactivation restore the terminal context. This smoke check does not
+certify the model sandbox or hot framework; validate those project prerequisites
+separately before queueing implementation.
+
+## Tickets and capability
+
+A code ticket declares its acceptance unit, LEVEL, TARGET, action and verification:
+
+```text
+TASK-042 [CODE: FIX] | LEVEL: 3 | TARGET: src/parser.py,tests/test_parser.py | FILES: 2 | ACTION: Reject empty input and add a permanent regression case | VERIFY: python3 -m unittest discover -s tests -p test_parser.py
+```
+
+Worker returns structured evidence; runtime owns verification, commits and score
+updates. Default code handoff requires new/meaningfully changed permanent tests,
+full hot and scope audits. Explicit REFACTOR/EXISTING can pin unchanged cases;
+VERIFY-only executes actual commands without product edits, commit or score credit.
+Use the [ticket contract](TICKET_ACCEPTANCE.md) for those mode requirements.
+
+| Registration score | Allowed LEVEL |
+| --- | --- |
+| 5 | L1, L2, L3 |
+| 3-4 | L2, L3 |
+| 1-2 | L3 |
+
+LEVEL need not equal the recommendation. A lower number represents broader work;
+claim, routing, failover and direct task execution enforce the capability ceiling.
+Invalid contracts leave the FIFO under CONTRACT_BLOCKED. TARGET/deletion audits
+still apply. Planner reads registration scores directly when sizing complete
+acceptance units; no extra capacity-review step is required.
+
+## Operations and recovery
+
+| Helper | Behavior |
+| --- | --- |
+| ns-worker / ns-run | Start the selected standalone wrapper |
+| ns-help | List helpers |
+| ns-status / ns-queue | Inspect selected state / FIFO |
+| ns-watch 0 5 TASK-ID | Wait for audited task completion or a genuine fault |
+| ns-pause / ns-resume | Set/clear the manual pause flag at a task boundary |
+| deactivate-ns | Restore the prior terminal context |
+
+Persistent mode waits for future tickets; the wrapper retries worker exits.
+RUN_ONCE=1 executes one daemon session without wrapper retry, preserving its exit
+code. It may process multiple tickets and can finish at an empty queue, a dispatch
+gate or after draining scheduled foreground hooks. Eligible background work is
+drained before normal exit. It does not mean exactly one ticket.
+
+For an ordinary task failure, Planner inspects lifecycle/reports, revises the
+FIFO into bounded repair work, then releases the diagnosed failure pause:
+
+```bash
+python3 "$NIGHTSHIFT_CORE/scripts/worker_runtime.py" restart \
+  --root "$NIGHTSHIFT_PROJECT_ROOT" --config "$NIGHTSHIFT_CONFIG_FILE" \
+  --project "$NIGHTSHIFT_PROJECT_NAME"
+```
+
+This keeps the live session and starts subsequent work clean; it does not resume
+an interrupted verification. ns-resume only clears the manual PAUSE file.
+Capability-change events have their own acknowledgement gate. Read the event and
+use the runtime agent-event-ack command with its event/state arguments before
+resuming affected dispatch. See [recovery details](../acceptance.md#failure-and-restart).
+
+## Optional hooks
+
+Ordinary configured hooks count accepted ticket events, including no-change;
+cold_every counts accepted development commits. They execute synchronously before
+the next ticket. A live hook-register one-shot targets an exact future task ID.
+Default one-shots/counters are session-only; durable_hooks optionally persists
+legacy hook obligations, whose interrupted effects need explicit review.
+
+A custom periodic hook may register a second stage:
+
+```json
+{
+  "id": "periodic-analysis",
+  "every": 3,
+  "argv": ["python3", "tools/prepare.py"],
+  "timeout": 60,
+  "second_stage": {
+    "argv": ["python3", "tools/analyze.py"],
+    "timeout": 1800
+  }
+}
+```
+
+Add this object to acceptance.hooks only after its product-owned scripts exist.
+First stage writes NIGHTSHIFT_HOOK_ARTIFACT_DIR; runtime seals a copy for second
+stage. Both can export reports to NIGHTSHIFT_HOOK_REPORT_DIR. The second stage
+uses a fixed-revision independent clone, with no git worktree; use snapshot-relative
+paths and the supplied root/artifact variables.
+
+Dual-stage hooks count development commits only. One background command runs per
+project; busy thresholds coalesce and use the latest accepted revision when free.
+Reports identify revision/input hashes and freshness; older success does not
+validate current code. Failures wait for the active ticket, get a diagnostic
+using the triggering registration when available, then hold new claims for
+Planner repair. Missing registrations or unsafe snapshots fall back to raw evidence.
+Ghost does not edit/commit, rotate models or score the Worker. Acknowledge after
+putting repair work first:
+
+```bash
+python3 "$NIGHTSHIFT_CORE/scripts/worker_runtime.py" hook-list \
+  --root "$NIGHTSHIFT_PROJECT_ROOT" --config "$NIGHTSHIFT_CONFIG_FILE" \
+  --project "$NIGHTSHIFT_PROJECT_NAME"
+python3 "$NIGHTSHIFT_CORE/scripts/worker_runtime.py" hook-cancel \
+  --root "$NIGHTSHIFT_PROJECT_ROOT" --config "$NIGHTSHIFT_CONFIG_FILE" \
+  --project "$NIGHTSHIFT_PROJECT_NAME" --run-id RUN_ID
+```
+
+Second-stage counters, handles and failure holds always live in RAM, even with
+durable legacy hooks. Stop cleans owned background commands; relaunch starts at
+zero without replay. Reports and failed snapshots remain evidence on disk.
+Success deletes temporary clones/inputs. Full variables and limits are in
+[Background Hooks](BACKGROUND_HOOKS.md); ordinary hook retry/cancel semantics are
+in [post-acceptance hooks](../acceptance.md#post-acceptance-hooks).
+
+## Activator template
+
+Copy this Bash/Zsh template into the selected runner's env.sh and set the core
+path. Keep run_worker.sh beside it, copied from the
+[standalone template](../templates/run_worker.sh). It preserves the existing
+activation, temporary-document, helper and deactivation behavior.
 
 ```bash
 # NightShift Project Environment Activator (Bash / Zsh)
@@ -237,6 +379,8 @@ deactivate-ns() {
   unset NIGHTSHIFT_CORE NIGHTSHIFT_CONFIG_FILE NIGHTSHIFT_STATE_DIR NIGHTSHIFT_PROJECT_ROOT NIGHTSHIFT_PROJECT_NAME
   unset NIGHTSHIFT_SPEC_DIR NIGHTSHIFT_TODO_DIR NIGHTSHIFT_HANDOFF_DIR NIGHTSHIFT_NOTES_DIR NIGHTSHIFT_SCRATCH_DIR
   unset TASKS_FILE TASKS_DONE_FILE PROGRESS_FILE STATUS_FILE PAUSE_FILE
+  unset WORKER_AGENT_EVENTS_FILE WORKER_AGENT_EVENTS_CURSOR_FILE WORKER_AGENT_EVENTS_ACK_FILE
+  unset AGENT_DISPATCH_GATE_FILE
   unset _NS_ENV_ACTIVE _NS_SAVED_PWD _NS_SAVED_PS1_SET _NS_SAVED_PS1
   unset _NS_SAVED_GODOT_SET _NS_SAVED_GODOT _NS_SAVED_BYTECODE_SET _NS_SAVED_BYTECODE
   unset _NS_SAVED_ROOT_SET _NS_SAVED_ROOT _ENV_DIR
@@ -252,47 +396,3 @@ printf 'NightShift activated: (ns:%s)\n  Target: %s\n  State:  %s\n' \
   "$NIGHTSHIFT_PROJECT_NAME" "$NIGHTSHIFT_PROJECT_ROOT" "$NIGHTSHIFT_STATE_DIR"
 ns-help
 ```
-
-## 4. Operational Rules for Agents
-
-1. Zero Footprint:
-   Never write runtime logs, status, or task queues into the target repository.
-2. Temporary Specs and Tickets:
-   Use the exported absolute paths for development documents:
-   - `$NIGHTSHIFT_SPEC_DIR`: temporary specifications and design drafts.
-   - `$NIGHTSHIFT_TODO_DIR`: tickets, execution plans, and unassigned work.
-   - `$NIGHTSHIFT_HANDOFF_DIR`: handoffs, session summaries, and continuation instructions.
-   - `$NIGHTSHIFT_NOTES_DIR`: research notes, diagnostic writeups, and temporary reports.
-   - `$NIGHTSHIFT_SCRATCH_DIR`: disposable artifacts and experiments.
-
-   These directories are created when `env.sh` is sourced. Paths are derived from
-   the selected runner every time; switching projects must not reuse another
-   runner's document paths. Skills do not need editing: agents should use these
-   environment paths when choosing output destinations, and tickets should cite
-   absolute runner document paths rather than project-relative `todo/` or `spec/`.
-   Environment variables provide destinations; they do not redirect arbitrary
-   relative filesystem writes automatically.
-
-   Keep permanent product requirements, ADRs, user guides, source, and tests in
-   the target repository when they are intended for version control. Do not put
-   secrets in temporary documents. Existing files and queued references are not
-   migrated by sourcing the environment; migrate them explicitly at a safe boundary.
-   Already-running agents retain their inherited environment until restarted.
-
-   If the activator provides `deactivate-ns`, unset `NIGHTSHIFT_SPEC_DIR`,
-   `NIGHTSHIFT_TODO_DIR`, `NIGHTSHIFT_HANDOFF_DIR`, `NIGHTSHIFT_NOTES_DIR`, and
-   `NIGHTSHIFT_SCRATCH_DIR` there as well.
-3. Queue Format:
-   Enqueued tasks in `tasks.txt` must follow:
-   `TASK-ID | LEVEL: 1-3 | TARGET: <paths> | ACTION: <instruction> | VERIFY: <test_command>`
-4. Execution:
-   Run `ns-worker` (persistent daemon) or `RUN_ONCE=1 ns-worker` (single task run).
-
-
-## Optional acceptance hooks
-
-Keep artifact and project-specific logic in the project. NightShift runs
-configured `acceptance.hooks` every N accepted tickets, or a live-session
-`hook-register` one-shot after an exact ticket ID. Relaunching the worker resets
-hook registrations, counters and pending runs. See
-[scheduler configuration and recovery](scripts/acceptance.md#post-acceptance-hooks).
