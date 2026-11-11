@@ -19,6 +19,7 @@ RUNTIME = ROOT / "scripts/worker_runtime.py" if (ROOT / "scripts/worker_runtime.
 sys.path.insert(0, str(ROOT / "scripts" if (ROOT / "scripts").is_dir() else ROOT / "scripts"))
 import worker_runtime as runtime_module
 from worker_runtime import build_task_prompt, first_report, publish_research_reports
+from runtime_fixture import deploy_runtime
 
 
 def runtime(*args, env=None):
@@ -105,15 +106,6 @@ def _run_worker_fixture_compat(command, *args, **kwargs):
 
 
 subprocess.run = _run_worker_fixture_compat
-
-
-def seed_parser_environment(target):
-    """Reuse an explicitly supplied parser environment for offline install fixtures."""
-    environment = os.environ.get("NIGHTSHIFT_TEST_PARSER_VENV")
-    if environment:
-        tools = Path(target) / "nightshift/tools"
-        tools.mkdir(parents=True, exist_ok=True)
-        (tools / ".venv").symlink_to(environment, target_is_directory=True)
 
 
 def copy_runtime_fixture(destination):
@@ -216,28 +208,6 @@ class InPlaceExecutionContractTests(unittest.TestCase):
             self.assertIn(f"WorkDir: {root.resolve()}", result.stdout)
             self.assertFalse((root / ".worker-tree").exists())
             self.assertFalse((root / ".preview").exists())
-
-    @unittest.skipUnless((ROOT / "install.sh").is_file(), "source checkout only")
-    def test_installer_update_preserves_legacy_worker_data_and_environment(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory) / "project"
-            root.mkdir()
-            (root / "worker.sh").write_text("legacy launcher\n")
-            (root / ".worker.env").write_text("WORKER_ISOLATION=1\nKEEP_ME=present\n")
-            (root / ".worker-tree").mkdir()
-            (root / ".worker-tree/unmerged.txt").write_text("unmerged work\n")
-            (root / ".preview").mkdir()
-            (root / ".preview/version.json").write_text("legacy preview\n")
-            seed_parser_environment(root)
-
-            result = subprocess.run(["bash", str(ROOT / "install.sh"), str(root)],
-                                    capture_output=True, text=True, timeout=30)
-
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            self.assertEqual((root / ".worker.env").read_text(),
-                             "WORKER_ISOLATION=1\nKEEP_ME=present\n")
-            self.assertEqual((root / ".worker-tree/unmerged.txt").read_text(), "unmerged work\n")
-            self.assertEqual((root / ".preview/version.json").read_text(), "legacy preview\n")
 
 
 class AgentConfigContractTests(unittest.TestCase):
@@ -3295,17 +3265,20 @@ class DaemonLifecycleTests(unittest.TestCase):
 
 
 class TrialDemoIntegrationTests(unittest.TestCase):
-    @unittest.skipUnless((ROOT / "install.sh").is_file(), "source checkout only")
-    def test_installed_trial_demo_covers_binary_bundle_shared_file_and_custom_pause(self):
+    def test_external_trial_demo_covers_binary_bundle_shared_file_and_runner_pause(self):
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / "project"
             fixture = ROOT / "test/fixtures/trial-demo"
             shutil.copytree(fixture, target)
-            seed_parser_environment(target)
+            core = Path(directory) / "core/nightshift"
+            deploy_runtime(core)
+            state = Path(directory) / "runner"
+            state.mkdir()
+            config = core / "config.json"
+            config.write_text(json.dumps({"version": 1, "projects": {
+                "trial": {"path": str(target), "state": str(state)}}}))
+            (target / ".gitignore").write_text(".trials/\n")
             subprocess.run(["git", "-C", str(target), "init", "-q"], check=True)
-            install = subprocess.run(["bash", str(ROOT / "install.sh"), str(target)],
-                                     capture_output=True, text=True, timeout=30)
-            self.assertEqual(install.returncode, 0, install.stdout + install.stderr)
 
             single = subprocess.run([str(target / "bin/standalone")], cwd=target,
                                     capture_output=True, text=True, check=True)
@@ -3322,134 +3295,29 @@ class TrialDemoIntegrationTests(unittest.TestCase):
                                       str(trial / "bin/show-message")], check=False)
             self.assertEqual(ignored.returncode, 0)
 
-            tasks = target / "nightshift/tasks.txt"
+            tasks = state / "tasks.txt"
             tasks.write_text("TASK-WAIT | ACTION: remain pending\n")
-            pause = target / "ops/worker.hold"
-            pause.parent.mkdir(parents=True, exist_ok=True)
+            (state / "tasks.done").write_text("")
+            pause = state / "PAUSE"
             pause.touch()
-            status = subprocess.run(["bash", str(target / "nightshift/status.sh")], cwd=target,
-                                    env={**os.environ, "PAUSE_FILE": str(pause)},
+            status = subprocess.run(["bash", str(core / "status.sh"), "--config", str(config)], cwd=target,
                                     capture_output=True, text=True, check=True)
             self.assertIn("Pause Flag     : [PAUSED]", status.stdout)
-            poll = subprocess.run([sys.executable, str(target / "nightshift/worker_runtime.py"),
-                                   "poll-next", "--tasks", str(tasks), "--done", str(target / "nightshift/tasks.done"),
+            poll = subprocess.run([sys.executable, str(core / "worker_runtime.py"),
+                                   "poll-next", "--tasks", str(tasks), "--done", str(state / "tasks.done"),
                                    "--pause", str(pause), "--work-dir", str(target)],
                                   capture_output=True, text=True, check=True)
             self.assertEqual(poll.stdout.split("\0", 1)[0], "paused")
             self.assertIn("TASK-WAIT", tasks.read_text())
+            self.assertFalse((target / "nightshift").exists())
+            self.assertFalse((target / ".agents").exists())
 
 
-class InstallerIntegrationTests(unittest.TestCase):
-    @unittest.skipUnless((ROOT / "install.sh").exists(), "source checkout only")
-    def test_installer_deploys_namespace_and_preserves_project_files_on_update(self):
-        with tempfile.TemporaryDirectory() as directory:
-            target = Path(directory) / "project"
-            target.mkdir()
-            seed_parser_environment(target)
-            (target / "nightshift/docs").mkdir(parents=True, exist_ok=True)
-            (target / "nightshift/docs/custom.md").write_text("Keep project notes.\n")
-            (target / "nightshift/acceptance.json").write_text('{"version": 1, "hot": "legacy-hot"}')
-            (target / "nightshift/docs/NIGHTSHIFT_SPEC.md").write_text("Old shipped spec.\n")
-            (target / "nightshift/skills/nightshift/planner").mkdir(parents=True)
-            (target / "nightshift/skills/nightshift/planner/SKILL.md").write_text("Duplicate.\n")
-            subprocess.run(["git", "init", "-q", str(target)], check=True)
-            (target / ".agents").mkdir()
-            manifest = target / ".agents/skills.json"
-            manifest.write_text('{"entries":[{"path":"custom/skills"}]}\n')
-            (target / "scripts").mkdir()
-            (target / "scripts/build_app.sh").write_text("#!/bin/sh\necho app\n")
-            (target / "docs").mkdir()
-            (target / "docs/APP_GUIDE.md").write_text("Project documentation.\n")
-            (target / ".nightshift").mkdir()
-            scope = '[project]\ninclude = ["Sources/**"]\n'
-            (target / ".nightshift/code-index.toml").write_text(scope)
-            (target / "tasks.txt").write_text("TASK-OLD | ACTION: preserve queue\n")
-            (target / ".scratch/failed_tasks/TASK-OLD").mkdir(parents=True)
-            (target / ".scratch/failed_tasks/TASK-OLD/status.txt").write_text("legacy failure\n")
-            (target / "nightshift/.scratch/failed_tasks/TASK-OLD").mkdir(parents=True)
-            (target / "nightshift/.scratch/failed_tasks/TASK-OLD/status.txt").write_text("existing failure\n")
-            (target / "test/nightshift_worker").mkdir(parents=True)
-            (target / "test/nightshift_worker/test_regression.py").write_text("custom regression\n")
-            (target / ".gitignore").write_text("# custom\nuser-data/\n")
-            (target / ".worker-tree").mkdir()
-            (target / ".worker-tree/unmerged.txt").write_text("unmerged\n")
-
-            install = subprocess.run(["bash", str(ROOT / "install.sh"), str(target)],
-                                     cwd=ROOT, capture_output=True, text=True, timeout=60)
-            self.assertEqual(install.returncode, 0, install.stdout + install.stderr)
-            self.assertEqual(manifest.read_text(), '{"entries":[{"path":"custom/skills"}]}\n')
-            self.assertFalse((target / "nightshift/code-index.toml").exists())
-            self.assertEqual((target / ".nightshift/code-index.toml").read_text(), scope)
-            self.assertEqual((target / "nightshift/tasks.txt").read_text(), "TASK-OLD | ACTION: preserve queue\n")
-            self.assertEqual((target / ".scratch/failed_tasks/TASK-OLD/status.txt").read_text(), "legacy failure\n")
-            self.assertEqual((target / "nightshift/.scratch/failed_tasks/TASK-OLD/status.txt").read_text(), "existing failure\n")
-            self.assertEqual((target / "test/nightshift_worker/test_regression.py").read_text(), "custom regression\n")
-            ignore_before = (target / ".gitignore").read_text()
-            self.assertIn("user-data/\n", ignore_before)
-            self.assertEqual(ignore_before.splitlines().count(".gitignore"), 1)
-            self.assertTrue((target / "nightshift/worker_runtime.py").is_file())
-            self.assertTrue((target / "nightshift/tools/.venv/bin/python").is_file())
-            ignored_queue = subprocess.run(
-                ["git", "-C", str(target), "check-ignore", "-q", "nightshift/tasks.txt"],
-                check=False,
-            )
-            ignored_runtime_state = subprocess.run(
-                ["git", "-C", str(target), "check-ignore", "-q", "nightshift/tasks.done"],
-                check=False,
-            )
-            self.assertNotEqual(ignored_queue.returncode, 0, "queue source must remain trackable")
-            self.assertEqual(ignored_runtime_state.returncode, 0, "generated runtime state must be ignored")
-            self.assertTrue((target / "nightshift/install.sh").is_file())
-            self.assertFalse((target / "nightshift/remove.sh").exists())
-            self.assertFalse((target / "update.sh").exists())
-            self.assertFalse((target / "worker.sh").exists())
-            self.assertTrue((target / "nightshift/docs/NIGHTSHIFT_SPEC.md").exists())
-            self.assertFalse((target / "nightshift/docs/experiments").exists())
-            self.assertFalse((target / "nightshift/local_tdd.py").exists())
-            self.assertTrue((target / "nightshift/skills/nightshift/planner/SKILL.md").exists())
-            self.assertEqual((target / "nightshift/docs/custom.md").read_text(), "Keep project notes.\n")
-            self.assertTrue((target / "nightshift/install-manifest.json").is_file())
-            self.assertTrue((target / "nightshift/config.json").is_file())
-            self.assertTrue((target / "nightshift/PORTING_GUIDE.md").is_file())
-            self.assertTrue((target / ".agents/skills/engineering/tdd/tests.md").is_file())
-            self.assertTrue((target / ".agents/skills/nightshift/planner/SKILL.md").is_file())
-            sentinel = target / ".agents/skills/nightshift/sentinel/SKILL.md"
-            self.assertEqual(sentinel.read_text(), (ROOT / ".agents/skills/nightshift/sentinel/SKILL.md").read_text())
-            self.assertTrue((target / ".skills/universal-build-verify.md").is_file())
-            self.assertTrue((target / "scripts/build_app.sh").is_file())
-            self.assertTrue((target / "docs/APP_GUIDE.md").is_file())
-            self.assertEqual((target / ".worker-tree/unmerged.txt").read_text(), "unmerged\n")
-
-            agent_registry = target / "nightshift/adapters/agents.json"
-            custom_registry = '{"custom":{"default":true,"worker":{},"agent":{"adapter":"opaque","command":"custom","args":[],"env":{},"config":{}}}}\n'
-            agent_registry.write_text("invalid legacy json")
-            config_before = (target / "nightshift/config.json").read_text()
-            upgrade = subprocess.run(["bash", str(ROOT / "install.sh"), str(target)],
-                                     cwd=target, capture_output=True, text=True, timeout=60)
-            self.assertEqual(upgrade.returncode, 0, upgrade.stdout + upgrade.stderr)
-            self.assertTrue(sentinel.is_file())
-            self.assertEqual((target / ".gitignore").read_text(), ignore_before)
-            self.assertEqual((target / "nightshift/config.json").read_text(), config_before)
-            self.assertEqual((target / "test/nightshift_worker/test_regression.py").read_text(), "custom regression\n")
-            self.assertEqual((target / ".scratch/failed_tasks/TASK-OLD/status.txt").read_text(), "legacy failure\n")
-            self.assertEqual((target / "nightshift/.scratch/failed_tasks/TASK-OLD/status.txt").read_text(), "existing failure\n")
-            update = subprocess.run(["bash", str(target / "nightshift/install.sh"), str(target)],
-                                    cwd=target, capture_output=True, text=True, timeout=60)
-            self.assertEqual(update.returncode, 0, update.stdout + update.stderr)
-            self.assertTrue(sentinel.is_file())
-            self.assertEqual(agent_registry.read_text(), "invalid legacy json")
-            self.assertEqual((target / "nightshift/tasks.txt").read_text(), "TASK-OLD | ACTION: preserve queue\n")
-            self.assertTrue((target / "scripts/build_app.sh").is_file())
-            self.assertTrue((target / "docs/APP_GUIDE.md").is_file())
-
-    @unittest.skipUnless((ROOT / "install.sh").exists(), "source checkout only")
-    def test_installed_runtime_executes_unknown_protocol_adapter_without_source_checkout(self):
+class StandaloneRuntimeIntegrationTests(unittest.TestCase):
+    def test_external_runtime_executes_unknown_protocol_adapter_without_source_checkout(self):
         with tempfile.TemporaryDirectory() as directory:
             target=Path(directory)/"project"; target.mkdir()
-            seed_parser_environment(target)
-            installed=subprocess.run(["bash",str(ROOT/"install.sh"),str(target)],
-                cwd=ROOT,capture_output=True,text=True,timeout=30)
-            self.assertEqual(installed.returncode,0,installed.stdout+installed.stderr)
+            deploy_runtime(target / "nightshift")
             repo=Path(directory)/"work"; repo.mkdir()
             subprocess.run(["git","init","-q",str(repo)],check=True)
             for args in (("config","user.name","Installed Test"),
@@ -3477,44 +3345,6 @@ class InstallerIntegrationTests(unittest.TestCase):
                 "--target",".","--base","HEAD","--level","3"],cwd=target,capture_output=True,text=True,timeout=15)
             self.assertEqual(result.returncode,0,result.stdout+result.stderr)
             self.assertEqual(json.loads((Path(directory)/"result.json").read_text())["outcome"],"no_change")
-
-    @unittest.skipUnless((ROOT / "install.sh").exists(), "source checkout only")
-    def test_installer_resolves_symlink_target_before_self_install_guard(self):
-        with tempfile.TemporaryDirectory() as directory:
-            alias = Path(directory) / "nightshift-alias"
-            alias.symlink_to(ROOT, target_is_directory=True)
-            result = subprocess.run(["bash", str(ROOT / "install.sh"), str(alias)],
-                                    cwd=ROOT, capture_output=True, text=True, timeout=10)
-            self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
-            self.assertIn("Refusing to install NightShift into its source repository.", result.stderr)
-
-    @unittest.skipUnless((ROOT / "install.sh").exists(), "source checkout only")
-    def test_installer_deploys_and_preserves_porting_guide(self):
-        with tempfile.TemporaryDirectory() as directory:
-            target = Path(directory) / "project"
-            target.mkdir()
-            seed_parser_environment(target)
-            install = subprocess.run(["bash", str(ROOT / "install.sh"), str(target)],
-                                     cwd=ROOT, capture_output=True, text=True, timeout=30)
-            self.assertEqual(install.returncode, 0, install.stdout + install.stderr)
-            guide = target / "nightshift/PORTING_GUIDE.md"
-            self.assertTrue(guide.is_file())
-            self.assertIn("NightShift Project Porting & Deployment Guide", guide.read_text())
-
-            # Verify customized / completed guide survives re-install
-            guide.write_text("CUSTOM PORTING NOTES\n[x] Completed\n")
-            update = subprocess.run(["bash", str(target / "nightshift/install.sh"), str(target)],
-                                    cwd=target, capture_output=True, text=True, timeout=30)
-            self.assertEqual(update.returncode, 0, update.stdout + update.stderr)
-            self.assertEqual(guide.read_text(), "CUSTOM PORTING NOTES\n[x] Completed\n")
-
-            # Verify .ported marker prevents re-creating guide if deleted
-            guide.unlink()
-            (target / "nightshift/.ported").touch()
-            update2 = subprocess.run(["bash", str(target / "nightshift/install.sh"), str(target)],
-                                     cwd=target, capture_output=True, text=True, timeout=30)
-            self.assertEqual(update2.returncode, 0, update2.stdout + update2.stderr)
-            self.assertFalse(guide.exists())
 
 
 if __name__ == "__main__":

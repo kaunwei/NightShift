@@ -7,8 +7,7 @@ NIGHTSHIFT_TEST_PARSER_VENV="$PWD/scripts/tools/.venv" \
   scripts/tools/.venv/bin/python -m unittest discover -s test -v
 ```
 
-An existing compatible parser environment can be supplied instead. Installer fixtures reuse it,
-so the test run needs no package downloads. Worker tests use fake executables; no model calls or tokens are consumed.
+An existing compatible parser environment can be supplied instead, so the test run needs no package downloads. Worker tests use fake executables; no model calls or tokens are consumed.
 
 Standalone daemon fixtures should use `runtime_fixture.deploy_runtime` to copy
 the files declared by the deployment manifest. Partial module lists can fail at
@@ -31,6 +30,14 @@ gates, report artifacts, rollback, polling states and budgets, timeout
 exit-code/process-termination behavior, shared-score transitions, and restricted
 Codex/AgY ghost closeout auditing.
 
-`test/fixtures/trial-demo/` is installed into a temporary project by the trial demo integration test. It covers a standalone binary, a script with a bundled resource, a project-shared file, `.trials/` ignore behavior, and a custom `PAUSE_FILE`, and that trial delivery does not pause the Worker; no live model is used.
+`test/fixtures/trial-demo/` is copied into a temporary product beside a separate runtime and runner. The trial test exercises standalone/bundled/shared resources, `.trials/` ignore behavior and the runner pause control without installing files into the product.
+
+The embedded installer was removed in `84bcd6a`; its five installer-only cases
+and obsolete installation smoke script are removed. Standalone adapter and trial
+coverage now execute through external runtime fixtures. Clone-workflow coverage
+creates two temporary Git originals and clones, uses real permanent unittest
+evidence, and verifies original drafts/HEADs remain unchanged. It needs no private
+matronome/TometoClock repositories. Missing retired commands or personal checkout
+paths are not reasons to silently skip the current suite.
 
 `python3 -m unittest test.test_scratch_review` checks threshold/deduplication, orphan recovery, cooldown, bounded reports, symlink refusal and real-daemon maintenance success/failure followed by normal work (fake agent, no model calls).

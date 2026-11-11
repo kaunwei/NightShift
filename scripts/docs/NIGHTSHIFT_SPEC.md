@@ -189,7 +189,7 @@ Runtime owns task lifecycle; adapters own native tool behavior. An unknown adapt
 - **Worker watcher:** polls queue and worker state without model calls; exits distinctly for completion, blocked/guidance, scope-blocked, or wait timeout. The Planner/Sentinel reads progress evidence after wakeup.
 - **Status dashboard:** read-only display of worker lifecycle, pause flag, completed/queued counts, HEAD commit, and recent progress.
 - **Source probe helper:** `probe_line` prints a bounded line-centered slice; `extract_skeleton` lists likely declarations plus an optional slice. Both are Worker-only under the Terminal A firewall and support Explore report validation.
-- **Installer/updater:** deploy the manifest-listed launcher, runtime, adapters and helpers; place skills/SOP only in root host-discovery directories; initialize the named registry only when absent and preserve existing registry/state/work. Updates replace the launcher, so local runtime-default edits must be reviewed and reapplied. Remove the obsolete env example, retain legacy env/worktree/preview data for manual migration, and never load the old env file.
+- **External deployment:** configure the shared core and per-project runner as described in PORTING_GUIDE.md. The embedded installer/updater was retired in 84bcd6a; it is not a current entry point. Keep runtime/state outside product repositories and preserve user-owned legacy data during manual migration.
 
 ### On-the-fly development acceptance contract
 
@@ -240,7 +240,7 @@ The following records what scripts actually do, including differences from the s
 20. Queue reorder replaces the complete queue from a file or stdin under the shared queue lock. `queue-insert` inserts one task before pending work while holding that lock, preserves remaining order, and does nothing when its task ID is already queued.
 21. Watcher exit codes are 0 empty queue with IDLE/STOPPED, 1 BLOCKED/AWAITING_GUIDANCE, 2 wait timeout, 3 SCOPE_BLOCKED. It searches progress for PASS but does not prove the latest record passed. AGENT_NO_RESPONSE is not a special watcher exit and may wait until timeout. Defaults are one hour/five seconds. Status dashboard shows HEAD and outcome counts, not proof of Planner acceptance.
 22. Both source helpers require NIGHTSHIFT_WORKER=1; probe prints numbered context around a requested line, while skeleton uses declaration-pattern matching capped at 40 lines, not a compiler AST. Both support file-plus-line or file#L syntax. Language hints cover Swift/Python/TS/JS/Rust/Go.
-23. Installer accepts one existing target, resolves physical paths and refuses installation into the source checkout. `nightshift/install-manifest.json` lists runtime files and root skill destinations; source docs, experiments, tests and the retired local-TDD pilot are not deployed. Skill resources stay under `.agents/skills/` and `.skills/`, including for installed self-updates. Existing registry, scope config, porting guide, queue/history/notes, scratch data and unknown project notes survive updates; `PORTING_GUIDE.md` is installed on fresh setup and never overwrites customized project documentation or completed porting state. Exact retired assets and duplicate skill copies are removed. The installer validates deployed syntax, keeps model configuration, and does not edit target AGENTS/CLAUDE/README or run regressions. Local launcher edits are overwritten and need review/reapplication.
+23. Historical embedded installer contract (retired in 84bcd6a, not current behavior): installer accepted one existing target, resolved physical paths and refused installation into the source checkout. `nightshift/install-manifest.json` lists runtime files and root skill destinations; source docs, experiments, tests and the retired local-TDD pilot are not deployed. Skill resources stay under `.agents/skills/` and `.skills/`, including for installed self-updates. Existing registry, scope config, porting guide, queue/history/notes, scratch data and unknown project notes survive updates; `PORTING_GUIDE.md` is installed on fresh setup and never overwrites customized project documentation or completed porting state. Exact retired assets and duplicate skill copies are removed. The installer validates deployed syntax, keeps model configuration, and does not edit target AGENTS/CLAUDE/README or run regressions. Local launcher edits are overwritten and need review/reapplication.
 24. Skills retain requirements not enforced by runtime: Terminal A firewall with intervention exceptions, full-horizon slicing, four refactor gates, Track A/B thresholds, ten-task review, fast/deep acceptance, fast-forward integration, human clarification, compact evidence, confidence meanings, zero warnings/lint, no unsafe shortcuts, bounded notes, and authorized Clean Pivot. A resident Planner agent must execute this SOP; the daemon does not itself read specs, launch a premium Planner, or implement the full dependency graph.
 25. Atomic state writes replace sibling temporary files and preserve permissions. Queue, score and event locks have bounded waits. Launcher defaults and its exported environment configure runtime; helpers take their own defaults/launch-environment overrides and do not execute launcher code. Agent config belongs to the shared named registry. Worker IDs namespace process/status/state files but do not isolate source or turn the historical shared score into the per-agent planning score.
 
@@ -309,6 +309,17 @@ prevent older analysis from masquerading as current acceptance. Skills remain
 unchanged. Generic adapter maps blocked/failure outcomes to protocol failed,
 retaining structured outcomes for diagnostic callbacks. Main wrapper command
 errors/malformed results remain single-attempt failures without ghost/failover.
+
+32. Retired test gates (2026-11-11): install.sh/remove.sh were deleted by the
+external workspace architecture change 84bcd6a. Five tests solely asserting that
+retired install/update API and the obsolete installation smoke script are
+removed. Unknown-adapter standalone execution and trial demonstrations retain
+active external-runtime coverage, without installer-existence decorators. The
+personal-repository clone check is replaced with two self-contained Git fixture
+projects, real permanent unittest evidence and preservation of dirty originals.
+No actual matronome/TometoClock checkouts are required. Host-capability guards
+for supported parser/process-control tests remain explicit; retired APIs and
+private paths no longer silently skip current behavior checks.
 
 ## Testing Decisions
 

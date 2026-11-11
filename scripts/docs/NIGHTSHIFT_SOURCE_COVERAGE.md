@@ -1,6 +1,6 @@
 # NightShift source coverage index
 
-Baseline: 2026-10-26, updated for external adapters, per-registration scores, env-file-free configuration, in-place execution, on-demand trials, and unified no-response handling. The experimental Aider adapter and deterministic Explore implementation were removed; historical design and trial results are preserved in [DETERMINISTIC_EXPLORE_STRATEGY.md](DETERMINISTIC_EXPLORE_STRATEGY.md) and [DETERMINISTIC_EXPLORE_RESULTS.md](DETERMINISTIC_EXPLORE_RESULTS.md). Companion to [NIGHTSHIFT_SPEC.md](NIGHTSHIFT_SPEC.md). This index records NightShift-owned skills, references, launcher, runtime, helpers, tools, and installer entry points. Skill sources and installed skill files both live under `.agents/skills/` and `.skills/`; `nightshift/` holds deployed runtime code and state.
+Baseline: 2026-10-26, updated for external adapters, per-registration scores, env-file-free configuration, in-place execution, on-demand trials, and unified no-response handling. The experimental Aider adapter and deterministic Explore implementation were removed; historical design and trial results are preserved in [DETERMINISTIC_EXPLORE_STRATEGY.md](DETERMINISTIC_EXPLORE_STRATEGY.md) and [DETERMINISTIC_EXPLORE_RESULTS.md](DETERMINISTIC_EXPLORE_RESULTS.md). Companion to [NIGHTSHIFT_SPEC.md](NIGHTSHIFT_SPEC.md). This index records NightShift-owned skills, references, launcher, runtime, helpers, tools, and external runner entry points. Skill sources and installed skill files both live under `.agents/skills/` and `.skills/`; `nightshift/` holds deployed runtime code and state.
 
 ## Preservation rule
 
@@ -33,11 +33,9 @@ For every later simplification, compare the changed source hashes and each affec
 | [nightshift/tools/setup.ps1](../tools/setup.ps1) | 31fbe3b44ed2b160342d0b507931f1e23f1ba57f62ceba03ec92d7e4cf0802b6 |
 | [nightshift/scratch_review.py](../scratch_review.py) | 146f28c2325e9bfee6c3c94877bb37bffbd9dc45d00db16204f4722df4e7964c |
 | [nightshift/install-manifest.json](../install-manifest.json) | c7c637dd4a1dc59aba51139666a37b083b86b7e106b58563e61f85a8fe7bad1d |
-| [install.sh](../../install.sh) | fdeeb5921379ed67e230dcc3672017dcd5a2fbc09e0ffbe8059ff89edbd007c0 |
-| [remove.sh](../../remove.sh) | dc903ef55e497f8eeaaf5829ffc46f0c0cf81aa72fe78f670a8b3c314837242e |
-| [README.md](../../README.md) | dcb943b41c867909a7f697836c2e4a176e7d403d938b4b4ad4c8b3dbf9b81374 |
-| [test/README.md](../../test/README.md) | 6c19e636e0172f2b43de2cf2f55a145ded524aceb38d048d26e23aa796f13849 |
-| [nightshift/docs/NIGHTSHIFT_SPEC.md](../docs/NIGHTSHIFT_SPEC.md) | ed10810b3579530dbe64a31d2afbeb6cfd50fd53e7a58d6e48cae97dc0a6fb67 |
+| [README.md](../../README.md) | 5c4280b8f80f6e66ec033a8493167f702d392cb080180a79f340cc20a0c23612 |
+| [test/README.md](../../test/README.md) | a08e33dc81db9438d740ecb9cf51c11618ac548fe8d0aec4b4104455d93b853f |
+| [nightshift/docs/NIGHTSHIFT_SPEC.md](../docs/NIGHTSHIFT_SPEC.md) | 84dc6b890602341bb7404730b598cdbe475585d4d5caa69162500ba638945766 |
 | [nightshift/docs/PORTING_GUIDE.md](../docs/PORTING_GUIDE.md) | 712fb3d98a5ac77068ccad9dcbc54695af8c7ea82a98dcfa7f8d1346ced65fe8 |
 | [nightshift/docs/DETERMINISTIC_EXPLORE_STRATEGY.md](../docs/DETERMINISTIC_EXPLORE_STRATEGY.md) | c832795fb51c7e8ad65e66de0116629a70480172d0628217cb3aafb12683e896 |
 | [nightshift/docs/DETERMINISTIC_EXPLORE_RESULTS.md](../docs/DETERMINISTIC_EXPLORE_RESULTS.md) | a624dfe4d49bc5fe167e597b71f86e1c3d86610b9e6084fc0e1d3c49721b068c |
@@ -181,7 +179,7 @@ Explore: explicit/cache routing; Terminal A allowlist; sibling scope; research d
 
 Worker contract/prompt: task-type routing; scope stop; test immutability/assertion non-decrease; deletion ceilings; tool markers/actions; forbidden shortcuts/host safety; warnings/lint; three attempts; verifiable facts/negative proof; commit/report/confidence; runtime progress ownership; notes bounds; restricted closeout. Runtime enforcement limits are recorded separately.
 
-Helpers and deployment: numbered spec clauses 21–26 cover complete file-level behavior, flags, exit states, Worker-only source guard, installation preservation/removal behavior, and syntax validation. `install.sh` is the single install/update entry point. Runtime defaults belong to the launcher and agent config to the name-keyed registry; the removed worker env file is legacy migration data only. Regression tests are prior art, not additional runtime features.
+Helpers and deployment: clauses 21–26 record helper behavior and historical embedded deployment. The embedded installer was retired in 84bcd6a; current setup follows the external core/runner/project guide. Clause 32 records deletion/migration of obsolete installer and private-checkout tests. Runtime defaults belong to the launcher and agent config to the name-keyed registry; the removed worker env file is legacy migration data only. Regression tests are prior art, not additional runtime features.
 
 Review uses source inspection and function/CLI inventory comparison, without launching workers, running regressions or making model calls. Existing skill text that still reads the worker env file or uses shared-score planning is an alignment gap recorded by the main spec, not a supported configuration contract. This index records the current implementation and is not itself a regression-test result.
 
@@ -245,3 +243,13 @@ background rows/counts/current freshness; hook-cancel acknowledges volatile
 failures. Installer deploys the supervisor and operating reference. Regression
 coverage: test_background_hooks real daemon/Git/process ownership fixtures plus
 legacy hook, timeout, terminal-artifact and recovery suites.
+
+## Retired skipped cases (2026-11-11)
+
+Clause 32 removes five tests of the deleted embedded installer and its orphaned
+smoke script. Standalone adapter and trial tests now use the runtime manifest
+fixture directly. test_external_clone_workflow executes actual hot/unittest
+acceptance against two disposable Git clones and checks both dirty originals
+remain untouched. No current test depends on a deleted installer or personal
+project checkout. Parser setup and external index tests retain current parser
+readiness coverage.

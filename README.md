@@ -23,7 +23,7 @@ NightShift supports a Three-Tier external architecture where **target project re
 2. **Runner Workspace**: State and queue directory per project (e.g. `~/nightshift-workspace/projects/<project>/`).
 3. **Target Project**: The consumer codebase (clean Git working tree, zero pollution).
 
-For detailed setup, see the [Porting Guide](PORTING_GUIDE.md).
+For detailed setup, see the [Porting Guide](scripts/docs/PORTING_GUIDE.md).
 
 ### Environment Activation (`env.sh`)
 
@@ -77,7 +77,7 @@ touch /path/to/my-app/PAUSE   # or `ns-pause`
 rm -f /path/to/my-app/PAUSE   # or `ns-resume`
 ```
 
-The queue reorder helper accepts a complete replacement queue from a file or standard input; it has no `prepend` subcommand. Worker tasks execute directly in the project directory. Trial deliveries go under `.trials/<TASK-ID>/` after their staged copy passes the runnable check; previous deliveries remain separate from development build outputs. Upgrades preserve old `.worker-tree`, branches, and `.preview` contents so you can inspect or migrate unfinished work manually. Runtime hot acceptance commits and scores automatically. Planner handles failed tasks and explicitly restarts; see [hot/cold migration](scripts/acceptance.md).
+The queue reorder helper accepts a complete replacement queue from a file or standard input; it has no `prepend` subcommand. Worker tasks execute directly in the project directory. Trial deliveries go under `.trials/<TASK-ID>/` after their staged copy passes the runnable check; previous deliveries remain separate from development build outputs. Legacy `.worker-tree`, branches, and `.preview` contents are user-owned migration data; preserve unfinished work during manual migration. Runtime hot acceptance commits and scores automatically. Planner handles failed tasks and explicitly restarts; see [hot/cold migration](scripts/acceptance.md).
 
 ## Regression tests
 
@@ -88,10 +88,10 @@ python3 -m unittest discover -s test -v
 bash -n scripts/*.sh
 ```
 
-For porting details, see the [porting guide](PORTING_GUIDE.md).
+For porting details, see the [porting guide](scripts/docs/PORTING_GUIDE.md).
 
 ## Completion waiting and parser readiness
 
 Use `bash scripts/watch_worker.sh 0 5 TASK-ID` to wait for a task. The default is unlimited notification waiting; local file checks do not call a model. Task-kind tags such as RESEARCH are normalized for exact matching. DONE remains pending until the corresponding audit arrives, and an unreviewed completed result can be replayed after a late watcher start. Completion is withheld while a worker is still RUNNING/VERIFYING on that task. Planner wakes for terminal results or genuine faults, not fixed 60-second/five-minute checks.
 
-Install/update creates and validates the private code-index environment by parsing C, C++ and Python. Generated-runtime exclusions are also persisted in local Git info/exclude so rollback of an uncommitted .gitignore cannot expose the parser venv to cleanup. A missing environment error includes the repair command. Installer success establishes parser readiness; building an index still requires clean indexed source/settings inputs and never commits unrelated user changes.
+Run `bash scripts/tools/setup.sh` in the core checkout to prepare the parser environment. Setup validates real C, C++ and Python parsing. External runner state and index outputs stay outside target repositories; building an index requires clean indexed source/settings inputs and never commits unrelated user changes. The former embedded `install.sh`/`remove.sh` workflow was retired with the external workspace architecture.
