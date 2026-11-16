@@ -15,6 +15,12 @@ startup before a test reaches its intended assertion. Use the production ignore
 rules for generated runtime files, and explicitly set a fixture registration's
 initial score when its tickets require L1 capability.
 
+Acceptance-hook tests use a 30-second real-time watchdog per case. Session
+completion uses a dedicated BaseException that unwinds session cleanup.
+SIGINT, SIGTERM and SIGHUP interrupt the test runner and run fixture
+cleanup. Launcher fixtures own separate process groups and escalate cleanup from
+SIGTERM to SIGKILL with bounded waits.
+
 The former six-failure baseline was repaired rather than allowlisted: five
 daemon tests had incomplete deployments; the two scratch-review fixtures also
 had a mismatched initial score and omitted Python cache ignores. The launcher

@@ -4,6 +4,7 @@ import io
 import json
 import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
 import tempfile
@@ -20,8 +21,40 @@ import lifecycle
 import worker_runtime as runtime
 
 
+class SessionComplete(BaseException):
+    """End a fixture session outside the daemon's task failure handling."""
+
+
+class SessionTimeout(BaseException):
+    """Interrupt a fixture using the operating system's real-time timer."""
+
+
 class HookTests(unittest.TestCase):
+    def run(self, result=None):
+        try:
+            return super().run(result)
+        finally:
+            self.doCleanups()
+
     def setUp(self):
+        install_signal = signal.signal
+
+        def interrupt(*_):
+            raise KeyboardInterrupt
+
+        def timeout(*_):
+            raise SessionTimeout("hook test exceeded its 30-second wall-clock limit")
+
+        for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGALRM):
+            handler = timeout if signum == signal.SIGALRM else interrupt
+            previous = install_signal(signum, handler)
+            self.addCleanup(install_signal, signum, previous)
+        previous_timer = signal.setitimer(signal.ITIMER_REAL, 30)
+        self.addCleanup(signal.setitimer, signal.ITIMER_REAL, *previous_timer)
+        # In-process daemons leave the test runner's interrupt handlers active.
+        signals = patch.object(signal, "signal", side_effect=lambda signum, handler: signal.getsignal(signum))
+        signals.start()
+        self.addCleanup(signals.stop)
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         parent = Path(temp.name).resolve()
@@ -73,6 +106,42 @@ class HookTests(unittest.TestCase):
         self.assertEqual(hooks.execute(self.root, run, runtime.run_verify).strip(), self.head)
         scheduler.settle(run["id"], "passed")
         self.assertIsNone(scheduler.next_run())
+
+    def test_session_completion_escapes_task_failure_handling(self):
+        self.runner.mkdir(exist_ok=True)
+        (self.runner / "tasks.txt").write_text(
+            "TASK-STOP [CODE: FIX] | LEVEL: 1 | TARGET: fixture | VERIFY: true\n")
+        save = gate.save
+
+        def finish_session(path, value):
+            save(path, value)
+            if Path(path).name == "worker.status" and value.get("state") == "RUNNING":
+                raise SessionComplete("fixture complete")
+
+        with patch.dict(os.environ, {"RUN_ONCE": "0", "POLL_INTERVAL": ".001"}), \
+                patch.object(runtime, "load_agent_registry", return_value=[{"id": "fixture"}]), \
+                patch.object(runtime, "validate_task_capacity"), \
+                patch.object(lifecycle.preflight, "check", return_value={"status": "ready"}), \
+                patch.object(gate, "save", side_effect=finish_session):
+            with self.assertRaises(SessionComplete):
+                lifecycle.run_session(self.root, runtime, hooks.Scheduler(self.cfg))
+
+    def test_real_time_watchdog_interrupts_a_frozen_session_clock(self):
+        with patch.dict(os.environ, {"RUN_ONCE": "0", "POLL_INTERVAL": ".001"}), \
+                patch.object(lifecycle, "time", wraps=time) as session_time:
+            session_time.monotonic.return_value = 0
+            signal.setitimer(signal.ITIMER_REAL, .05)
+            with self.assertRaises(SessionTimeout):
+                lifecycle.run_session(self.root, runtime, hooks.Scheduler(self.cfg))
+
+    def test_sigterm_interrupts_the_test_session(self):
+        def interrupt_claim(*args, **kwargs):
+            os.kill(os.getpid(), signal.SIGTERM)
+
+        with patch.dict(os.environ, {"RUN_ONCE": "0", "POLL_INTERVAL": ".001"}), \
+                patch.object(runtime, "pop_task", side_effect=interrupt_claim):
+            with self.assertRaises(KeyboardInterrupt):
+                lifecycle.run_session(self.root, runtime, hooks.Scheduler(self.cfg))
 
     def test_new_session_discards_counters_pending_work_and_registrations(self):
         spec = {"id": "demo", "after": "TASK-B", "argv": ["true"]}
@@ -147,14 +216,14 @@ class HookTests(unittest.TestCase):
             clock[0] += 30
             observations.append(marker.exists())
             if len(observations) == 7:
-                raise RuntimeError("fixture complete")
+                raise SessionComplete("fixture complete")
             return ""
 
         with patch.dict(os.environ, {"RUN_ONCE": "0", "POLL_INTERVAL": ".001"}), \
                 patch.object(lifecycle, "time", wraps=time) as session_time, \
                 patch.object(runtime, "pop_task", side_effect=empty_queue):
             session_time.monotonic.side_effect = lambda: clock[0]
-            with self.assertRaisesRegex(RuntimeError, "fixture complete"):
+            with self.assertRaisesRegex(SessionComplete, "fixture complete"):
                 lifecycle.run_session(self.root, runtime, scheduler)
         self.assertEqual(observations[:3], [False, False, False])
         self.assertTrue(all(observations[3:]))
@@ -181,7 +250,7 @@ class HookTests(unittest.TestCase):
             if len(counts_at_claim) == 2:
                 pause.touch()
             if len(counts_at_claim) == 6:
-                raise RuntimeError("fixture complete")
+                raise SessionComplete("fixture complete")
             return ""
 
         with patch.dict(os.environ, {"RUN_ONCE": "0", "POLL_INTERVAL": ".001"}), \
@@ -189,7 +258,7 @@ class HookTests(unittest.TestCase):
                 patch.object(runtime, "pop_task", side_effect=empty_queue), \
                 patch.object(gate, "save", side_effect=observe_status):
             session_time.monotonic.side_effect = lambda: clock[0]
-            with self.assertRaisesRegex(RuntimeError, "fixture complete"):
+            with self.assertRaisesRegex(SessionComplete, "fixture complete"):
                 lifecycle.run_session(self.root, runtime, scheduler)
         self.assertEqual(counts_at_claim, [1, 1, 1, 1, 1, 0])
 
@@ -210,7 +279,7 @@ class HookTests(unittest.TestCase):
         def boundary():
             clock[0] += 30
             if clock[0] >= 180:
-                raise RuntimeError("fixture complete")
+                raise SessionComplete("fixture complete")
 
         with patch.dict(os.environ, {"RUN_ONCE": "0", "POLL_INTERVAL": ".001"}), \
                 patch.object(runtime, "load_agent_registry", return_value=[{"id": "fixture"}]), \
@@ -221,7 +290,7 @@ class HookTests(unittest.TestCase):
                 patch.object(scheduler.background, "poll", side_effect=boundary), \
                 patch.object(scheduler, "flush_idle") as flush, redirect_stdout(output):
             session_time.monotonic.side_effect = lambda: clock[0]
-            with self.assertRaisesRegex(RuntimeError, "fixture complete"):
+            with self.assertRaisesRegex(SessionComplete, "fixture complete"):
                 lifecycle.run_session(self.root, runtime, scheduler)
         self.assertEqual(execute.call_count, 1)
         self.assertEqual(output.getvalue().count("reporting to planner."), 1)
@@ -246,7 +315,7 @@ class HookTests(unittest.TestCase):
                 def boundary():
                     clock[0] += 30
                     if clock[0] >= 180:
-                        raise RuntimeError("fixture complete")
+                        raise SessionComplete("fixture complete")
 
                 with patch.dict(os.environ, {"RUN_ONCE": "0", "POLL_INTERVAL": ".001"}), \
                         patch.object(lifecycle, "time", wraps=time) as session_time, \
@@ -254,7 +323,7 @@ class HookTests(unittest.TestCase):
                         patch.object(scheduler, "flush_idle") as flush, \
                         patch.object(runtime, "pop_task") as claim:
                     session_time.monotonic.side_effect = lambda: clock[0]
-                    with self.assertRaisesRegex(RuntimeError, "fixture complete"):
+                    with self.assertRaisesRegex(SessionComplete, "fixture complete"):
                         lifecycle.run_session(self.root, runtime, scheduler)
                 self.assertEqual(json.loads((self.runner / "worker.status").read_text())["state"], expected)
                 self.assertEqual(scheduler.counts["periodic"], 1)
@@ -297,11 +366,25 @@ class HookTests(unittest.TestCase):
             self.addCleanup(log.close)
             worker = subprocess.Popen(["bash", str(SCRIPTS / "worker.sh"), "--config", str(self.config),
                                        "--project", "fixture"], stdout=log, stderr=subprocess.STDOUT,
+                                      start_new_session=True,
                                       env=dict(os.environ, RUN_ONCE="0", POLL_INTERVAL="0.05"))
+            closed = False
             def stop():
-                if worker.poll() is None:
-                    worker.terminate()
-                    worker.wait(timeout=8)
+                nonlocal closed
+                if closed:
+                    return
+                closed = True
+                try:
+                    os.killpg(worker.pid, signal.SIGTERM)
+                    worker.wait(timeout=2)
+                except (ProcessLookupError, subprocess.TimeoutExpired):
+                    pass
+                finally:
+                    try:
+                        os.killpg(worker.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    worker.wait(timeout=2)
             self.addCleanup(stop)
             return stop
 
