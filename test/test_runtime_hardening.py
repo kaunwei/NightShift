@@ -248,21 +248,36 @@ class DurableHookTests(Fixture):
         return hooks.Scheduler({"durable_hooks": True, "hooks": [{"id": "periodic", "every": 2, "argv": ["true"]}], **extra},
                                state_path=self.runner / "hooks.json", project=self.root)
 
-    def test_counters_registration_passed_tombstone_and_replay_survive_relaunch(self):
+    def test_counters_reset_while_registration_and_replay_survive_relaunch(self):
         first = self.scheduler()
         first.register({"id": "once", "after": "TASK-B", "argv": ["true"]})
         first.accepted("TASK-A", "event-a", self.head)
+        self.assertEqual(first.counts["periodic"], 1)
+        self.assertNotIn("counts", json.loads((self.runner / "hooks.json").read_text()))
         second = self.scheduler()
+        self.assertEqual(second.counts, {})
         self.assertTrue(second.accepted("TASK-B", "event-b", self.head))
         run = second.next_run()
-        self.assertEqual(run["hook"], "periodic")
+        self.assertEqual(run["hook"], "once")
         second.settle(run["id"], "passed")
         third = self.scheduler()
         self.assertFalse(third.accepted("TASK-B", "event-b", self.head))
-        run = third.next_run()
-        self.assertEqual(run["hook"], "once")
-        third.settle(run["id"], "passed")
+        self.assertEqual(third.counts, {})
+        self.assertIsNone(third.next_run())
         self.assertIsNone(self.scheduler().next_run())
+
+    def test_legacy_persisted_counters_start_at_zero_after_reload(self):
+        first = self.scheduler(cold_every=5, cold="true")
+        first.accepted("TASK-A", "a", self.head, committed=True)
+        path = self.runner / "hooks.json"
+        saved = json.loads(path.read_text())
+        saved["counts"] = {"periodic": 1, "nightshift-cold": 4}
+        gate.save(path, saved)
+        second = self.scheduler(cold_every=5, cold="true")
+        self.assertEqual(second.counts, {})
+        self.assertFalse(second.accepted("TASK-B", "b", self.head, committed=True))
+        self.assertEqual(second.counts, {"periodic": 1, "nightshift-cold": 1})
+        self.assertNotIn("counts", json.loads(path.read_text()))
 
     def test_interrupted_command_requires_explicit_retry_or_cancel(self):
         first = self.scheduler()

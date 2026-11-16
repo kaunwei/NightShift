@@ -488,11 +488,6 @@ def run_session(root, runtime, scheduler):
                 else:
                     continue
             if waiting_for_response and not pause.is_file():
-                if not external:
-                    if agent_state_file.exists():
-                        agent_state = runtime.read_agent_state(agent_state_file)
-                    else:
-                        agent_state["consecutive_no_response"] = 0
                 if agent_state.get("consecutive_no_response", 0) >= len(agents):
                     update("AGENT_NO_RESPONSE", "Waiting for agent response")
                     stopped.wait(poll)
@@ -686,8 +681,6 @@ def run_session(root, runtime, scheduler):
                     append_once(progress, f"no_response:{active['task_id']}", f"[AGENT_NO_RESPONSE] {active['task_id']}: agent no response; reporting to planner.")
                     runtime.insert_task_front(tasks, raw)
                     active_path.unlink(missing_ok=True)
-                    if not external:
-                        agent_state_file.write_text(json.dumps(agent_state, indent=2))
                     if once:
                         return 0
                     waiting_for_response = True
@@ -702,8 +695,6 @@ def run_session(root, runtime, scheduler):
                     gate.save(waiting_path, exhausted_head)
                     runtime.insert_task_front(tasks, raw)
                     active_path.unlink(missing_ok=True)
-                    if not external:
-                        agent_state_file.write_text(json.dumps(agent_state, indent=2))
                     update("WAITING_FOR_AGENT", active["task_id"])
                     if once:
                         return 0

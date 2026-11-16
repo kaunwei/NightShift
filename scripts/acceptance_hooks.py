@@ -102,7 +102,7 @@ class Scheduler:
             try:
                 gate.save(self.state_path, {"version": 1, "project": self.project,
                           "config_hash": self.config_hash, "events": self.events,
-                          "oneshots": self.oneshots, "counts": self.counts, "runs": self.runs,
+                          "oneshots": self.oneshots, "runs": self.runs,
                           "pending": list(self.pending), "cold_passed": self.cold_passed})
                 self.state_path.chmod(0o600)
             except OSError:
@@ -116,7 +116,7 @@ class Scheduler:
         if (data.get("version") != 1 or data.get("project") != self.project
                 or data.get("config_hash") != self.config_hash):
             raise gate.GateError("durable hook state belongs to an incompatible project/configuration; retained for review")
-        for name in ("events", "oneshots", "counts", "runs"):
+        for name in ("events", "oneshots", "runs"):
             if not isinstance(data.get(name), dict):
                 raise gate.GateError(f"invalid durable hook {name}")
             setattr(self, name, data[name])

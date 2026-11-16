@@ -102,6 +102,10 @@ new accepted work. RUN_ONCE drains eligible work at its normal exit boundaries.
 A no-response halt emits one daemon notification and awaits recovery. Inspect
 worker.status or ns-status for the current state.
 
+Periodic hook, cold and agent no-response counters live in memory and start at
+zero on every daemon launch, including when durable_hooks is enabled. Durable
+hook records retain registrations, queued obligations and execution evidence.
+
 A custom periodic hook can add optional `second_stage.argv` and `timeout`.
 Preparation runs synchronously; analysis runs on a fixed commit in an independent
 clone, with sealed first-stage artifacts. No git worktree is created.

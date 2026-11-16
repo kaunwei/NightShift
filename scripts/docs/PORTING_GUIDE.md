@@ -261,8 +261,10 @@ AGENT_NO_RESPONSE. External all-agent no-response holds retain their in-memory
 counters and emit one daemon notification per halt. Restore agent availability
 and relaunch the Worker to retry that held ticket.
 
-Default one-shots/counters are session-only. durable_hooks optionally persists
-legacy hook obligations, whose interrupted effects need explicit review.
+Hook and agent no-response counters are session-only and restart at zero.
+This also applies when durable_hooks is enabled. Legacy counter fields are
+discarded during reload. durable_hooks persists registrations, pending hook
+obligations and execution records, whose interrupted effects need explicit review.
 
 A custom periodic hook may register a second stage:
 

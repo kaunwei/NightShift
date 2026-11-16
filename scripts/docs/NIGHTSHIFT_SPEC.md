@@ -258,8 +258,9 @@ PID/deadline metadata and at most 64 KiB in memory, preserving owned-process
 deadlines and bounded cleanup. Optional acceptance capabilities declare framework
 ID prefixes and selection support without replacing strict discovery or source/
 nonce/fingerprint gates. Opt-in `durable_hooks` saves project/config-bound hook
-definitions, events, counters and run outcomes; interrupted effects hold dispatch
-for explicit retry/cancel. Default hooks remain session-only. `hook-list` and
+definitions, events and run outcomes. Hook, cold and daemon agent no-response
+counters live in memory and start at zero on launch. Interrupted effects hold
+dispatch for explicit retry/cancel. Default hooks remain session-only. `hook-list` and
 `hook-cancel` use the live control channel. `capacity` reads recent outcomes,
 task metrics and readiness without initializing missing score/state; unknown
 history stays unknown and score arithmetic is unchanged. These additions do not

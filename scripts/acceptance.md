@@ -40,7 +40,8 @@ hook ledger. Cold retains its per-revision pass record and silent success;
 it does not change score or Git history. Counts and the per-session pass cache
 start empty on every worker launch. The last cold result file is audit output,
 not control input. Outputs must be ignored by Git. With `durable_hooks: true`,
-counters and the per-revision pass cache persist in the dedicated hook ledger.
+the per-revision pass cache persists in the dedicated hook ledger. Hook counters
+start at zero on each launch, including reloads of older ledgers with counters.
 
 `wiring` lists exact configuration/registration files Ghost may edit to connect
 existing tests. Include those files and tests in task TARGET. Ghost also may supply
@@ -94,8 +95,10 @@ The CLI sends commands to the live worker through a private local pipe. It
 does not register work when no worker is running. The worker owns one in-memory
 scheduler; it does not poll or replay an acceptance hook ledger. Relaunching
 `worker.sh` loads config and starts with no one-shots, counters, pending runs,
-or retry state by default. Opting into `acceptance.durable_hooks` persists these
-obligations and deduplication identities; interrupted effects require explicit
+or retry state by default. Opting into `acceptance.durable_hooks` persists
+registrations, queued obligations, execution records and deduplication identities.
+Hook counters and agent no-response counters live in memory and restart at zero.
+Interrupted effects require explicit
 review and retry/cancel. Register session-only one-shots again after relaunching. A manually queued
 `[COLD]` ticket remains part of the ordinary task queue.
 

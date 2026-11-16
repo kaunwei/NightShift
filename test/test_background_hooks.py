@@ -173,7 +173,7 @@ Path(os.environ['NIGHTSHIFT_RESULT_FILE']).write_text(json.dumps(result))
         self.assertEqual(restored.background.counts['analyze'],0)
         self.assertFalse(restored.background.has_work())
         self.assertIsNone(restored.next_run())
-        self.assertNotIn('analyze',json.loads((self.runner/'state.json').read_text())['counts'])
+        self.assertNotIn('counts', json.loads((self.runner / 'state.json').read_text()))
 
     def test_run_once_retains_foreground_hook_drain_order_when_mixed(self):
         cfg=json.loads(self.config_path.read_text())

@@ -110,8 +110,11 @@ Set `acceptance.durable_hooks` to `true` to save hook state atomically under
 `lifecycle/hook-state.json`. Default remains session-only. Persistence binds state
 to the resolved project and periodic-hook definitions; incompatible state is
 retained and startup fails explicitly for review. One-shot registrations, pending
-runs, counters, accepted event identities and passed/cancelled run markers survive
-relaunch. Revision/clean-tree guards remain in force.
+runs, accepted event identities and passed/cancelled run markers survive relaunch.
+Periodic hook and cold counters live in memory and start at zero on every launch.
+Legacy persisted counter fields are discarded during reload. Agent no-response
+counters also live in memory in both external and embedded daemon modes.
+Revision/clean-tree guards apply to restored runs.
 
 A run persisted as `running` becomes `interrupted` after relaunch. Dispatch waits
 in `HOOK_INTERRUPTED` until an operator inspects possible side effects and makes

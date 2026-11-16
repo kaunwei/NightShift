@@ -278,8 +278,7 @@ sys.exit(1)
 
         status = json.loads((self.root / "worker.status").read_text())
         self.assertEqual(status["state"], "AGENT_NO_RESPONSE")
-        state = json.loads((self.root / ".worker-agent-state.default.json").read_text())
-        self.assertEqual(state["consecutive_no_response"], 2)
+        self.assertFalse((self.root / ".worker-agent-state.default.json").exists())
 
 
 if __name__ == "__main__":

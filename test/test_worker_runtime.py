@@ -2303,10 +2303,7 @@ class WorkerIntegrationTests(unittest.TestCase):
             self.assertEqual(calls.read_text().splitlines(), ["gpt-6-luna", "gpt-6.1-sol"])
             self.assertIn("TASK-FAILOVER", (root / "tasks.done").read_text())
             state_file = root / ".worker-agent-state.default.json"
-            if state_file.exists():
-                state = json.loads(state_file.read_text())
-                self.assertEqual(state["active_agent_id"], "backup")
-                self.assertEqual(state["consecutive_no_response"], 0)
+            self.assertFalse(state_file.exists())
 
     def test_generic_registry_receives_model_arguments_environment_and_result_contract(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -2388,8 +2385,7 @@ class WorkerIntegrationTests(unittest.TestCase):
             self.assertEqual((root / "tasks.done").read_text(), "")
             self.assertIn("AGENT_NO_RESPONSE", result.stdout)
             self.assertEqual(json.loads((root / "worker.status").read_text())["state"], "AGENT_NO_RESPONSE")
-            state = json.loads((root / ".worker-agent-state.default.json").read_text())
-            self.assertEqual(state["consecutive_no_response"], 2)
+            self.assertFalse((root / ".worker-agent-state.default.json").exists())
 
     def test_worker_does_not_switch_agents_for_ordinary_failures(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -3179,7 +3175,7 @@ class DaemonLifecycleTests(unittest.TestCase):
         self.assertEqual(self.state(), "BLOCKED")
         self.assertIn("awaiting Planner", json.loads((self.root / "worker.status").read_text())["current_task"])
 
-    def test_all_agents_without_response_wait_then_recover_without_daemon_restart(self):
+    def test_all_agents_without_response_wait_with_memory_only_state(self):
         self.flag.touch()
         self.enqueue("TASK-NO-RESPONSE")
         self.start()
@@ -3187,10 +3183,11 @@ class DaemonLifecycleTests(unittest.TestCase):
         time.sleep(0.15)
         self.assertIn("TASK-NO-RESPONSE", (self.root / "tasks.txt").read_text())
         self.assertEqual((self.root / "tasks.done").read_text(), "")
+        self.assertFalse((self.root / ".worker-agent-state.default.json").exists())
         self.flag.unlink()
-        (self.root / ".worker-agent-state.default.json").unlink()
-        self.wait_for(lambda: "[DONE] TASK-NO-RESPONSE" in (self.root / "tasks.done").read_text())
-        self.wait_for(lambda: self.state() == "IDLE")
+        time.sleep(0.15)
+        self.assertEqual(self.state(), "AGENT_NO_RESPONSE")
+        self.assertEqual((self.root / "tasks.done").read_text(), "")
 
     def test_worker_restart_retries_agent_after_no_response(self):
         self.flag.touch()
