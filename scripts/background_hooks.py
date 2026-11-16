@@ -134,6 +134,17 @@ class BackgroundHooks:
         with self.lock:
             return bool(self.slot or (not self.await_commit and any(self.counts[h["id"]] >= h["every"] for h in self.hooks)))
 
+    def flush_idle(self):
+        with self.lock:
+            if self.slot or not self.latest or self.await_commit or self.blocked():
+                return False
+            scheduled = False
+            for hook in self.hooks:
+                if self.counts[hook["id"]] > 0:
+                    self.counts[hook["id"]] = hook["every"]
+                    scheduled = True
+            return scheduled
+
     def busy(self):
         with self.lock:
             return self.slot is not None

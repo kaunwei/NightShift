@@ -67,6 +67,21 @@ project root with `NIGHTSHIFT_HOOK_REVISION`, `NIGHTSHIFT_HOOK_TASK`,
 key; scripts should use it for output names or external side-effect deduplication.
 Commands must leave the Git revision and tracked/nonignored files unchanged.
 
+In persistent mode, an empty queue that stays IDLE for 60 seconds flushes all
+nonzero periodic counters. Cold runs first, then synchronous hooks in configured
+order. Synchronous counters reset when queued. Dual-stage counters become
+eligible and reset when preparation starts through the single background slot.
+For cold_every=5 and three accepted development commits, idle flushing schedules
+one cold run. New work accumulated after an earlier hook run also qualifies.
+Zero counters await new accepted work.
+
+Pause, acceptance failure and agent/readiness waits reset the idle timer. A
+pending queue blocked on acceptance or agent availability stays outside idle
+flushing. RUN_ONCE drains eligible work at its normal exit boundaries. Inspect
+worker.status for the current state. An external all-agent no-response hold
+retains its in-memory counter and emits one daemon notification. Restore agent
+availability and relaunch the Worker to retry the held ticket.
+
 Register a one-shot from a Planner shell before the ticket is accepted:
 
 ```sh

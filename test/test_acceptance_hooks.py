@@ -1,4 +1,6 @@
 """Exercise live hook ownership, cold normalization and fresh worker launches."""
+from contextlib import redirect_stdout
+import io
 import json
 import os
 from pathlib import Path
@@ -97,6 +99,169 @@ class HookTests(unittest.TestCase):
         self.assertEqual(self.git("rev-parse", "HEAD"), self.head)
         scheduler.retry(report["result"]["hook"]["id"])
         self.assertIsNotNone(scheduler.next_run())
+
+    def test_idle_flush_drains_partial_counters_once_in_order(self):
+        cfg = {"cold_every": 5, "cold": "true", "hooks": [
+            {"id": name, "every": 5, "argv": ["true"]}
+            for name in ("first", "second")]}
+        scheduler = hooks.Scheduler(cfg)
+        for index in range(3):
+            scheduler.accepted(f"TASK-{index}", str(index), self.head, committed=True)
+        self.assertTrue(scheduler.flush_idle(self.head))
+        self.assertEqual(scheduler.counts, {"nightshift-cold": 0, "first": 0, "second": 0})
+        self.assertFalse(scheduler.flush_idle(self.head))
+        for name in ("nightshift-cold", "first", "second"):
+            run = scheduler.next_run()
+            self.assertEqual((run["hook"], run["revision"]), (name, self.head))
+            scheduler.settle(run["id"], "passed")
+        self.assertFalse(scheduler.flush_idle(self.head))
+        scheduler.accepted("TASK-NEW", "new", self.head)
+        self.assertTrue(scheduler.flush_idle(self.head))
+        self.assertEqual(scheduler.next_run()["hook"], "first")
+
+    def test_idle_flush_background_uses_existing_single_slot(self):
+        scheduler = hooks.Scheduler({"hooks": [{"id": "background", "every": 5,
+            "argv": ["true"], "second_stage": {"argv": ["true"]}}]})
+        scheduler.accepted("TASK-A", "a", self.head, committed=True)
+        self.assertFalse(scheduler.background.has_work())
+        self.assertTrue(scheduler.flush_idle(self.head))
+        run = scheduler.background.next(self.root, self.runner / "background")
+        self.assertEqual(run["trigger_task"], "TASK-A")
+        self.assertEqual(scheduler.background.counts["background"], 0)
+        scheduler.accepted("TASK-B", "b", self.head, committed=True)
+        self.assertFalse(scheduler.flush_idle(self.head))
+        self.assertEqual(scheduler.background.counts["background"], 1)
+
+    def test_daemon_flushes_only_after_sixty_idle_seconds(self):
+        marker = self.runner / "idle-marker"
+        command = ("from pathlib import Path\n"
+                   f"with Path({str(marker)!r}).open('a') as stream:\n"
+                   "    stream.write('ran')\n")
+        scheduler = hooks.Scheduler({"hooks": [{"id": "partial", "every": 5,
+            "argv": [sys.executable, "-c", command]}]})
+        scheduler.accepted("TASK-A", "a", self.head)
+        clock = [0]
+        observations = []
+
+        def empty_queue(*args, **kwargs):
+            clock[0] += 30
+            observations.append(marker.exists())
+            if len(observations) == 7:
+                raise RuntimeError("fixture complete")
+            return ""
+
+        with patch.dict(os.environ, {"RUN_ONCE": "0", "POLL_INTERVAL": ".001"}), \
+                patch.object(lifecycle, "time", wraps=time) as session_time, \
+                patch.object(runtime, "pop_task", side_effect=empty_queue):
+            session_time.monotonic.side_effect = lambda: clock[0]
+            with self.assertRaisesRegex(RuntimeError, "fixture complete"):
+                lifecycle.run_session(self.root, runtime, scheduler)
+        self.assertEqual(observations[:3], [False, False, False])
+        self.assertTrue(all(observations[3:]))
+        self.assertEqual(marker.read_text(), "ran")
+        self.assertEqual(scheduler.counts["partial"], 0)
+
+    def test_pause_restarts_the_idle_flush_timer(self):
+        scheduler = hooks.Scheduler(self.cfg)
+        scheduler.accepted("TASK-A", "a", self.head)
+        clock = [0]
+        counts_at_claim = []
+        pause = self.runner / "PAUSE"
+        save = gate.save
+
+        def observe_status(path, value):
+            save(path, value)
+            if Path(path).name == "worker.status" and value.get("state") == "PAUSED":
+                clock[0] = 120
+                pause.unlink()
+
+        def empty_queue(*args, **kwargs):
+            clock[0] += 30
+            counts_at_claim.append(scheduler.counts["periodic"])
+            if len(counts_at_claim) == 2:
+                pause.touch()
+            if len(counts_at_claim) == 6:
+                raise RuntimeError("fixture complete")
+            return ""
+
+        with patch.dict(os.environ, {"RUN_ONCE": "0", "POLL_INTERVAL": ".001"}), \
+                patch.object(lifecycle, "time", wraps=time) as session_time, \
+                patch.object(runtime, "pop_task", side_effect=empty_queue), \
+                patch.object(gate, "save", side_effect=observe_status):
+            session_time.monotonic.side_effect = lambda: clock[0]
+            with self.assertRaisesRegex(RuntimeError, "fixture complete"):
+                lifecycle.run_session(self.root, runtime, scheduler)
+        self.assertEqual(counts_at_claim, [1, 1, 1, 1, 1, 0])
+
+    def test_external_no_response_waits_without_repeated_dispatch_or_messages(self):
+        self.runner.mkdir(exist_ok=True)
+        task = "TASK-WAIT [CODE: FIX] | LEVEL: 1 | TARGET: fixture | VERIFY: true"
+        (self.runner / "tasks.txt").write_text(task + "\n")
+        scheduler = hooks.Scheduler(self.cfg)
+        scheduler.accepted("TASK-PREVIOUS", "previous", self.head)
+        output = io.StringIO()
+        clock = [0]
+
+        def no_response(args, agents, agent_state, recover):
+            args.agent_no_response = True
+            agent_state["consecutive_no_response"] = len(agents)
+            return 1, False
+
+        def boundary():
+            clock[0] += 30
+            if clock[0] >= 180:
+                raise RuntimeError("fixture complete")
+
+        with patch.dict(os.environ, {"RUN_ONCE": "0", "POLL_INTERVAL": ".001"}), \
+                patch.object(runtime, "load_agent_registry", return_value=[{"id": "fixture"}]), \
+                patch.object(runtime, "validate_task_capacity"), \
+                patch.object(lifecycle.preflight, "check", return_value={"status": "ready"}), \
+                patch.object(runtime, "execute_registered_agents", side_effect=no_response) as execute, \
+                patch.object(lifecycle, "time", wraps=time) as session_time, \
+                patch.object(scheduler.background, "poll", side_effect=boundary), \
+                patch.object(scheduler, "flush_idle") as flush, redirect_stdout(output):
+            session_time.monotonic.side_effect = lambda: clock[0]
+            with self.assertRaisesRegex(RuntimeError, "fixture complete"):
+                lifecycle.run_session(self.root, runtime, scheduler)
+        self.assertEqual(execute.call_count, 1)
+        self.assertEqual(output.getvalue().count("reporting to planner."), 1)
+        self.assertEqual((self.runner / "tasks.txt").read_text(), task + "\n")
+        flush.assert_not_called()
+
+    def test_pending_queue_failure_and_pause_gates_exclude_idle_flush(self):
+        self.runner.mkdir(exist_ok=True)
+        task = "TASK-PENDING [CODE: FIX] | LEVEL: 1 | TARGET: fixture | VERIFY: false\n"
+        queue = self.runner / "tasks.txt"
+        queue.write_text(task)
+        for gate_file, expected in (("lifecycle/paused.json", "PAUSED_FOR_PLANNER"),
+                                    (".worker-dispatch-gate.json", "PAUSED_FOR_PLANNER"),
+                                    ("PAUSE", "PAUSED")):
+            with self.subTest(gate_file=gate_file):
+                blocker = self.runner / gate_file
+                gate.save(blocker, {"reason": "hot acceptance failed; awaiting Planner repair"})
+                scheduler = hooks.Scheduler(self.cfg)
+                scheduler.accepted("TASK-PREVIOUS", "previous", self.head)
+                clock = [0]
+
+                def boundary():
+                    clock[0] += 30
+                    if clock[0] >= 180:
+                        raise RuntimeError("fixture complete")
+
+                with patch.dict(os.environ, {"RUN_ONCE": "0", "POLL_INTERVAL": ".001"}), \
+                        patch.object(lifecycle, "time", wraps=time) as session_time, \
+                        patch.object(scheduler.background, "poll", side_effect=boundary), \
+                        patch.object(scheduler, "flush_idle") as flush, \
+                        patch.object(runtime, "pop_task") as claim:
+                    session_time.monotonic.side_effect = lambda: clock[0]
+                    with self.assertRaisesRegex(RuntimeError, "fixture complete"):
+                        lifecycle.run_session(self.root, runtime, scheduler)
+                self.assertEqual(json.loads((self.runner / "worker.status").read_text())["state"], expected)
+                self.assertEqual(scheduler.counts["periodic"], 1)
+                self.assertEqual(queue.read_text(), task)
+                flush.assert_not_called()
+                claim.assert_not_called()
+                blocker.unlink()
 
     def test_manual_cold_ignores_previous_audit_and_legacy_ledger(self):
         marker = self.runner / "cold-marker"

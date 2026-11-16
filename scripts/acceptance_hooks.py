@@ -213,6 +213,23 @@ class Scheduler:
             self._schedule(cold_spec(self.cfg), "manual", active["event"], active["task_id"], active["base"])
             self._persist()
 
+    def flush_idle(self, revision):
+        """Schedule the remaining accepted work at a quiet queue boundary."""
+        with self.lock:
+            if self.pending or self.background.busy() or self.background.blocked():
+                return False
+            event = uuid.uuid4().hex
+            task = next(reversed(self.events.values()), "TASK-IDLE")
+            scheduled = False
+            for hook in self.periodic:
+                if self.counts.get(hook["id"], 0) > 0:
+                    self._schedule(hook, "idle", event, task, revision)
+                    self.counts[hook["id"]] = 0
+                    scheduled = True
+            background = self.background.flush_idle()
+            self._persist()
+            return scheduled or background
+
     def next_run(self):
         with self.lock:
             if self.persistence_failed:

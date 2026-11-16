@@ -241,10 +241,27 @@ resuming affected dispatch. See [recovery details](../acceptance.md#failure-and-
 
 ## Optional hooks
 
-Ordinary configured hooks count accepted ticket events, including no-change;
+Ordinary configured hooks count accepted ticket events, including no-change.
 cold_every counts accepted development commits. They execute synchronously before
 the next ticket. A live hook-register one-shot targets an exact future task ID.
-Default one-shots/counters are session-only; durable_hooks optionally persists
+
+The persistent daemon flushes nonzero periodic counters after 60 continuous
+seconds in IDLE with an empty queue. Cold runs first, followed by synchronous
+hooks in configuration order. Their counters reset when queued. Background hooks
+use their existing single slot and reset counters when preparation starts.
+For cold_every=5, three accepted development commits produce one cold run after
+the idle interval. Hooks that ran earlier also flush any newly accumulated work.
+Zero counters await new accepted work.
+
+Pause and waiting states reset the idle timer. Acceptance-failure pauses and
+waits for agents or pending-ticket readiness exclude idle flushing. RUN_ONCE
+drains eligible work at its normal exit boundaries. Read worker.status or use
+ns-status to inspect IDLE, PAUSED, PAUSED_FOR_PLANNER, WAITING_FOR_AGENT and
+AGENT_NO_RESPONSE. External all-agent no-response holds retain their in-memory
+counters and emit one daemon notification per halt. Restore agent availability
+and relaunch the Worker to retry that held ticket.
+
+Default one-shots/counters are session-only. durable_hooks optionally persists
 legacy hook obligations, whose interrupted effects need explicit review.
 
 A custom periodic hook may register a second stage:

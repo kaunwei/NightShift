@@ -1,8 +1,8 @@
 # Two-stage periodic hooks
 
-Custom periodic hooks may register an optional second stage. Existing hooks,
-one-shot hooks and built-in cold verification keep their existing behavior.
-No skills changes are required.
+Custom periodic hooks may register an optional second stage. Ordinary hooks
+and built-in cold verification run synchronously. One-shot hooks target an
+exact task ID.
 
 ```json
 {
@@ -56,6 +56,16 @@ for cleanup. A separate supervisor also observes pipe EOF on daemon death and
 kills the owned command process group, including ordinary descendant processes.
 Timeouts retain full live logs with a bounded in-memory tail. This is process
 ownership and final-state auditing, not an OS read-only sandbox.
+
+The persistent daemon also flushes partial periodic counters after the empty
+queue stays IDLE for 60 seconds. It waits for the background slot to become free,
+then promotes nonzero background counters to eligibility. Preparation resets
+each counter to zero. Synchronous cold and ordinary hooks drain first. Hooks
+with zero counters await new accepted work. Pause and waiting states reset the
+idle timer. Acceptance-failure pauses, exhausted agents and pending-ticket waits
+exclude idle flushing. A hook that ran earlier flushes again when new accepted
+work leaves a nonzero counter. RUN_ONCE drains eligible work at normal exit
+boundaries.
 
 ## Script inputs and outputs
 

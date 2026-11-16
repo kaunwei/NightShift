@@ -174,7 +174,14 @@ def run_session(root, runtime, scheduler):
         if once:
             print("[WORKER] RUN_ONCE is enabled.")
     began = [time.monotonic()]
+    idle_since = None
     def update(kind, task=None, phase=None):
+        nonlocal idle_since
+        if kind == "IDLE":
+            if idle_since is None:
+                idle_since = time.monotonic()
+        else:
+            idle_since = None
         if task != running.get("current_task"):
             began[0] = time.monotonic()
         running.update(state=kind, current_task=task, phase=phase, last_heartbeat=datetime.now().isoformat())
@@ -481,10 +488,11 @@ def run_session(root, runtime, scheduler):
                 else:
                     continue
             if waiting_for_response and not pause.is_file():
-                if agent_state_file.exists():
-                    agent_state = runtime.read_agent_state(agent_state_file)
-                else:
-                    agent_state["consecutive_no_response"] = 0
+                if not external:
+                    if agent_state_file.exists():
+                        agent_state = runtime.read_agent_state(agent_state_file)
+                    else:
+                        agent_state["consecutive_no_response"] = 0
                 if agent_state.get("consecutive_no_response", 0) >= len(agents):
                     update("AGENT_NO_RESPONSE", "Waiting for agent response")
                     stopped.wait(poll)
@@ -550,6 +558,13 @@ def run_session(root, runtime, scheduler):
             if not raw:
                 if running["state"] != "BLOCKED":
                     update("IDLE")
+                if (not once and running["state"] == "IDLE" and idle_since is not None
+                        and time.monotonic() - idle_since >= 60
+                        and not scheduler.background.busy()):
+                    idle_since = time.monotonic()
+                    if scheduler.flush_idle(gate.git(root, "rev-parse", "HEAD")):
+                        print("[HOOK_IDLE] Queue idle for 60 seconds; draining remaining hook counters.", flush=True)
+                        continue
                 if once:
                     if scheduler.background.has_work():
                         stopped.wait(min(poll, .1))

@@ -1216,7 +1216,6 @@ def execute_registered_agents(args, agents, state_path, rollback):
 
         max_no_response = len(available)
         if is_no_response and consecutive_no_response >= max_no_response:
-            print(f"[WORKER] AGENT_NO_RESPONSE: {consecutive_no_response} consecutive switches without agent response; reporting to planner.", flush=True)
             args.agent_no_response = True
             return 0, True
 

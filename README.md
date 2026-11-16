@@ -89,6 +89,19 @@ within 1..5; Planner reads the executing registration's score when sizing work.
 
 ## Background hooks
 
+After the empty queue stays IDLE for 60 seconds, the persistent daemon drains
+nonzero periodic hook counters, including cold regression. Cold runs first,
+followed by synchronous hooks in configuration order. Synchronous counters reset
+when queued. Background counters reset when preparation starts through the
+single background slot. For example, cold_every=5 with three accepted development
+commits triggers one cold run after the idle interval.
+
+Pause and waiting states restart the idle timer. Acceptance failures, agent
+exhaustion and pending-ticket waits exclude idle flushing. Zero counters await
+new accepted work. RUN_ONCE drains eligible work at its normal exit boundaries.
+A no-response halt emits one daemon notification and awaits recovery. Inspect
+worker.status or ns-status for the current state.
+
 A custom periodic hook can add optional `second_stage.argv` and `timeout`.
 Preparation runs synchronously; analysis runs on a fixed commit in an independent
 clone, with sealed first-stage artifacts. No git worktree is created.
