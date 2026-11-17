@@ -25,6 +25,8 @@ Runtime owns Git writes, hot acceptance, scores and task state. Work on the curr
 
 ## Verify and close out
 
+- Run focused engine groups through the project runner public entry points, such as `regression.run_source` or `run_groups`, inside owned `TemporaryDirectory` contexts. Preserve logs, XML and JSON outside those contexts, then release imported project copies before handoff so runtime acceptance has space. Internal `_run_source` requires its public cleanup wrapper.
+
 - Run the ticket's `VERIFY:` command and relevant tests. Report only checks actually run; distinguish verified facts from hypotheses. `[DEAD_END]` requires an isolated passing test or runtime evidence that the suspected module is healthy while the symptom remains.
 - Make at most three implementation attempts, restoring only the task's original changes before an alternative fix. After the third failure, report `[BLOCKED]`; the runtime preserves failed work and restores the task baseline. Never reset unrelated work. The runtime owns progress and mechanical audits.
 - Do not stage or commit. Return a structured result with the proposed `commit_message`; the host runtime verifies, audits, and commits the declared changes. Do not edit the runtime-owned `progress.log`. The runtime rejects non-runtime uncommitted or untracked files after the task.
