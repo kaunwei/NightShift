@@ -44,7 +44,7 @@ Return exactly one JSON object with no text before or after it: outcome, commit_
 - outcome: complete, closeout_required, blocked, scope_blocked, guidance, failure,
   or no_change. `attempts`=integer; `confidence`=HIGH|MED|LOW. no_change requires a reason and no product changes.
 - Research completion follows [bounded research](../.agents/skills/nightshift/explore/SKILL.md#bounded-research): a valid inconclusive report can be complete while its defect remains unresolved.
-- If verification fails, return blocked or failure; closeout_required cannot repair failed tests.
+- During the TDD red phase, record the expected failing regression, implement the requested behavior, and rerun it to green within the task budget. Final verification runs after implementation. If final verification still fails after the permitted implementation attempts, return blocked or failure; closeout_required cannot repair failed tests.
 - On failure, report exact command, output and scope. Planner reschedules issues
   and explicitly restarts. Keep progress and queue records runtime-owned.
 
