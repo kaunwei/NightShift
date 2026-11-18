@@ -16,6 +16,7 @@ HOT = ROOT / "scripts/unittest_hot.py"
 sys.path.insert(0, str(ROOT / "scripts"))
 import acceptance
 import worker_runtime as runtime_module
+from runtime_fixture import parser_environment, parser_runtime
 
 
 class AutomaticAcceptanceTests(unittest.TestCase):
@@ -142,7 +143,7 @@ pathlib.Path(os.environ['NIGHTSHIFT_RESULT_FILE']).write_text(json.dumps(result)
         self.assertTrue((state / "lifecycle/last-adapter.json").is_file())
         self.assertIn("Project: company", next((state / "lifecycle/runs").glob("*/prompt.txt")).read_text())
 
-    @unittest.skipUnless((ROOT / "scripts/tools/.venv/bin/python").is_file(), "parser environment required")
+    @unittest.skipUnless(parser_environment() is not None, "parser environment required")
     def test_external_index_uses_private_config_and_storage(self):
         import project_config
         external = self.directory / "external-config.json"
@@ -151,9 +152,10 @@ pathlib.Path(os.environ['NIGHTSHIFT_RESULT_FILE']).write_text(json.dumps(result)
             "include": ["test/**"], "exclude": [], "tool": [], "project": ["test/**"]}}}
         external.write_text(json.dumps(cfg))
         _, _, state = project_config.resolve_project(external, "company", self.root)
-        process = subprocess.run([sys.executable, str(RUNTIME), "code-index", "--config", str(external),
-                                  "--project", "company", "ensure"], cwd=self.directory,
-                                 env=self.env, text=True, capture_output=True, timeout=30)
+        with parser_runtime() as index_runtime:
+            process = subprocess.run([sys.executable, str(index_runtime), "code-index", "--config", str(external),
+                                      "--project", "company", "ensure"], cwd=self.directory,
+                                     env=self.env, text=True, capture_output=True, timeout=30)
         self.assertEqual(process.returncode, 0, process.stdout + process.stderr)
         result = json.loads(process.stdout)
         self.assertEqual(Path(result["index_path"]), state / "code-index/index.json")

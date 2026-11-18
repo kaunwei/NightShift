@@ -10,13 +10,16 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import project_config
+from runtime_fixture import parser_environment, parser_runtime
 
 ROOT = Path(__file__).resolve().parents[1]
-RUNTIME = ROOT / "scripts" / "worker_runtime.py"
 
 
-@unittest.skipUnless((ROOT / "scripts/tools/.venv/bin/python").is_file(), "parser environment required")
+@unittest.skipUnless(parser_environment() is not None, "parser environment required")
 class ExternalProjectIndexTests(unittest.TestCase):
+    def setUp(self):
+        self.runtime = self.enterContext(parser_runtime())
+
     def test_external_index_build_query_and_isolation_between_two_projects(self):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
@@ -52,7 +55,7 @@ class ExternalProjectIndexTests(unittest.TestCase):
 
             # Build index for project one from an arbitrary working directory
             res1 = subprocess.run([
-                sys.executable, str(RUNTIME), "code-index",
+                sys.executable, str(self.runtime), "code-index",
                 "--config", str(config_file),
                 "--project", "one",
                 "ensure"
@@ -61,7 +64,7 @@ class ExternalProjectIndexTests(unittest.TestCase):
 
             # Build index for project two
             res2 = subprocess.run([
-                sys.executable, str(RUNTIME), "code-index",
+                sys.executable, str(self.runtime), "code-index",
                 "--config", str(config_file),
                 "--project", "two",
                 "ensure"
@@ -122,7 +125,7 @@ class ExternalProjectIndexTests(unittest.TestCase):
 
             # First build: rebuilt
             r1 = subprocess.run([
-                sys.executable, str(RUNTIME), "code-index",
+                sys.executable, str(self.runtime), "code-index",
                 "--config", str(config_file),
                 "--project", "my-repo", "ensure"
             ], cwd=workspace, env=env, capture_output=True, text=True, check=True)
@@ -130,7 +133,7 @@ class ExternalProjectIndexTests(unittest.TestCase):
 
             # Second build without changes: current
             r2 = subprocess.run([
-                sys.executable, str(RUNTIME), "code-index",
+                sys.executable, str(self.runtime), "code-index",
                 "--config", str(config_file),
                 "--project", "my-repo", "ensure"
             ], cwd=workspace, env=env, capture_output=True, text=True, check=True)
@@ -142,7 +145,7 @@ class ExternalProjectIndexTests(unittest.TestCase):
 
             # Third build after commit: rebuilt
             r3 = subprocess.run([
-                sys.executable, str(RUNTIME), "code-index",
+                sys.executable, str(self.runtime), "code-index",
                 "--config", str(config_file),
                 "--project", "my-repo", "ensure"
             ], cwd=workspace, env=env, capture_output=True, text=True, check=True)

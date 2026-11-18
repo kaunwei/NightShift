@@ -7,7 +7,19 @@ NIGHTSHIFT_TEST_PARSER_VENV="$PWD/scripts/tools/.venv" \
   scripts/tools/.venv/bin/python -m unittest discover -s test -v
 ```
 
-An existing compatible parser environment can be supplied instead, so the test run needs no package downloads. Worker tests use fake executables; no model calls or tokens are consumed.
+NIGHTSHIFT_TEST_PARSER_VENV may point to an existing compatible environment root;
+it takes precedence over scripts/tools/.venv. Index tests deploy private temporary
+runtimes linked to that environment, without modifying the checkout or downloading
+packages. An explicitly missing/empty environment fails; only a missing default
+environment permits skipping. Unusable parsers fail the actual index command.
+Worker tests use fake executables; no model calls or tokens are consumed.
+
+Without a checkout-local environment, run with the shared interpreter directly:
+
+```sh
+NIGHTSHIFT_TEST_PARSER_VENV=/path/to/parser-venv \
+  /path/to/parser-venv/bin/python -m unittest discover -s test -v
+```
 
 Standalone daemon fixtures should use `runtime_fixture.deploy_runtime` to copy
 the files declared by the deployment manifest. Partial module lists can fail at
