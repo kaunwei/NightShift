@@ -1939,7 +1939,7 @@ def build_task_prompt(task, task_id, level, target, verify, forbidden, constrain
     is_research = is_research_task(task)
     budget_rule = (f"- Budget: {max_steps} actions for research report; reserve 3 for closeout. Per-invocation timeout."
                    if is_research else
-                   f"- Budget: {max_steps} actions ({step_base}+{target_file_count}×{step_per_file}); reserve 3 for verify/closeout. Per-invocation timeout. Emit `[EXEC] <action>` when required; no fabricated markers, bundled actions, or budget evasion.")
+                   f"- Budget: {max_steps} actions ({step_base}+{target_file_count}*{step_per_file}); reserve 3 for verify/closeout. Per-invocation timeout. Emit `[EXEC] <action>` when required; no fabricated markers, bundled actions, or budget evasion.")
     project_context = ""
     if os.environ.get("NIGHTSHIFT_PROJECT_ROOT"):
         skills = Path(__file__).resolve().parent.parent / ".agents/skills"
@@ -1958,7 +1958,10 @@ START
 
 RULES
 {budget_rule}
+- TARGET authorizes listed files and directory descendants, including new files. FILES estimates actions; it grants no paths and sets no changed-file cap. All levels retain hot, evidence and scope checks.
+- L1: complete the trigger-to-result workflow across authorized modules. Check combined behavior with declared integration cases or VERIFY; local passes alone are insufficient. Mark claims without executable checks unverified.
 - Writes only in TARGET ({target or 'declared paths'}), except moving a proven-stale report into `.reports/.invalid/`. Honor FORBIDDEN_SHORTCUTS/CONSTRAINTS; wider code scope requires [SCOPE_BLOCKED] with `path#Lline`.
+- For required source, test, wiring or generated files outside TARGET, return scope_blocked with paths, workflow roles and evidence. Planner revises authorization; FILES cannot expand it.
 - Deletion caps: L3 40 lines, L2 150, L1 TARGET only. [CODE: FIX] may add or strengthen regression tests in TARGET; preserve existing assertion strength/count. [CODE: REFACTOR] must not reduce assertions. [DIAGNOSTIC] may add only a compile-clean repro test; [RESEARCH] reads source and writes reports only.
 - Never weaken tests, hide errors, fake behavior, mask races with sleeps, use sudo/host package managers, or destructively reset. Do not edit {progress_file}; runtime owns `progress.log`/`tasks.done` (leave unstaged).
 
@@ -1966,9 +1969,9 @@ CLOSEOUT
 - Development handoff requires nonempty `tdd_cases` with exact `id`/project-relative `source` pairs from permanent hot discovery. Only new or meaningfully modified behavior cases belong here; omit unchanged baseline cases.
 - Exception: only a Planner CODE: REFACTOR ticket with EVIDENCE: EXISTING may pin unchanged CASES. The runtime still runs full hot, source/fingerprint and scope checks. A VERIFY ticket leaves product files unchanged and returns no_change; runtime executes its VERIFY. FILES is the planned file estimate; directory contents do not enlarge action budgets. LEVEL controls precision/risk, with a common preparation floor.
 - For unittest hot discovery, recursively flatten `unittest.TestLoader().discover("test")` (or the configured start directory). Copy `test.id()` and `inspect.getfile(type(test))` relative to project root. Do not prepend `test.` or infer IDs from file paths. For example, `test_input.InputTests.test_empty` maps to `test/test_input.py`. Run declared cases explicitly before handoff; do not invent IDs.
-- Run focused red/green cases before handoff. For a change, runtime owns hot and ticket VERIFY ({verify or 'none'}); do not repeat a full regression unless the ticket explicitly requires it. For no_change, run the declared VERIFY and report actual results. At most 3 implementation attempts; on blocker, return [BLOCKED] with cause.
+- Run focused red/green cases before handoff. Runtime owns hot and ticket VERIFY ({verify or 'none'}), including no_change VERIFY; report any focused checks you actually ran and avoid duplicating the full gate unless explicitly required for diagnosis. Repair ordinary implementation/test failures within scope and remaining budget, with at most 3 implementation attempts. On an unresolved blocker, report the failing command, evidence location and unfinished behavior; Planner decides recovery or resizing.
 - [RESEARCH]: Follow the ticket's attempt/time bounds and artifact contract. A valid complete report may use outcome=complete with research_conclusion=positive|negative|inconclusive; unreproduced is not fixed. Missing evidence or invalid method remains blocked. Keep unresolved defects in backlog; new evidence gates further reproduction or repair.
-- Never stage/commit or change Worker score. Do not self-adjust the shared Worker score. Runtime verifies, audits and commits using your message; Planner accepts. Do not adjust scope for the adapter.
+- Never stage/commit or change Worker score. Do not self-adjust the shared Worker score. Runtime verifies, audits, accepts and commits using your message; Planner plans and handles recovery. Do not adjust scope for the adapter.
 - Return exactly one JSON object with no text before or after it. Fields: `outcome`=complete|closeout_required|blocked|scope_blocked|guidance|failure|no_change; `changed`=boolean; `verification_evidence`; `commit_message`; `no_change_reason` when relevant; `attempts`=integer; `confidence`=HIGH|MED|LOW. `complete`=finished/verified; `no_change`=no edits needed; `closeout_required`=verification/message pending. If verification fails, return blocked or failure; closeout_required cannot repair failed tests. Never invent evidence/messages from logs.
 
 {authority}

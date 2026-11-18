@@ -23,6 +23,20 @@ sizing. Existing TARGET, assertion and per-level deletion checks remain active;
 script does not infer semantic scope from prose or impose a new file-count cap.
 Planner skill changes are not needed for this enforcement.
 
+### Planning an L1 workflow
+
+L1 can deliver a complete workflow across cooperating modules. TARGET accepts
+multiple files and directories; a directory includes new descendant files.
+Plan tests, wiring and known generated siblings along with product sources.
+FILES estimates effort independently: it neither authorizes extra paths nor
+limits the actual changed-file count. Broad directory authorization alone does
+not increase the action budget to match every file inside it.
+
+Combined behavior needs a real integration case and/or executable task VERIFY.
+The runtime can run these checks but cannot determine whether they fully express
+the requirement. L1 uses the same evidence, hot, VERIFY and scope gates as other
+levels. A scope gap needs Planner replanning, not Worker self-authorization.
+
 ## Evidence contract
 
 Code defaults to `EVIDENCE: CHANGED`: require new or meaningfully modified

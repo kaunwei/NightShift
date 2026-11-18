@@ -35,8 +35,9 @@ If running un-sourced, discover paths via:
 
        python3 "$NIGHTSHIFT_CORE/scripts/worker_runtime.py" score-read --state "$NIGHTSHIFT_STATE_DIR/.worker-agent-scores" --agent-id NAME
 
-   Score 5: L1 vertical slice. Score 3-4: L2 one module/seam. Score 1-2: L3 exact
-   behavior, inputs/outputs and red/green steps. Shrink scope as score falls.
+   Score 5: L1 complete feature slice, including cooperating modules and behaviors.
+   Score 3-4: L2 one module/seam. Score 1-2: L3 exact behavior, inputs/outputs
+   and red/green steps. Respect the runtime capability ceiling when scheduling.
    Runtime owns score arithmetic; use score-read, without a separate capacity review.
 3. Queue blockers first. Include product, tests and permanent hot wiring in TARGET:
 
@@ -50,6 +51,11 @@ If running un-sourced, discover paths via:
    Research tickets use [bounded research](../explore/SKILL.md#bounded-research).
    Use green intermediate phases for interface migrations. Every ten completed
    development tasks, queue a bounded hotspot review of the last twenty commits.
+
+   For L1 planning, follow [feature-slice planning](references/l1-feature-slices.md).
+   Finish planning when the trigger, combined observable result, bounded TARGET,
+   FILES estimate and executable acceptance checks are explicit. A slice may span
+   modules; split at independently acceptable behavior boundaries, not file types.
 
 ## Supervise
 
@@ -83,6 +89,9 @@ paused until Planner reviews the report, replans the FIFO queue, and explicitly 
 
 1. Read the failure report under `$NIGHTSHIFT_STATE_DIR/lifecycle/reports/`. Inspect dirty files before
    restart if needed.
+   Follow [evidence-based recovery](references/l1-feature-slices.md#recover-from-evidence)
+   before resizing a feature. Existing attribution is evidence about execution,
+   not proof that the feature's design or planned scope was sound.
 2. Read scores, revise prompts and use scheduling scripts to put ordinary issue
    tasks as early in FIFO as possible:
 
@@ -101,9 +110,10 @@ paused until Planner reviews the report, replans the FIFO queue, and explicitly 
    permission to continue rejected work. Verification resume has no runtime CLI;
    use a new bounded task and clean restart, not an invented resume operation.
 
-Five accepts raise score by one (max five); reject resets the streak; no_fault is
-excluded. The same task's second/third hard timeout or budget failure lowers score.
-Runtime applies these rules; failure attribution is not a separate Planner step. Read
+Five effective development accepts raise score by one (max five). Two consecutive
+attributable failures lower it by one, including across task IDs; neutral outcomes
+do not change either window. An accept resets the failure streak; an attributable
+failure clears the accept window. Runtime owns attribution and score writes. Read
 `$NIGHTSHIFT_CORE/scripts/acceptance.md` for hook setup,
 TDD evidence, cadence and restart state.
 

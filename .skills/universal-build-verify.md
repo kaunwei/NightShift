@@ -8,7 +8,7 @@ Runtime owns Git writes, hot acceptance, scores and task state. Work on the curr
   read `$NIGHTSHIFT_STATE_DIR/code-index/INDEX.md` only after script approval. Use compact queries
   for details; `index.json` is script-owned cache. Dirty-input recovery follows Explore's code index.
 - Read `$NIGHTSHIFT_STATE_DIR/.worker.notes.md` and the ticket. Stay within TARGET.
-  Applicable skills under `.agents/skills/`: [`tdd`](../.agents/skills/engineering/tdd/SKILL.md) for `[CODE]`; [`diagnosing-bugs`](../.agents/skills/engineering/diagnosing-bugs/SKILL.md) for `[DIAGNOSTIC]`; [`research`](../.agents/skills/engineering/research/SKILL.md) and [`explore`](../.agents/skills/nightshift/explore/SKILL.md) for `[RESEARCH]`. The ticket is the pre-agreed seam: proceed autonomously unless an ambiguity changes scope or expected behavior. The Planner owns acceptance and independent review.
+  Applicable skills under `.agents/skills/`: [`tdd`](../.agents/skills/engineering/tdd/SKILL.md) for `[CODE]`; [`diagnosing-bugs`](../.agents/skills/engineering/diagnosing-bugs/SKILL.md) for `[DIAGNOSTIC]`; [`research`](../.agents/skills/engineering/research/SKILL.md) and [`explore`](../.agents/skills/nightshift/explore/SKILL.md) for `[RESEARCH]`. The ticket is the pre-agreed seam: proceed autonomously unless an ambiguity changes scope or expected behavior. Runtime owns automatic acceptance; Planner owns planning, independent review and recovery.
 - [CODE]: use .agents/skills/engineering/tdd/SKILL.md. Add or update real tests;
   keep them in permanent hot discovery after this task ends. Include test and hot
   wiring paths in TARGET. Run red/green checks during implementation.
@@ -27,7 +27,7 @@ Runtime owns Git writes, hot acceptance, scores and task state. Work on the curr
 
 - Run focused engine groups through the project runner public entry points, such as `regression.run_source` or `run_groups`, inside owned `TemporaryDirectory` contexts. Preserve logs, XML and JSON outside those contexts, then release imported project copies before handoff so runtime acceptance has space. Internal `_run_source` requires its public cleanup wrapper.
 
-- Run the ticket's `VERIFY:` command and relevant tests. Report only checks actually run; distinguish verified facts from hypotheses. `[DEAD_END]` requires an isolated passing test or runtime evidence that the suspected module is healthy while the symptom remains.
+- Run relevant focused tests; runtime executes the final hot and ticket `VERIFY:`, including verification-only tasks. Repeat the full gate only when explicitly required for diagnosis or by the ticket. Report only checks actually run; distinguish verified facts from hypotheses. `[DEAD_END]` requires an isolated passing test or runtime evidence that the suspected module is healthy while the symptom remains.
 - Make at most three implementation attempts, restoring only the task's original changes before an alternative fix. After the third failure, report `[BLOCKED]`; the runtime preserves failed work and restores the task baseline. Never reset unrelated work. The runtime owns progress and mechanical audits.
 - Do not stage or commit. Return a structured result with the proposed `commit_message`; the host runtime verifies, audits, and commits the declared changes. Do not edit the runtime-owned `progress.log`. The runtime rejects non-runtime uncommitted or untracked files after the task.
 - Leave stage/commit and scoring to runtime. Ghost can supply missing metadata or hot wiring for existing tests; product/test repairs need a new Planner task.
