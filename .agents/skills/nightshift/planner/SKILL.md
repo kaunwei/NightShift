@@ -19,8 +19,8 @@ Unsourced, discover paths with `project-info --config PATH/config.json [--projec
 1. Read glossary, ADRs, notes and `$NIGHTSHIFT_STATE_DIR/code-index/INDEX.md`.
    Navigate with `code-index query symbol NAME --scope project --format compact`
    or `code-index query callers NAME --scope project --format compact`;
-   delegate deep research to [explore](../explore/SKILL.md).
-   Resolve open requirements with [grilling](../../productivity/grilling/SKILL.md);
+   delegate deep research using `$NIGHTSHIFT_CORE/.agents/skills/nightshift/explore/SKILL.md`.
+   For open requirements read `$NIGHTSHIFT_CORE/.agents/skills/productivity/grilling/SKILL.md`;
    use to-spec/to-tickets for multi-ticket work, otherwise queue directly.
 2. Use `score-read --state "$NIGHTSHIFT_STATE_DIR/.worker-agent-scores" --agent-id NAME`.
    Ceilings: score 5 L1 complete cross-module feature; 3-4 L2 module/seam; 1-2 L3
@@ -30,12 +30,13 @@ Unsourced, discover paths with `project-info --config PATH/config.json [--projec
    executable VERIFY. Local tests/prose do not prove integration; mark unchecked
    claims unverified. Research unknown verification methods before promising results.
    Split only at independently acceptable behaviors; track remaining obligations.
+   Keep required checks with the claimed result.
 4. Bound TARGET with source/test/wiring directories and exact shared/generated
    files, including UID siblings. Directories include new descendants. FILES estimates
    effort, not permissions, a file cap or wall time; directory contents do not count.
    Check capability/actions, Worker timeout and shared hot discovery/run/VERIFY
    deadline separately using receipts/logs, not case count.
-5. Follow [acceptance contracts](../../../../scripts/acceptance.md): CODE needs changed
+5. Read `$NIGHTSHIFT_CORE/scripts/acceptance.md`: default CODE needs changed
    permanent tests; REFACTOR/EXISTING pins unchanged cases; VERIFY needs a command
    and no product edits. Research completion is not product acceptance; TRIAL alone
    adds no artifact gate. Worker runs focused checks; runtime runs hot/VERIFY.
@@ -46,8 +47,8 @@ Unsourced, discover paths with `project-info --config PATH/config.json [--projec
 
        queue-insert --tasks "$TASKS_FILE" --task 'TASK-ISSUE [CODE: FIX] | LEVEL: 2 | TARGET: src,test | FILES: 4 | ACTION: behavior | CASES: stable.case.id | VERIFY: command'
 
-   FIX includes scoped regressions. Use green intermediate migrations and
-   [bounded research](../explore/SKILL.md#bounded-research). Every ten completed
+   FIX includes scoped regressions; migrations use green intermediate steps.
+   Research tickets follow Explore's bounded-research section. Every ten completed
    development tasks, queue a bounded hotspot review of the last twenty commits.
 
 ## Supervise
@@ -67,7 +68,7 @@ SENTINEL_INACTIVE reminder via send_message, ignoring observer fault.
 - ENVIRONMENT_BLOCKED: inspect state `lifecycle/preflight.json`; repair authorized
   prerequisites. Polling retries; queue/scores stay intact. Privileged changes need owner action.
 - HOOK_INTERRUPTED: inspect hook-list and prior effects; hook-retry or hook-cancel
-  the run ID with `--root . --config "$NIGHTSHIFT_CONFIG_FILE"`. Acceptance docs
+  with `--run-id ID --root . --config "$NIGHTSHIFT_CONFIG_FILE"`. Acceptance docs
   cover durable hooks, revision guards and separate failure pauses.
 - Verification failure pauses dispatch, writes state `lifecycle/reports/` and logs
   BLOCKED in progress.log. Read commands, runtime_error, score_attribution and
