@@ -12,6 +12,13 @@ The selected thread must belong to the intended Planner. This requires an
 installed authenticated Codex CLI and a reachable local daemon. CLI errors are
 reported rather than treated as successful delivery.
 
+`PAUSED_FOR_PLANNER` gates the queue even when `current_task` is empty. The
+watcher relays it on the next poll, including when it starts after the pause.
+The default 180-second inactivity reminder is a separate fallback, not a delay
+before delivering a Planner-required pause. A task-specific watcher also reports
+this queue gate while its task remains queued; unrelated historical task results
+remain filtered.
+
 An isolated blocked-worker test on 2026-11-04 produced a queued message and an
 actual automated follow-up in the same Planner chat. The fake queue/status files
 were removed after receipt. Evidence is retained in ignored runtime scratch.

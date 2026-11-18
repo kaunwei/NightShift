@@ -393,6 +393,15 @@ while true; do
     fi
   fi
 
+  # Lifecycle pause clears current_task and gates the queue. It remains
+  # actionable on late watcher startup, including a return to the initial state.
+  if [ "$ACTIVE_TASK" -eq 0 ] && [ "$STATE" = "PAUSED_FOR_PLANNER" ]; then
+    if [ -z "$EXPECTED_TASK_ID" ] || task_ids_from_file "$TASKS_FILE" | grep -Fxq "$EXPECTED_TASK_ID"; then
+      echo "[SENTINEL_PAUSED_FOR_PLANNER] Worker entered state: $STATE (queue prerequisite; watch elapsed: ${ELAPSED}s)."
+      exit 1
+    fi
+  fi
+
   STATUS_RELEVANT=1
   if [ -z "$EXPECTED_TASK_ID" ] && [ "$STATE|$CURRENT_TASK" = "$INITIAL_STATE|$INITIAL_TASK" ]; then
     STATUS_RELEVANT=0

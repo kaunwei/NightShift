@@ -35,7 +35,8 @@ class SentinelCompletionTests(unittest.TestCase):
         dead.wait()
         return dead.pid
 
-    def start(self, task='TASK-ONE', limit='3', env_overrides=None, expect_sentinel=True):
+    def start(self, task='TASK-ONE', limit='3', env_overrides=None, expect_sentinel=True,
+              routed=False):
         watcher_env = os.environ.copy()
         watcher_env['WORKER_INACTIVE_REPEAT'] = '0'
         if env_overrides:
@@ -51,8 +52,9 @@ class SentinelCompletionTests(unittest.TestCase):
             watcher_env[name] = str(self.ns / filename)
         watcher_env['WORKER_ID'] = 'default'
         watcher_env['WATCH_TASK_ID'] = ''
+        routing = ['--agent', 'codex', '--planner-id', 'test-planner'] if routed else []
         self.process = subprocess.Popen(
-            ['bash', str(self.ns / 'watch_worker.sh'), limit, '0.02', task],
+            ['bash', str(self.ns / 'watch_worker.sh'), *routing, limit, '0.02', task],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=watcher_env)
         self.addCleanup(self.stop)
         if expect_sentinel:
@@ -103,6 +105,48 @@ class SentinelCompletionTests(unittest.TestCase):
         time.sleep(0.15)
         self.audit()
         self.assert_completed()
+
+    def test_queue_pause_notifies_when_watcher_starts_after_planner_required(self):
+        (self.ns / 'tasks.txt').write_text('TASK-ONE | LEVEL: 1\n')
+        self.status('PAUSED_FOR_PLANNER')
+        self.start(task='', limit='2')
+        out, err = self.process.communicate(timeout=5)
+        self.assertEqual(self.process.returncode, 1, out + err)
+        self.assertIn('[SENTINEL_PAUSED_FOR_PLANNER]', out)
+        self.assertNotIn('[SENTINEL_INACTIVE]', out)
+
+    def test_queue_pause_notifies_for_queued_task_without_current_task(self):
+        (self.ns / 'tasks.txt').write_text('TASK-ONE | LEVEL: 1\n')
+        self.status('RUNNING', 'TASK-ONE')
+        self.start(limit='2')
+        self.status('PAUSED_FOR_PLANNER')
+        out, err = self.process.communicate(timeout=5)
+        self.assertEqual(self.process.returncode, 1, out + err)
+        self.assertIn('[SENTINEL_PAUSED_FOR_PLANNER]', out)
+
+    def test_queue_pause_relay_delivers_before_inactivity(self):
+        shutil.copy2(ROOT / 'scripts/sentinel_relay.py', self.ns / 'sentinel_relay.py')
+        # Exercise the real nested watcher and relay, without sending a message.
+        delivery = self.root / 'delivery.json'
+        fake_cli = self.root / 'codex'
+        fake_cli.write_text(
+            '#!/usr/bin/env python3\nimport json, pathlib, sys\n'
+            f'pathlib.Path({str(delivery)!r}).write_text(json.dumps(sys.argv[1:]))\n'
+            'print("queued")\n')
+        fake_cli.chmod(0o755)
+        self.status('PAUSED_FOR_PLANNER')
+        self.start(task='', limit='2', routed=True, env_overrides={
+            'PATH': str(self.root) + os.pathsep + os.environ.get('PATH', ''),
+            'WORKER_INACTIVE_TIMEOUT': '180',
+        })
+        out, err = self.process.communicate(timeout=5)
+        self.assertEqual(self.process.returncode, 1, out + err)
+        self.assertIn('[RELAY_DELIVERED]', out)
+        self.assertNotIn('[SENTINEL_INACTIVE]', out)
+        argv = json.loads(delivery.read_text())
+        self.assertEqual(argv[:3], ['queue', '--thread', 'test-planner'])
+        self.assertIn('[SENTINEL_PAUSED_FOR_PLANNER]', argv[4])
+        self.assertEqual(argv[-1], '--resume')
 
     def test_pending_completion_is_replayed_when_watcher_starts_late(self):
         self.done()

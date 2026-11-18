@@ -59,9 +59,9 @@ Delegate to Queue Sentinel and end the turn; no Planner polling/chat loops:
 
 Equivalent: `ns-watch 0 5`. Worker drains autonomously. Wake Planner only for queue
 completion/IDLE, BLOCKED/PAUSED_FOR_PLANNER, ENVIRONMENT_BLOCKED, HOOK_INTERRUPTED
-or SENTINEL_INACTIVE. Normal completions/heartbeats need no intervention. Stale time
+or [SENTINEL_INACTIVE]. Normal completions/heartbeats need no intervention. Stale time
 is not task failure: require fresh evidence. The same watcher process sends the
-SENTINEL_INACTIVE reminder via send_message, ignoring observer fault.
+user-facing inactivity reminder via send_message, ignoring observer fault.
 
 ## Recover
 
