@@ -5,131 +5,99 @@ description: Plan NightShift tasks, supervise failures, replan the FIFO and deli
 
 # Planner
 
-Own task scope, scheduling and explicit restart. Worker implements; runtime accepts,
-commits and scores on the same current branch. Successful tasks need no manual review.
+Own scope, scheduling and recovery. Worker implements; runtime accepts, commits
+and scores on the current branch. Successful tasks need no manual review.
 
-## Environment
+## Setup
 
-Activate the project environment before operating:
-
-    source /path/to/runner/<project>/env.sh
-
-This sets working directory to project root, exports `$NIGHTSHIFT_CORE`, `$NIGHTSHIFT_STATE_DIR`,
-`$TASKS_FILE`, `$TASKS_DONE_FILE`, `$PROGRESS_FILE`, `$STATUS_FILE`, and helpers (`ns-status`, `ns-watch`).
-If running un-sourced, discover paths via:
-
-    python3 "$NIGHTSHIFT_CORE/scripts/worker_runtime.py" project-info --config PATH/config.json [--project NAME]
+Run `source /path/to/runner/<project>/env.sh` to select project/core/state, queue/status
+paths and helpers. Runtime commands below use `python3 "$NIGHTSHIFT_CORE/scripts/worker_runtime.py"`.
+Unsourced, discover paths with `project-info --config PATH/config.json [--project NAME]`.
 
 ## Dispatch
 
-1. Read glossary, ADRs and notes. Read navigation map at `$NIGHTSHIFT_STATE_DIR/code-index/INDEX.md`
-   or run script-directed function/symbol queries without broad source reads; queue
-   [explore](../explore/SKILL.md) for deep research:
+1. Read glossary, ADRs, notes and `$NIGHTSHIFT_STATE_DIR/code-index/INDEX.md`.
+   Navigate with `code-index query symbol NAME --scope project --format compact`
+   or `code-index query callers NAME --scope project --format compact`;
+   delegate deep research to [explore](../explore/SKILL.md).
+   Resolve open requirements with [grilling](../../productivity/grilling/SKILL.md);
+   use to-spec/to-tickets for multi-ticket work, otherwise queue directly.
+2. Use `score-read --state "$NIGHTSHIFT_STATE_DIR/.worker-agent-scores" --agent-id NAME`.
+   Ceilings: score 5 L1 complete cross-module feature; 3-4 L2 module/seam; 1-2 L3
+   exact inputs/outputs and red/green steps. Narrower levels remain allowed.
+   Runtime owns arithmetic; no separate capacity review.
+3. Define trigger, cooperating behaviors, combined result and discovered CASES or
+   executable VERIFY. Local tests/prose do not prove integration; mark unchecked
+   claims unverified. Research unknown verification methods before promising results.
+   Split only at independently acceptable behaviors; track remaining obligations.
+4. Bound TARGET with source/test/wiring directories and exact shared/generated
+   files, including UID siblings. Directories include new descendants. FILES estimates
+   effort, not permissions, a file cap or wall time; directory contents do not count.
+   Check capability/actions, Worker timeout and shared hot discovery/run/VERIFY
+   deadline separately using receipts/logs, not case count.
+5. Follow [acceptance contracts](../../../../scripts/acceptance.md): CODE needs changed
+   permanent tests; REFACTOR/EXISTING pins unchanged cases; VERIFY needs a command
+   and no product edits. Research completion is not product acceptance; TRIAL alone
+   adds no artifact gate. Worker runs focused checks; runtime runs hot/VERIFY.
+   Repeat full suites only for an explicit requirement or diagnosis. Preserve
+   assertions except through an authorized MAINTENANCE gate.
+6. Queue blockers first; reorder with `"$NIGHTSHIFT_CORE/scripts/reorder_queue.sh"`.
+   Insert prioritized issues with:
 
-       python3 "$NIGHTSHIFT_CORE/scripts/worker_runtime.py" code-index query symbol NAME --scope project --format compact
-       python3 "$NIGHTSHIFT_CORE/scripts/worker_runtime.py" code-index query callers NAME --scope project --format compact
+       queue-insert --tasks "$TASKS_FILE" --task 'TASK-ISSUE [CODE: FIX] | LEVEL: 2 | TARGET: src,test | FILES: 4 | ACTION: behavior | CASES: stable.case.id | VERIFY: command'
 
-   Open requirements use [grilling](../../productivity/grilling/SKILL.md); multi-ticket work
-   uses to-spec/to-tickets. Routine tasks queue directly.
-2. Read the selected registration's score:
-
-       python3 "$NIGHTSHIFT_CORE/scripts/worker_runtime.py" score-read --state "$NIGHTSHIFT_STATE_DIR/.worker-agent-scores" --agent-id NAME
-
-   Score 5: L1 complete feature slice, including cooperating modules and behaviors.
-   Score 3-4: L2 one module/seam. Score 1-2: L3 exact behavior, inputs/outputs
-   and red/green steps. Respect the runtime capability ceiling when scheduling.
-   Runtime owns score arithmetic; use score-read, without a separate capacity review.
-3. Queue blockers first. Include product, tests and permanent hot wiring in TARGET:
-
-       TASK-ID [CODE: FIX] | LEVEL: 2 | TARGET: src,test | ACTION: behavior | CASES: stable.case.id | VERIFY: command
-
-   Reorder through `"$NIGHTSHIFT_CORE/scripts/reorder_queue.sh"`. Insert prioritized issue tasks with:
-
-       python3 "$NIGHTSHIFT_CORE/scripts/worker_runtime.py" queue-insert --tasks "$TASKS_FILE" --task 'TASK-ISSUE | LEVEL: 2 | TARGET: src,test | ACTION: fix issue | VERIFY: command'
-
-   FIX includes scoped regression tests; preserve existing assertion strength/count.
-   Research tickets use [bounded research](../explore/SKILL.md#bounded-research).
-   Use green intermediate phases for interface migrations. Every ten completed
+   FIX includes scoped regressions. Use green intermediate migrations and
+   [bounded research](../explore/SKILL.md#bounded-research). Every ten completed
    development tasks, queue a bounded hotspot review of the last twenty commits.
-
-   For L1 planning, follow [feature-slice planning](references/l1-feature-slices.md).
-   Finish planning when the trigger, combined observable result, bounded TARGET,
-   FILES estimate and executable acceptance checks are explicit. A slice may span
-   modules; split at independently acceptable behavior boundaries, not file types.
 
 ## Supervise
 
-Delegate queue monitoring to Queue Sentinel and end the turn. Never poll status or chat loops.
+Delegate to Queue Sentinel and end the turn; no Planner polling/chat loops:
 
     WORKER_INACTIVE_REPEAT=1 bash "$NIGHTSHIFT_CORE/scripts/watch_worker.sh" 0 5
 
-(In sourced shell: `ns-watch 0 5`).
-
-Worker owns execution and drains tasks autonomously. Wake Planner only on:
-- `[SENTINEL_COMPLETED]`: Entire queue drained (`IDLE`).
-- `[BLOCKED]` / `PAUSED_FOR_PLANNER`: Unrecoverable failure or needs decomposition.
-- `ENVIRONMENT_BLOCKED` / `HOOK_INTERRUPTED`: Follow the recovery branches below.
-- `[SENTINEL_INACTIVE]`: Stale heartbeat; send a user-facing inactivity reminder using send_message from the same watcher process, ignoring observer fault.
-
-Normal task completions and heartbeats require zero Planner intervention. Stale timeout is not task failure-require fresh evidence before acting.
+Equivalent: `ns-watch 0 5`. Worker drains autonomously. Wake Planner only for queue
+completion/IDLE, BLOCKED/PAUSED_FOR_PLANNER, ENVIRONMENT_BLOCKED, HOOK_INTERRUPTED
+or SENTINEL_INACTIVE. Normal completions/heartbeats need no intervention. Stale time
+is not task failure: require fresh evidence. The same watcher process sends the
+SENTINEL_INACTIVE reminder via send_message, ignoring observer fault.
 
 ## Recover
 
-- `ENVIRONMENT_BLOCKED`: Read `$NIGHTSHIFT_STATE_DIR/lifecycle/preflight.json`.
-  Repair the reported prerequisite within authorized scope; polling retries it.
-  Queue and scores stay intact. Privileged host changes require owner action.
-- `HOOK_INTERRUPTED`: Use `hook-list` to inspect the run and prior side effects.
-  Choose `hook-cancel` or `hook-retry` with `--run-id ID`; hook commands use
-  `--root . --config "$NIGHTSHIFT_CONFIG_FILE"`. Read runtime acceptance docs for durable
-  hook configuration, revision guards and any separate failure pause.
+- ENVIRONMENT_BLOCKED: inspect state `lifecycle/preflight.json`; repair authorized
+  prerequisites. Polling retries; queue/scores stay intact. Privileged changes need owner action.
+- HOOK_INTERRUPTED: inspect hook-list and prior effects; hook-retry or hook-cancel
+  the run ID with `--root . --config "$NIGHTSHIFT_CONFIG_FILE"`. Acceptance docs
+  cover durable hooks, revision guards and separate failure pauses.
+- Verification failure pauses dispatch, writes state `lifecycle/reports/` and logs
+  BLOCKED in progress.log. Read commands, runtime_error, score_attribution and
+  dirty/retained evidence. Attribution proves neither design correctness nor size.
+  Scope gaps need justified TARGET/FILES replanning; regressions need repair;
+  environment/baseline failures need prerequisite repair; contract failures need
+  correct modes/IDs/wiring/results. Unknown causes/early stops need diagnosis.
+  Resize only with capacity evidence; consider authorized budgets or a qualified Worker.
 
-On verification failure, the runtime automatically pauses dispatch and records a diagnostic
-report under `$NIGHTSHIFT_STATE_DIR/lifecycle/reports/` (and logs `[BLOCKED]` in `$PROGRESS_FILE`). Execution remains
-paused until Planner reviews the report, replans the FIFO queue, and explicitly resumes.
+Read scores, revise prompts and prioritize ordinary issues. Delegate fixes except
+lowest-level work. Changed scope needs a new task ID and the ordinary hot gate.
+Retained attempts support diagnosis, not restoring rejected work. Resume explicitly:
 
-1. Read the failure report under `$NIGHTSHIFT_STATE_DIR/lifecycle/reports/`. Inspect dirty files before
-   restart if needed.
-   Follow [evidence-based recovery](references/l1-feature-slices.md#recover-from-evidence)
-   before resizing a feature. Existing attribution is evidence about execution,
-   not proof that the feature's design or planned scope was sound.
-2. Read scores, revise prompts and use scheduling scripts to put ordinary issue
-   tasks as early in FIFO as possible:
+    restart --root . --config "$NIGHTSHIFT_CONFIG_FILE"
 
-       python3 "$NIGHTSHIFT_CORE/scripts/worker_runtime.py" queue-insert --tasks "$TASKS_FILE" --task 'TASK-ISSUE | LEVEL: 2 | TARGET: src,test | ACTION: fix issue | VERIFY: command'
+Queue edits alone do not resume; honor PAUSE/agent-event gates separately. Next
+Worker discards tracked/nonignored edits; ignored files/reports survive. Verification
+resume has no CLI: use a bounded new task and clean restart. Five effective development
+accepts raise score (max 5); two consecutive attributable failures lower it across
+IDs. Neutral outcomes preserve windows; accepts reset failures, attributable failures
+clear accepts. Runtime owns attribution/writes.
 
-   Delegate fixes except lowest-level work. A changed scope uses a new task ID.
-   Repairs use the ordinary hot gate.
-3. Explicitly resume after replanning:
+## Trials and boundaries
 
-       python3 "$NIGHTSHIFT_CORE/scripts/worker_runtime.py" restart --root . --config "$NIGHTSHIFT_CONFIG_FILE"
-
-   Honor configured PAUSE and agent-event gates separately. Queue edits alone do
-   not resume; dispatch remains paused until `restart`. Next Worker discards
-   tracked/nonignored uncommitted work; ignored files and reports survive.
-   Inspect retained attempt packages before restart; they preserve diagnosis, not
-   permission to continue rejected work. Verification resume has no runtime CLI;
-   use a new bounded task and clean restart, not an invented resume operation.
-
-Five effective development accepts raise score by one (max five). Two consecutive
-attributable failures lower it by one, including across task IDs; neutral outcomes
-do not change either window. An accept resets the failure streak; an attributable
-failure clears the accept window. Runtime owns attribution and score writes. Read
-`$NIGHTSHIFT_CORE/scripts/acceptance.md` for hook setup,
-TDD evidence, cadence and restart state.
-
-## Trials
-
-Queue a TRIAL at the next boundary. Build the starting revision in normal development
-output; copy safe artifacts to staging, verify launch from the intended directory,
-write a manifest (commit, version, checks, artifacts, command), then atomically rename
-to .trials/TASK-ID. Retry clears only its staging directory. Classify dependencies
-as included/shared/unverified; shared or unverified inputs prevent independent
-claims. Exclude secrets. Recommend pause when development touches shared resources.
-
-## Boundaries
-
-Write tickets/commits in English and skills in ASCII. Terminal A reads reports and bounded
-Git metadata (`git show --stat`, `git log --oneline -n 20`). Read source files only for
-L3 recovery or user instruction, using code-index queries.
-Runtime owns clean, commit and score writes. Keep daemon alive through empty queues;
-Planner owns restart.
+Queue TRIAL at a boundary. Build the starting revision in normal output; copy safe
+artifacts to staging, verify launch there, write a commit/version/check/artifact/command
+manifest, then atomically rename to .trials/TASK-ID. Retry clears only its staging.
+Label dependencies included/shared/unverified; shared/unverified prevents independent
+claims. Exclude secrets; recommend pause for shared-resource edits.
+Write tickets/commits in English and skills in ASCII. Terminal A reads reports and
+bounded Git metadata (`git show --stat`, `git log --oneline -n 20`); source reads are
+for L3 recovery or user instruction through indexed navigation. Runtime owns clean,
+commits/scores; Planner owns restart. Keep daemon alive through empty queues.

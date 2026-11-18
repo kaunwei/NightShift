@@ -56,7 +56,7 @@ Scenario mappings are reviewable declarations. Mechanical checks cannot prove th
 
 ## Gradual requirement relations
 
-Requirements and coverage live in Git at `.nightshift/requirements.json` and `.nightshift/coverage.json`, both document version 1. Ignored untracked documents are rejected; local-only relations cannot authorize acceptance. See `examples/slugbox-test-maintenance` for a real import. Omit both files to remain legacy; enabled relations cannot silently disappear. New/modified test bodies and mapped surviving cases require relations; untouched legacy cases need no backfill.
+Requirements and coverage live in Git at `.nightshift/requirements.json` and `.nightshift/coverage.json`, both document version 1. Ignored untracked documents are rejected; local-only relations cannot authorize acceptance. Omit both files to remain legacy; enabled relations cannot silently disappear. New/modified test bodies and mapped surviving cases require relations; untouched legacy cases need no backfill.
 
 A requirement has `id`, positive `version`, `status` (`active` or `retired`), `behavior`, and `decision_ref`. Published versions are immutable. A successor names `supersedes` and nonempty `affected_scenarios`; `*` means every scenario. Only affected relations become stale, so unrelated requirement edits do not force mass metadata updates. New requirement versions must cite a decision authorized in the ticket. Retiring a mapped requirement requires a matching retired successor and decision reference.
 

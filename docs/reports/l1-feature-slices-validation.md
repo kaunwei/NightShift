@@ -5,7 +5,7 @@ Date: 2026-11-18 (Asia/Taipei).
 ## Delivered
 
 - Planner dispatch defines L1 as a complete trigger-to-result feature across
-  cooperating modules. The linked planning guide covers bounded directory
+  cooperating modules. The inline planning rules cover bounded directory
   TARGET, exact shared/generated siblings, independent FILES estimates, actual
   canonical cases/VERIFY and separate action/wall-clock budgets.
 - Worker instructions explain the same boundaries and combined checks. Runtime
@@ -65,8 +65,7 @@ the fixture still used its intended five-step estimate. Final log:
 
 Worked scope/UID, integration-regression and missing-import-log examples each
 identify a recovery action without automatically decomposing the feature. The
-Planner score description matches the current ticket-acceptance contract. Skill
-links resolve and the updated skill material is ASCII.
+Planner score description matches the current ticket-acceptance contract. The skill is now a single ASCII file; the separate L1 reference was folded into its dispatch and recovery rules.
 
 These are instruction and consistency checks, not automated proof that a model
 will always plan correctly. The synthetic fixture demonstrates existing gate

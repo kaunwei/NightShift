@@ -55,7 +55,7 @@ The original full-suite log is preserved. The two waiting tests were independent
 
 ## Rollout and limits
 
-The code and reviewable artifacts are complete; live activation remains pending an idle-runner rollout. See `scripts/docs/TEST_MAINTENANCE.md` for the schema, trusted-ticket fields, commands and rollback procedure. `examples/slugbox-test-maintenance/` includes the reviewed relation import, an inventory configuration example and a checked patch correcting SlugBox's stale hot-count/atomic-overflow documentation.
+The code and reviewable artifacts are complete; live activation remains pending an idle-runner rollout. See `scripts/docs/TEST_MAINTENANCE.md` for the schema, trusted-ticket fields, commands and rollback procedure. The project-specific sample imports and documentation patch were validated during implementation and later removed from the generic repository; the runtime and operation guide remain.
 
 Inventory enforcement is opt-in through the selected runner's `acceptance.inventory`. Untouched projects retain their old protocol; the new disappearance gate does not protect them until configured. Review initial relation imports before enabling them. Do not switch a running Worker to partially delivered runtime files or mix another task's edits into this change.
 
