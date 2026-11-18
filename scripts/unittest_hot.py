@@ -42,11 +42,11 @@ def main():
     parser.add_argument("--cold-only-file", type=Path,
                         help="Case IDs to omit from hot unless new, changed, or required")
     args = parser.parse_args()
+    phase = os.environ["NIGHTSHIFT_PHASE"]
     cold_only = set()
-    if args.cold_only_file is not None:
+    if phase != "inventory" and args.cold_only_file is not None:
         cold_only = {line.strip() for line in args.cold_only_file.read_text(encoding="utf-8").splitlines()
                      if line.strip() and not line.lstrip().startswith("#")}
-    phase = os.environ["NIGHTSHIFT_PHASE"]
     required = set(json.loads(os.environ.get("NIGHTSHIFT_REQUIRED", "[]"))) if phase == "run" else set()
     only = set(json.loads(os.environ.get("NIGHTSHIFT_ONLY_CASES", "[]"))) if phase == "run" else set()
     root = Path.cwd().resolve()
@@ -70,7 +70,7 @@ def main():
         case_id = test.id()
         if only and case_id not in only:
             continue
-        if case_id in cold_only and case_id not in required and previous == current:
+        if phase != "inventory" and case_id in cold_only and case_id not in required and previous == current:
             continue
         tests.append(test)
         cases.append({"id": case_id, "source": source, "fingerprint": current,
@@ -106,7 +106,7 @@ def main():
         code = 0 if result.wasSuccessful() and tests else 1
     else:
         code = 0
-    Path(os.environ["NIGHTSHIFT_RESULT"]).write_text(json.dumps({"run": os.environ["NIGHTSHIFT_RUN"], "cases": cases, "supports_case_selection": True}))
+    Path(os.environ["NIGHTSHIFT_RESULT"]).write_text(json.dumps({"run": os.environ["NIGHTSHIFT_RUN"], "cases": cases, "supports_case_selection": True, "inventory_complete": phase == "inventory"}))
     return code
 
 

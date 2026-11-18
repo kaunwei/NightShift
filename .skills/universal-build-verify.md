@@ -16,7 +16,7 @@ Runtime owns Git writes, hot acceptance, scores and task state. Work on the curr
   requested report, keeping product files unchanged. [DIAGNOSTIC]: diagnose and
   add tests within scope; project hot defines passing behavior.
 - Work only in declared `TARGET:` paths. If a necessary change is outside scope, stop and report `[SCOPE_BLOCKED] (Need Target: path#Lline)`; do not expand scope yourself.
-- `[CODE: FIX]` may add or strengthen regression tests in TARGET; preserve existing assertion strength/count. `[CODE: REFACTOR]` can change tests only when declared, and may not reduce the total assertion count. `[DIAGNOSTIC]` may add a compile-clean repro that fails on the bug, but cannot modify product code. `[RESEARCH]` is read-only for product code and produces the requested report under a dedicated expanded action budget.
+- `[CODE: FIX]` may add or strengthen regression tests in TARGET; preserve existing assertion strength/count. `[CODE: REFACTOR]` can change tests only when declared, and may not reduce the total assertion count. Exception: a ticket-authorized `EVIDENCE: MAINTENANCE` change can reduce assertions after complete-inventory, decision and scenario checks; all required replacements or remaining verification must execute and pass. `[DIAGNOSTIC]` may add a compile-clean repro that fails on the bug, but cannot modify product code. `[RESEARCH]` is read-only for product code and produces the requested report under a dedicated expanded action budget.
 - Respect `FORBIDDEN_SHORTCUTS:` and `CONSTRAINTS:`. Do not weaken assertions, hide errors, add dummy behavior, or use thread sleeps to mask a race. Never use `sudo` or host package managers.
 - Stay within the assigned level's deletion limit: L3 40 lines, L2 150 lines, L1 bounded by `TARGET:`. If compiler fallout points outside scope, stop rather than patching unrelated files.
 - Require zero compiler warnings (`-Wall -Wextra` where supported) and a clean linter. Make each action independently reviewable. Emit `[EXEC] <brief action>` immediately before each tool call when the runtime uses that marker for action accounting. Never combine actions or fabricate markers to evade accounting.
@@ -40,6 +40,7 @@ Return exactly one JSON object with no text before or after it: outcome, commit_
     {"outcome":"complete","commit_message":"fix: handle empty input",
      "tdd_cases":[{"id":"test_input.InputTests.test_empty","source":"test/test_input.py"}]}
 
+- `EVIDENCE: MAINTENANCE` is available only on `[CODE: REFACTOR/MIGRATE/CONTRACT]` tickets naming `MAINTENANCE` change IDs and `DECISIONS`. It requires configured complete inventory and immutable versioned scenario records. It may return empty `tdd_cases`; replacement/remaining verification is enforced by runtime. Never claim approval from Worker-authored prose. See the runtime's `scripts/docs/TEST_MAINTENANCE.md`.
 - Each declared case must have changed test content and be discovered by permanent
   hot without ticket selectors. Runtime checks actual case execution, not prose.
 - task CASES lists required stable IDs; VERIFY adds a required command to hot.

@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from runtime_fixture import deploy_runtime
 from unittest import mock
 import sys
 
@@ -79,9 +80,7 @@ class InMemoryAgentStateTests(unittest.TestCase):
             installation = workspace / "nightshift"
             installation.mkdir()
             shutil.copytree(ROOT / "scripts" / "adapters", installation / "adapters")
-            for name in ("worker.sh", "worker_runtime.py", "lifecycle.py", "acceptance.py", "acceptance_hooks.py", "background_hooks.py", "hook_control.py",
-                         "scratch_review.py", "attempt_archive.py", "preflight.py", "environment_probe.py", "verify_process.py", "evidence_capabilities.py", "ticket_policy.py", "outcome_policy.py", "project_config.py", "status.sh", "watch_worker.sh", "reorder_queue.sh"):
-                shutil.copy2(ROOT / "scripts" / name, installation / name)
+            deploy_runtime(installation)
 
             # Setup git repo
             subprocess.run(["git", "init", "-q", str(workspace)], check=True)

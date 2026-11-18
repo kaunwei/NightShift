@@ -20,6 +20,7 @@ import preflight
 import ticket_policy
 import outcome_policy
 import background_hooks
+import case_maintenance
 
 
 def task_level(raw):
@@ -213,6 +214,8 @@ def run_session(root, runtime, scheduler):
                 "failure_kind": result.get("runtime_error", {}).get("kind", "unknown")}
 
     def fail(active, result):
+        result.pop("maintenance_receipt", None)
+        result["disposition"] = case_maintenance.failure_disposition(active, result)
         active["metrics"] = metrics(active, result)
         if not has_acceptance(root) and active.get("attempt_baseline") and not result.get("recovery_archive"):
             try:
@@ -274,6 +277,10 @@ def run_session(root, runtime, scheduler):
         journal = gate.load(journal_path, {})
         result["registration_id"] = journal.get("registration_id", result.get("registration_id", ""))
         commit = journal.get("commit", result.get("commit", ""))
+        hot = result.get("hot", {})
+        receipt = case_maintenance.accepted_receipt(hot.get("maintenance"), commit, active["task_id"], active["event"], hot.get("evidence", []))
+        if receipt is not None:
+            result["maintenance_receipt"] = receipt
         score_once(active, result, True)
         token = f"Audit_NS: {active['event']}"
         attempts = result.get("attempts", 1)

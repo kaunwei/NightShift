@@ -3,7 +3,7 @@ from pathlib import Path
 import re
 
 FIELD_NAMES = ("LEVEL", "TARGET", "ACTION", "GOAL", "VERIFY", "FORBIDDEN_SHORTCUTS",
-               "CONSTRAINTS", "DEPENDS_ON", "CASES", "EVIDENCE", "FILES")
+               "CONSTRAINTS", "DEPENDS_ON", "CASES", "EVIDENCE", "FILES", "MAINTENANCE", "DECISIONS")
 
 
 def field(raw, key):
@@ -23,13 +23,18 @@ def is_verify(raw):
 
 def evidence_mode(raw):
     mode = field(raw, "EVIDENCE").upper() or "CHANGED"
-    if mode not in ("CHANGED", "EXISTING"):
-        raise ValueError("EVIDENCE must be CHANGED or EXISTING")
+    if mode not in ("CHANGED", "EXISTING", "MAINTENANCE"):
+        raise ValueError("EVIDENCE must be CHANGED, EXISTING or MAINTENANCE")
     if mode == "EXISTING":
         if not re.search(r"\[CODE:\s*REFACTOR\]", raw.split("|", 1)[0], re.I):
             raise ValueError("EVIDENCE EXISTING requires an explicit CODE: REFACTOR ticket")
         if not required_cases(raw):
             raise ValueError("EVIDENCE EXISTING requires nonempty CASES")
+    if mode == "MAINTENANCE":
+        if not re.search(r"\[CODE:\s*(REFACTOR|MIGRATE|CONTRACT)\]", raw.split("|", 1)[0], re.I):
+            raise ValueError("MAINTENANCE requires CODE: REFACTOR, MIGRATE or CONTRACT")
+        if not field(raw, "MAINTENANCE") or not field(raw, "DECISIONS"):
+            raise ValueError("MAINTENANCE requires explicit change IDs and DECISIONS")
     return mode
 
 

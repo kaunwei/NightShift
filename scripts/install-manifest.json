@@ -21,6 +21,10 @@
     "install-manifest.json",
     "project_config.py",
     "acceptance.py",
+    "case_inventory.py",
+    "slugbox_inventory.py",
+    "case_maintenance.py",
+    "case_traceability.py",
     "lifecycle.py",
     "unittest_hot.py",
     "acceptance.md",
@@ -38,6 +42,7 @@
     "ticket_policy.py",
     "outcome_policy.py",
     "docs/TICKET_ACCEPTANCE.md",
+    "docs/TEST_MAINTENANCE.md",
     "docs/BACKGROUND_HOOKS.md"
   ],
   "skill_files": [

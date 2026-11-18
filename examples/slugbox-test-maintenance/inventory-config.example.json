@@ -1,0 +1,9 @@
+{
+  "command": [
+    "python3",
+    "/path/to/NightShift/scripts/slugbox_inventory.py",
+    "--adapter",
+    "/path/to/SlugBox/scripts/automation/regression.py"
+  ],
+  "timeout": 120
+}

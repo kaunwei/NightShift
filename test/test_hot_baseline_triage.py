@@ -64,10 +64,11 @@ class HotBaselineTests(unittest.TestCase):
         self.assertEqual(failure.evidence["baseline_failed_cases"], ["test_sample.Cases.test_existing"])
 
     def test_returned_124_and_enforced_deadline_are_distinct(self):
-        for command, expected in (("exit 124", False), ("sleep 2", True)):
-            code, output = runtime.run_verify(command, ".", 3001, .15)
-            self.assertEqual(code, 124)
-            self.assertEqual(output.timed_out, expected)
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"NIGHTSHIFT_STATE_DIR": directory}):
+            for command, expected in (("exit 124", False), ("sleep 2", True)):
+                code, output = runtime.run_verify(command, directory, 3001, .15)
+                self.assertEqual(code, 124)
+                self.assertEqual(output.timed_out, expected)
 
 
 class SharedAgentBudgetTests(unittest.TestCase):

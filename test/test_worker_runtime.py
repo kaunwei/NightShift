@@ -112,10 +112,7 @@ def copy_runtime_fixture(destination):
     destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(RUNTIME, destination)
-    scratch_source = ROOT / "scripts/scratch_review.py" if (ROOT / "scripts").is_dir() else ROOT / "scripts/scratch_review.py"
-    shutil.copy2(scratch_source, destination.parent / "scratch_review.py")
-    for name in ("attempt_archive.py", "preflight.py", "environment_probe.py", "verify_process.py", "evidence_capabilities.py", "ticket_policy.py", "outcome_policy.py", "lifecycle.py", "acceptance.py", "acceptance_hooks.py", "background_hooks.py", "hook_control.py", "project_config.py"):
-        shutil.copy2(ROOT / "scripts" / name, destination.parent / name)
+    deploy_runtime(destination.parent)
     # This fixture deliberately keeps the legacy scripts/ runtime layout, whose
     # runtime state and scratch files live at the repository root.
     legacy_gitignore = destination.parent.parent / ".gitignore"
@@ -163,9 +160,9 @@ class WorkerPromptContractTests(unittest.TestCase):
         )
 
         for required in (
-            "src/parser.py", "Budget: 22 actions (12+2×5)",
+            "src/parser.py", "Budget: 22 actions (12+2*5)",
             "Per-invocation timeout", "python3 -m unittest", "TASK-9",
-            "The Planner owns acceptance and independent review",
+            "Runtime owns automatic acceptance; Planner owns planning, independent review and recovery",
             "[EXEC] <brief action>", "closeout_required", "[SCOPE_BLOCKED]", "[DEAD_END]",
             "progress.log", "code-index/INDEX.md",
         ):
@@ -1375,7 +1372,8 @@ class CliContractTests(unittest.TestCase):
     def test_prompt_is_provider_invariant_and_requires_structured_script_owned_closeout(self):
         prompt = build_task_prompt("task", "TASK-9", "2", "src/a.py", "python -m unittest",
                                    "", "", 15, 1, 10, 5, "progress.log")
-        self.assertNotRegex(prompt, r"(?i)codex|agy|generic adapter|selected adapter policy")
+        # Host directory names (for example .codex/worktrees) are not provider policy.
+        self.assertNotRegex(prompt.replace(str(ROOT / ".skills/universal-build-verify.md"), ""), r"(?i)codex|agy|generic adapter|selected adapter policy")
         self.assertIn("commit_message", prompt)
         self.assertIn("Do not stage or commit", prompt)
 

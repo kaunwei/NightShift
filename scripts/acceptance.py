@@ -329,12 +329,39 @@ class DefaultAcceptanceRunner(AcceptanceRunner):
         for name in cfg.get("wiring", []):
             if subprocess.run(["git", "-C", str(root), "check-ignore", "-q", "--", name]).returncode == 0:
                 raise GateError(f"persistent hot wiring must be delivered in Git: {name}")
-        existing = ticket_policy.evidence_mode(getattr(args, "title", "")) == "EXISTING"
-        declarations = result.get("tdd_cases", [] if existing else None)
-        if not isinstance(declarations, list) or (not declarations and not existing):
+        mode = ticket_policy.evidence_mode(getattr(args, "title", ""))
+        existing = mode == "EXISTING"
+        maintenance_mode = mode == "MAINTENANCE"
+        maintenance = None
+        if cfg.get("inventory") is not None:
+            if not isinstance(cfg["inventory"], dict):
+                raise GateError("inventory config must be an object")
+            import case_maintenance
+            try:
+                maintenance = case_maintenance.assess(root, args.base, getattr(args, "title", ""), cfg["inventory"], deadline=deadline)
+            except subprocess.TimeoutExpired as error:
+                raise HotFailure("timeout", "complete inventory timed out", {
+                    "phase": "inventory", "command": error.cmd, "budget_seconds": error.timeout,
+                    "output": str(error.output or "")[-4000:]}) from error
+            result["maintenance_proposal"] = {"change_ids": [c["id"] for c in maintenance["changes"]],
+                                               "decision_refs": [c["decision_ref"] for c in maintenance["changes"]],
+                                               "input_digest": maintenance["candidate"]["input_digest"], "relations": maintenance["relations"]}
+        elif maintenance_mode or ticket_policy.field(getattr(args, "title", ""), "MAINTENANCE"):
+            raise GateError("MAINTENANCE requires configured complete inventory")
+        declarations = result.get("tdd_cases", [] if existing or maintenance_mode else None)
+        if not isinstance(declarations, list) or (not declarations and not existing and not maintenance_mode):
             raise GateError("development handoff requires nonempty tdd_cases")
         print(f"[HOT_GATE] Discovering permanent test cases (baseline={args.base[:8]})...", flush=True)
         permanent, discovery = self.invoke(root, cfg, "hot", "discover", args.base, run, deadline=deadline)
+        hot_membership = set(permanent)
+        if maintenance is not None:
+            baseline_inventory = {c["id"]: c for c in maintenance["baseline"]["cases"]}
+            complete = {c["id"]: {**c, "baseline_fingerprint": baseline_inventory.get(c["id"], {}).get("fingerprint")}
+                        for c in maintenance["candidate"]["cases"]}
+            if any(identity not in complete or any(case.get(key) != complete[identity][key] for key in ("source", "fingerprint"))
+                   for identity, case in permanent.items()):
+                raise GateError("hot discovery contradicts complete inventory")
+            permanent = complete
         pinned = set(ticket_policy.required_cases(args.title)) if existing else set()
         for identity in pinned:
             case = permanent.get(identity, {})
@@ -403,13 +430,15 @@ class DefaultAcceptanceRunner(AcceptanceRunner):
             if old.returncode == 0 and old.stdout == path.read_bytes():
                 raise GateError(f"declared TDD source unchanged: {source}")
             declared[identity] = source
-        if not declared and not existing:
+        if not declared and not existing and not maintenance_mode:
             raise GateError("TDD handoff contains no new or changed test cases")
         reconciliation = {"original": original, "canonical": canonical, "dropped": dropped}
         result["tdd_cases"] = [{"id": identity, "source": source} for identity, source in declared.items()]
         result["tdd_reconciliation"] = reconciliation
         print("[HOT_GATE] TDD reconciliation: " + json.dumps(reconciliation, sort_keys=True), flush=True)
         required = set(declared) | pinned
+        if maintenance is not None:
+            required.update(maintenance["required"])
         explicit = getattr(args, "required_cases", [])
         if isinstance(explicit, str):
             explicit = [part.strip() for part in explicit.split(",") if part.strip()]
@@ -426,6 +455,12 @@ class DefaultAcceptanceRunner(AcceptanceRunner):
                 if any(executed[identity].get(field) != permanent[identity].get(field)
                                             for field in ("source", "fingerprint")):
                     raise GateError(f"case evidence changed between discovery and execution: {identity}")
+        if maintenance is not None:
+            if not hot_membership <= executed.keys() or any(identity not in permanent or
+                    any(case.get(key) != permanent[identity][key] for key in ("source", "fingerprint"))
+                    for identity, case in executed.items()):
+                raise GateError("hot execution is incomplete or contradicts complete inventory")
+            case_maintenance.verify_execution(maintenance, executed)
         evidence = [discovery, execution]
         if args.verify and args.verify.lower() not in ("none", "report_only") and args.verify.strip() != command(cfg, "hot").strip():
             print(f"[HOT_GATE] Running task verify command: {args.verify}...", flush=True)
@@ -437,9 +472,13 @@ class DefaultAcceptanceRunner(AcceptanceRunner):
             if code:
                 raise HotFailure("timeout" if record["timed_out"] else "task_verify",
                                  f"task VERIFY exited {code}\n{output[-16384:]}", record)
+        if maintenance is not None:
+            import case_inventory
+            if case_inventory.input_digest(root) != maintenance["candidate"]["input_digest"]:
+                raise GateError("maintenance inputs changed during verification")
         print(f"[HOT_GATE] <<< Hot Acceptance Gate PASSED cleanly for {args.task_id}!\n", flush=True)
         return {"cases": sorted(executed), "evidence": evidence, "tdd_reconciliation": reconciliation,
-                "evidence_mode": "EXISTING" if existing else "CHANGED", "pinned_cases": sorted(pinned)}
+                "evidence_mode": mode, "pinned_cases": sorted(pinned), "maintenance": maintenance}
 
     def run_cold(self, root, run_verify=None, **kwargs):
         runner = run_verify if callable(run_verify) else kwargs.get("run")

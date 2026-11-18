@@ -138,3 +138,5 @@ fixtures. See [test setup](test/README.md) for parser/process prerequisites.
 - [Porting Guide](scripts/docs/PORTING_GUIDE.md): setup, ownership, activation and recovery.
 - [Runtime hardening](scripts/docs/RUNTIME_HARDENING.md): preflight probes, retained attempts and live logs.
 - [Behavior specification](scripts/docs/NIGHTSHIFT_SPEC.md) and [source coverage](scripts/docs/NIGHTSHIFT_SOURCE_COVERAGE.md): contracts and audited implementation limits.
+
+Test maintenance and retirement: [complete inventory, authorized case changes and requirement relations](scripts/docs/TEST_MAINTENANCE.md).

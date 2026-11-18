@@ -1,0 +1,25 @@
+--- a/docs/PORTING_GUIDE.md
++++ b/docs/PORTING_GUIDE.md
+@@ -25,5 +25,5 @@
+ source ../NightShift_runner/slugbox/env.sh
+ # Or, from NightShift_runner/slugbox: source env.sh
+-ns-hot                       # newest 100 cases; preserve inseparable groups
++ns-hot                       # newest 50 cases; add required ticket cases
+ ns-cold                      # remaining cases + scene smoke
+ ns-demo build
+--- a/scripts/automation/README.md
++++ b/scripts/automation/README.md
+@@ -65,8 +65,8 @@
+ The GUT pre-run hook selects exact collected case IDs, preserving original test
+-source and before/after-each fixtures. Scripts with before/after-all fixtures, or
+-mutable script variables without before-each setup, remain whole. Additional
+-inseparable scripts can be listed in `regression_policy.json` under atomic_scripts.
+-If such a group crosses the exact 50-case boundary, discovery fails explicitly;
+-the runner does not silently overflow the configured limit. Other supported tests are selected
++source and before/after-each fixtures. Declare inseparable scripts explicitly in
++`regression_policy.json` under atomic_scripts. Normal hot uses the exact
++hot_limit (currently 50); a boundary that splits a declared atomic source fails
++explicitly. Required ticket cases can add older cases and expand their declared
++atomic groups beyond the normal hot selection. Other supported tests are selected
+ individually. Parameterized/inner-class test discovery still requires extending
+ the adapter and currently fails explicitly.

@@ -1468,6 +1468,11 @@ def ensure_code_index_after_commit(work_dir, previous_head):
 
 
 def finalize_task_git(args):
+    expected = getattr(args, "maintenance_input_digest", "")
+    if expected:
+        import case_inventory
+        if case_inventory.input_digest(Path(args.work_dir).resolve()) != expected:
+            raise ValueError("maintenance inputs changed before commit")
     trees = attempt_audit_trees(args)
     if trees:
         before, after = trees
@@ -1537,6 +1542,20 @@ def bounded_verify_evidence(output):
 
 
 def _finalize_structured_adapter_result(args, result):
+    # These fields are runtime-owned; a Worker cannot supply acceptance evidence.
+    for field in ("hot", "maintenance_receipt", "maintenance_proposal", "disposition"):
+        result.pop(field, None)
+    title = getattr(args, "title", "")
+    if ticket_policy.evidence_mode(title) == "MAINTENANCE" or ticket_policy.field(title, "MAINTENANCE"):
+        try:
+            maintenance_config = acceptance.config(args.work_dir)
+            ready = bool(maintenance_config.get("hot") or maintenance_config.get("hot_script")) and isinstance(maintenance_config.get("inventory"), dict)
+        except (ValueError, OSError):
+            ready = False
+        if not ready:
+            result["runtime_error"] = {"phase": "hot", "kind": "evidence_contract",
+                "message": "MAINTENANCE requires configured hot and complete inventory", "code": 1}
+            return 1
     if scratch_review.is_review(getattr(args, "title", "")):
         return 0
     outcome = result.get("outcome")
@@ -1624,12 +1643,14 @@ def _finalize_structured_adapter_result(args, result):
         print(f"[WORKER] Pre-commit audit failed: {audit_reason}", file=sys.stderr)
         return audit_code
     args.commit_message = message
+    plan = result.get("hot", {}).get("maintenance")
+    args.maintenance_input_digest = plan["candidate"]["input_digest"] if plan else ""
     journal = {"task_id": args.task_id, "title": args.title, "base": args.base,
                "phase": "ready_commit", "result": result,
                "registration_id": getattr(args, "agent_id", ""),
                "args": {name: getattr(args, name, "") for name in (
                    "work_dir", "base", "target", "verify", "task_id", "title", "level",
-                   "worker_port", "timeout", "attempt_baseline", "required_cases")}}
+                   "worker_port", "timeout", "attempt_baseline", "required_cases", "maintenance_input_digest")}}
     journal_path = acceptance.record_path(args)
     acceptance.save(journal_path, journal)
     try:
@@ -1962,11 +1983,12 @@ RULES
 - L1: complete the trigger-to-result workflow across authorized modules. Check combined behavior with declared integration cases or VERIFY; local passes alone are insufficient. Mark claims without executable checks unverified.
 - Writes only in TARGET ({target or 'declared paths'}), except moving a proven-stale report into `.reports/.invalid/`. Honor FORBIDDEN_SHORTCUTS/CONSTRAINTS; wider code scope requires [SCOPE_BLOCKED] with `path#Lline`.
 - For required source, test, wiring or generated files outside TARGET, return scope_blocked with paths, workflow roles and evidence. Planner revises authorization; FILES cannot expand it.
-- Deletion caps: L3 40 lines, L2 150, L1 TARGET only. [CODE: FIX] may add or strengthen regression tests in TARGET; preserve existing assertion strength/count. [CODE: REFACTOR] must not reduce assertions. [DIAGNOSTIC] may add only a compile-clean repro test; [RESEARCH] reads source and writes reports only.
+- Deletion caps: L3 40 lines, L2 150, L1 TARGET only. [CODE: FIX] may add or strengthen regression tests in TARGET; preserve existing assertion strength/count unless a ticket-authorized MAINTENANCE change passes complete-inventory and scenario checks. The same exception applies to [CODE: REFACTOR]. [DIAGNOSTIC] may add only a compile-clean repro test; [RESEARCH] reads source and writes reports only.
 - Never weaken tests, hide errors, fake behavior, mask races with sleeps, use sudo/host package managers, or destructively reset. Do not edit {progress_file}; runtime owns `progress.log`/`tasks.done` (leave unstaged).
 
 CLOSEOUT
 - Development handoff requires nonempty `tdd_cases` with exact `id`/project-relative `source` pairs from permanent hot discovery. Only new or meaningfully modified behavior cases belong here; omit unchanged baseline cases.
+- Maintenance: CODE: REFACTOR/MIGRATE/CONTRACT with EVIDENCE: MAINTENANCE requires explicit MAINTENANCE change IDs, DECISIONS and configured complete inventory. Deliver immutable versioned change/scenario records. Empty tdd_cases is allowed here; replacements and remaining verification must actually run. Never self-authorize a decision.
 - Exception: only a Planner CODE: REFACTOR ticket with EVIDENCE: EXISTING may pin unchanged CASES. The runtime still runs full hot, source/fingerprint and scope checks. A VERIFY ticket leaves product files unchanged and returns no_change; runtime executes its VERIFY. FILES is the planned file estimate; directory contents do not enlarge action budgets. LEVEL controls precision/risk, with a common preparation floor.
 - For unittest hot discovery, recursively flatten `unittest.TestLoader().discover("test")` (or the configured start directory). Copy `test.id()` and `inspect.getfile(type(test))` relative to project root. Do not prepend `test.` or infer IDs from file paths. For example, `test_input.InputTests.test_empty` maps to `test/test_input.py`. Run declared cases explicitly before handoff; do not invent IDs.
 - Run focused red/green cases before handoff. Runtime owns hot and ticket VERIFY ({verify or 'none'}), including no_change VERIFY; report any focused checks you actually ran and avoid duplicating the full gate unless explicitly required for diagnosis. Repair ordinary implementation/test failures within scope and remaining budget, with at most 3 implementation attempts. On an unresolved blocker, report the failing command, evidence location and unfinished behavior; Planner decides recovery or resizing.

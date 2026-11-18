@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from runtime_fixture import deploy_runtime
 from unittest import mock
 import sys
 
@@ -21,9 +22,8 @@ class SingleConfigTests(unittest.TestCase):
             root = Path(directory)
             owned = root / 'nightshift'
             owned.mkdir()
-            for name in ('worker.sh', 'worker_runtime.py', 'lifecycle.py', 'acceptance.py', 'acceptance_hooks.py', 'background_hooks.py', 'hook_control.py', 'scratch_review.py', 'attempt_archive.py', 'preflight.py', 'environment_probe.py', 'verify_process.py', 'evidence_capabilities.py', 'ticket_policy.py', 'outcome_policy.py', 'project_config.py'):
-                shutil.copy2(ROOT / 'scripts' / name, owned / name)
-            (owned / 'adapters').mkdir()
+            deploy_runtime(owned)
+            (owned / 'adapters').mkdir(exist_ok=True)
             agent = {'default': True, 'worker': {'step_base': {'L1': 60, 'L2': 40, 'L3': 20}}, 'agent': {'adapter': 'generic', 'command': 'unused'}}
             (owned / 'adapters/agents.json').write_text(json.dumps({'legacy': agent, 'legacy2': agent}))
             config = owned / 'config.json'
